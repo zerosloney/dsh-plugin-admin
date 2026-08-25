@@ -1,0 +1,7 @@
+# dsh-plugin-admin bundle patch: inserts the unified admin plugin row. The host
+# half provides both `pluginAdmin` and `sessionAdmin` remotes through the typert
+# registry; the browser half renders the modern tabbed management panel
+# (Plugins & Sessions) and calls the remotes over the /api RPC gateway.
+- insert:
+    - id: plugin-admin
+      name: dsh-plugin-admin

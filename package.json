@@ -1,0 +1,30 @@
+{
+  "name": "dsh-plugin-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "dsh web UI plugin: unified administration panel — plugin and session management with modern tabbed Web UI (host remote + browser panel)",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT"
+}
