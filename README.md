@@ -10,12 +10,12 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
 - **💬 会话管理**：
   - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
   - **元信息直观展示**：显示对话消息计数（如 `5 条消息`）、工作目录路径（`📁 项目名 (完整路径)`）、创建时间及短 Session ID；
-  - **状态呼吸灯与徽标**：绿色呼吸光晕（**会话在线**，悬停提示说明"在线 = 仍挂载于 dsh host 内存，非正在运行；重启 dsh 后变为已结束并可删除"）、琥珀色标签（**已归档**）、灰色默认点（**已结束**）；
+  - **状态呼吸灯与徽标**：绿色呼吸光晕（**会话在线**，悬停提示说明"在线 = 仍挂载于 dsh host 内存，非正在运行"）、琥珀色标签（**已归档**）、灰色默认点（**已结束**）；
   - **多维快捷搜索与筛选**：输入框支持同时模糊匹配标题、对话摘要、工作目录或 Session ID；支持按状态胶囊筛选（全部、在线、已归档、已结束）；
-  - **会话清理与恢复**：支持非活跃会话永久物理删除（行内二次防误触确认，彻底清理磁盘日志、工作区记账与归档集合）；支持已归档会话一键取消归档，侧边栏即时联动刷新。注意：**在线**会话（本进程内创建/打开过、仍挂载于 host 内存）不可删除——这是刻意的安全口径（删除后日志会被下一次 flush 复活），重启 dsh 使其变为"已结束"后即可删除。
-- **🔌 MCP 配置**：管理中心中的独立 Tab——列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效。
+  - **会话清理与恢复**：支持会话永久物理删除（行内二次防误触确认，彻底清理磁盘日志、工作区记账与归档集合）；**在线会话不再需要重启 dsh**——「关停并删除」通过插件在 host 侧透明捕获的 `AgentHandle` 走 dsh 官方 dispose 链（停止 agent 运行、等待静止、注销 agent、从内存 SessionStore 移除并触发 `session/disposed`，持久化层随即 flush 缓冲事件并释放写路径），然后才删除日志，因此日志不会在下次 flush 复活；支持已归档会话一键取消归档，侧边栏即时联动刷新。
+- **🔌 MCP 配置**：管理中心中的独立 Tab——列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段。
 - **侧边栏右键菜单（会话 & 工作区）**：
-  - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到管理中心按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin.deleteSession` 的安全语义（仅限非活跃会话，定向 detach）。
+  - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到管理中心按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin` 的安全语义——在线会话走 `closeSession`（先 dispose 捕获的 agent handle 再删日志，不再要求重启），非在线会话走 `deleteSession`，均定向 detach。
   - **工作区行右键**：新增**在资源管理器打开**——调用 `fsAdmin.reveal` 在系统文件管理器中定位该工作区目录（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`）。
 
 ---
@@ -26,9 +26,9 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
   - 注入 `['typert', 'workspaceRegistry', 'sessionPersistence']`；
   - 提供并注册四个 RPC 命名空间：
     - `pluginAdmin`（`list` / `install` / `remove`）：异步 `spawn` pnpm（Windows 走 shell 解析 .cmd shim，5 分钟超时且**进程树强杀**（`taskkill /T /F`，避免超时后残留 pnpm/node 子进程继续写盘），Promise 尾链串行化防并发），镜像 CLI `reconcileBundles` 同步清单，清单写回为**原子写**（临时文件 + rename，崩溃不截断 profile 的 package.json）；安装/卸载参数经**字符白名单**校验（`assertPnpmOperand`），从根上排除 `&` `|` `>` `<` `%` 引号等 cmd 元字符注入向量；`install` / `remove` 返回真实 pnpm 输出尾部（`output` 字段），前端作为提示气泡的悬浮诊断信息展示；
-    - `sessionAdmin` (`list` / `archive` / `unarchive` / `deleteSession`)：直接对接 `workspaceRegistry` 与 `sessionPersistence`，提供安全幂等的持久化日志清理与归档状态流转；`list` 采用**修订号驱动的摘要缓存**（`listSnapshots` 的 revision token，未变化会话不重读事件日志）与**有界并发**（最多 4 路并行 inspect），并设单会话事件扫描上限兜底；`archive` 校验会话真实存在，拒绝向归档集写入垃圾 id；对 registry 软私有写路径（`requireState` / `setState` / `enqueueOperation`）在 `apply()` 挂载时即做**兼容性探测**，dsh 版本变更会明确报出缺失成员，而不是首次归档时才静默失败。
+    - `sessionAdmin` (`list` / `archive` / `unarchive` / `deleteSession` / `closeSession`)：直接对接 `workspaceRegistry` 与 `sessionPersistence`，提供安全幂等的持久化日志清理与归档状态流转；`list` 采用**修订号驱动的摘要缓存**（`listSnapshots` 的 revision token，未变化会话不重读事件日志）与**有界并发**（最多 4 路并行 inspect），并设单会话事件扫描上限兜底；`archive` 校验会话真实存在，拒绝向归档集写入垃圾 id；对 registry 软私有写路径（`requireState` / `setState` / `enqueueOperation`）在 `apply()` 挂载时即做**兼容性探测**，dsh 版本变更会明确报出缺失成员，而不是首次归档时才静默失败。`closeSession` 使**在线会话免重启删除**成为可能：`installAgentHandleCapture` 在挂载时透明包装公开的 `ctx.agents.create` / `resume`（原样调用并返回，仅把返回的 `AgentHandle` 按 session id 存入插件私有 Map），删除在线会话时先 `handle.dispose()` 走 dsh 官方 teardown 链（停止 loop → 等待静止 → 注销 agent → 从 SessionStore 移除 → 触发 `session/disposed` → 持久化层 `retire()` flush 缓冲事件并释放写路径），再删日志——日志不会被下次 flush 复活；未被捕获 handle 的在线会话（如插件挂载前已创建）会明确报错并引导重启，绝不误删。
     - `fsAdmin` (`reveal`)：跨平台在系统文件管理器中定位一个绝对路径（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`），供工作区右键菜单「在资源管理器打开」使用；
-    - `mcpAdmin` (`list` / `upsert` / `remove`)：管理 profile 的 `cordis.patch.yml` 中的 MCP 客户端实例（`@deepseek-ai/dsh-mcp-client`）。基于行级 YAML 块编辑（零依赖）：识别顶层 `- id:` 块并仅改动 `name` 为 MCP 客户端插件的条目，`upsert` 按 id 原位替换或追加，`remove` 整块删除，写回走**原子写**；校验 id / serverName / transport / command / url，拒绝畸形输入；文件变更与插件安装共用同一**串行操作队列**（读-改-写不交错）。
+    - `mcpAdmin` (`list` / `upsert` / `remove` / `test`)：管理 profile 的 `cordis.patch.yml` 中的 MCP 客户端实例（`@deepseek-ai/dsh-mcp-client`）。基于行级 YAML 块编辑（零依赖）：识别顶层 `- id:` 块并仅改动 `name` 为 MCP 客户端插件的条目，`upsert` 按 id 原位替换或追加，`remove` 整块删除，写回走**原子写**；校验 id / serverName / transport / command / url，拒绝畸形输入；文件变更与插件安装共用同一**串行操作队列**（读-改-写不交错）。`test` 按条目 id 发起**连通性探测**：stdio 子进程（newline JSON-RPC，`initialize` → `initialized` → `tools/list`，超时 `taskkill /T /F` 强杀进程树，捕获 stderr 尾部）或 streamable-http（`fetch` POST `initialize`，兼容 SSE 与纯 JSON，超时 AbortController），返回服务器标识 / 工具数量 / 耗时，或失败原因（命令不存在、连接拒绝、超时等），全程不抛异常。
 - **浏览器前端（`lib/client.js`）**：
   - 注入 `slots` + `connection`，向设置弹窗注册一个 `settings.section`：`plugin-admin`（管理中心, order 25）；页内 Tab 仅挂载当前面板；
   - 采用模块表平台词 `require('react')` 与 Shell 共享同一 React 实例；
@@ -50,6 +50,24 @@ pnpm dsh --profile web
 
 ---
 
+## 发布到 npm（CI/CD）
+
+该仓库已配置 GitHub Actions：**CI** 在每次 push / PR 上跑 `npm ci && npm test`（Node 22/24 矩阵）；**发布**在推送 `v*` tag 时触发，校验 tag 与 `package.json` 版本一致后 `npm publish --provenance`。
+
+```sh
+# 1. 本地发版：bump 版本并打 tag（同时更新 package.json）
+npm version patch -m "chore: release v%s"
+git push origin master --tags
+
+# 2. GitHub Actions 自动：测试 → 校验版本一致 → 发布到 npm
+```
+
+前提：
+- 仓库需配置 npm 发布密钥：**Settings → Secrets and variables → Actions**，添加 `NPM_TOKEN`（npmjs.com 的自动化 token，`--provenance` 需要 npm ≥9.5 且发布 job 具备 OIDC `id-token: write`，工作流已声明）。
+- 首次发布若包名被占用，需先在 npmjs.com 认领。
+
+---
+
 ## 自动化自检
 
 ```sh
@@ -66,16 +84,18 @@ node scripts/host-check.mjs
 6. 会话管理面板渲染（独立组件，无 Tab）、列表与状态渲染；
 7. 会话删除二次确认交互；
 8. **侧边栏菜单注入**：验证会话菜单追加「复制会话 ID / 删除会话」，删除项为**两次点击确认**（首击改写标签、二击才触发 RPC）且对**同名会话拒绝删除**；工作区菜单追加「在资源管理器打开」；
-9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列。
+9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列；**连通性测试按钮**（🔌 测试）触发 `mcpAdmin/test` 并在行内渲染 ✅ 连通（含服务器名与工具数量）。
 
 Host 侧自检（`scripts/host-check.mjs`）覆盖六类契约：
 1. `sessionAdmin.deleteSession` 的**定向 detach 契约**：删除会话只允许触碰实际记账该会话的那一个工作区，绝不允许批量遍历（dsh 的 `detachSession` 写入带剪枝语义——记录中所有不在 registry 内存头索引里的会话会被永久剥离；批量调用在索引不完整时会把无关工作区的记账整体清空，表现为所有会话落入"未分组"）；
+2. **`closeSession` 免重启删除**：`installAgentHandleCapture` 透明包装 `ctx.agents.resume` 捕获返回的 `AgentHandle`，`closeSession` 对在线会话先 `dispose()`（断言恰好一次）再删日志与 detach；未被捕获 handle 的在线会话**失败闭合**（明确报错、日志目录完好）；非在线会话经 `closeSession` 与 `deleteSession` 行为一致；
 2. **安装/卸载参数白名单**：`&` `|` `>` `<` `%` `!` 引号、前导 `-`（flag 伪装）等注入向量一律在 spawn 前拒绝，合法包名/作用域/版本/本地路径照常放行；
 3. **本地安装判定**：远程 git/tarball URL（`https://`、`git+ssh://`、`github:` 简写）不再误标为本地安装，`link:`/`file:`/盘符/UNC/POSIX 路径仍正确解析；
 4. **共享日志目录拒删**：删除会话前若发现其他持久化会话解析到同一目录，则拒绝递归删除，避免平铺布局下连带清掉邻居日志；
 5. **registry 写路径挂载探测**：`workspaceRegistry` 缺失 `requireState` / `setState` / `enqueueOperation` 任一成员时，`apply()` 在挂载即抛错并指明缺失项；
 6. **mcpAdmin 配置往返**：对临时 profile 的 `cordis.patch.yml` 做 list / upsert（新增、原位更新）/ remove，验证条目 id、serverName 与最终文件内容正确且仍是合法 YAML；同时校验畸形输入（非法 id / transport / 缺 command）被拒绝；`fsAdmin.reveal` 校验路径参数；
-7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错。
+7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
+8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝。
 
 ---
 

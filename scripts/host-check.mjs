@@ -467,10 +467,323 @@ assert.ok(patchText.includes('mcp-github'), 'patch file retains the entry id')
 assert.ok(patchText.includes('github2'), 'patch file carries the updated serverName')
 assert.ok(patchText.includes('@deepseek-ai/dsh-mcp-client'), 'patch file names the MCP client plugin')
 
+/* --- upsert must REPLACE the '[]' placeholder, not append below it ---
+ * A fresh profile's cordis.patch.yml is '[]' — a complete YAML document. If
+ * upsert appended '- id: ...' after it, the file would contain two documents
+ * and dsh would fail at boot with "end of the stream or a document separator
+ * is expected". The placeholder line must be replaced by the first entry.
+ */
+const placeholderProfile = join(here, '../.host-check-tmp/mcp-placeholder-profile')
+mkdirSync(placeholderProfile, { recursive: true })
+writeFileSync(join(placeholderProfile, 'package.json'), JSON.stringify({ name: 'placeholder-test' }))
+// Mirror the real file: a header comment block + the '[]' placeholder.
+writeFileSync(join(placeholderProfile, 'cordis.patch.yml'),
+  '# Your patch layer for this dsh profile\n# applied after every bundle layer\n[]\n')
+const placeholderCtx = {
+  baseUrl: pathToFileURL(placeholderProfile).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => fn(),
+  get: () => undefined,
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: { list: async () => [], inspect: async () => ({ events: [] }), locate: () => undefined },
+}
+apply(placeholderCtx)
+await placeholderCtx.provided.mcpAdmin.upsert({
+  id: 'mcp-first',
+  config: { transport: 'stdio', serverName: 'first', command: 'npx' },
+})
+const placeholderText = readFileSync(join(placeholderProfile, 'cordis.patch.yml'), 'utf8')
+assert.ok(!/\[\]/.test(placeholderText), "'[]' placeholder replaced by the first entry, not left in place")
+assert.ok(placeholderText.includes('- id: "mcp-first"'), 'first entry block present')
+// The result must still parse as ONE YAML list document (no trailing garbage).
+// js-yaml is not a direct dep here; the exact symptom we guard against is a
+// line that starts at column 0 with '- ' AFTER a line containing only '[]'
+// (a complete document), which js-yaml rejects with "end of the stream or a
+// document separator is expected". Assert the file has no '[]' document and
+// its first non-comment line starts a list item.
+const placeholderLines = placeholderText.split(/\r?\n/).map((l) => l.trim())
+assert.ok(!placeholderLines.includes('[]'), 'no standalone [] document remains')
+assert.ok(placeholderLines.some((l) => l.startsWith('- id:')), 'a list item block starts the document')
+rmSync(placeholderProfile, { recursive: true, force: true })
+
+/* ------------------- mcpAdmin.test: real connectivity probes -------------------
+ * The probe must speak real MCP over both transports: a stdio server process
+ * that answers newline-delimited JSON-RPC, and a streamable-http server that
+ * answers initialize over HTTP. Success cases report serverInfo + toolCount;
+ * a dead endpoint fails fast instead of hanging.
+ */
+import { createServer } from 'node:http'
+
+// --- stdio fixture server: a tiny newline-delimited JSON-RPC MCP server ---
+const stdioFixture = join(here, '../.host-check-tmp/mcp-stdio-server.mjs')
+mkdirSync(dirname(stdioFixture), { recursive: true })
+writeFileSync(stdioFixture, `import { createInterface } from 'node:readline'
+const rl = createInterface({ input: process.stdin, terminal: false })
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+rl.on('line', (line) => {
+  let req
+  try { req = JSON.parse(line) } catch { return }
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: {
+      protocolVersion: '2025-11-25',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'fixture-stdio', version: '2.3.4' },
+    } })
+    return
+  }
+  if (req.method === 'notifications/initialized') return
+  if (req.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: req.id, result: { tools: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] } })
+  }
+})
+`)
+await mcp.upsert({
+  id: 'mcp-probe-stdio',
+  config: { transport: 'stdio', serverName: 'probe-stdio', command: process.execPath, args: [stdioFixture] },
+})
+const stdioProbe = await mcp.test('mcp-probe-stdio')
+assert.equal(stdioProbe.ok, true, 'stdio probe succeeds against a live server')
+assert.equal(stdioProbe.transport, 'stdio', 'probe reports stdio transport')
+assert.equal(stdioProbe.serverInfo?.name, 'fixture-stdio', 'stdio probe reads serverInfo.name')
+assert.equal(stdioProbe.serverInfo?.version, '2.3.4', 'stdio probe reads serverInfo.version')
+assert.equal(stdioProbe.toolCount, 3, 'stdio probe counts tools from tools/list')
+assert.deepEqual(stdioProbe.tools, ['a', 'b', 'c'], 'stdio probe returns tool names from tools/list')
+// The result must be JSON-safe (no undefined-valued fields) so it survives
+// the typert gateway boundary ("business result failed boundary validation").
+assert.equal(JSON.stringify(stdioProbe).includes('undefined'), false, 'probe result is JSON-safe (no undefined literals)')
+
+// Inline command splitting: a single command string with no args must be
+// split into executable + args, probe successfully, and carry a warning that
+// dsh expects command/args separated. Quote the exe path (it may contain
+// spaces, e.g. "C:\Program Files\...") so the split is well-defined.
+const inlineFixture = join(here, '../.host-check-tmp2/mcp-stdio-server.mjs')
+mkdirSync(dirname(inlineFixture), { recursive: true })
+writeFileSync(inlineFixture, readFileSync(stdioFixture))
+await mcp.upsert({
+  id: 'mcp-probe-inline',
+  config: { transport: 'stdio', serverName: 'probe-inline', command: '"' + process.execPath + '" ' + inlineFixture },
+})
+const inlineProbe = await mcp.test('mcp-probe-inline')
+assert.equal(inlineProbe.ok, true, 'inline command split probes successfully')
+assert.deepEqual(inlineProbe.tools, ['a', 'b', 'c'], 'inline command split returns tool names')
+assert.ok(inlineProbe.warning, 'inline command probe carries a config warning')
+rmSync(dirname(inlineFixture), { recursive: true, force: true })
+
+// A command that does not exist must fail with a diagnosable message. On
+// Windows a bare name (no extension) is wrapped in cmd.exe — the same as
+// cross-spawn does for the real plugin — so the failure surfaces as a
+// cmd.exe "not recognized" exit rather than a Node ENOENT; both carry the
+// command name in the message.
+await mcp.upsert({
+  id: 'mcp-probe-missing',
+  config: { transport: 'stdio', serverName: 'probe-missing', command: 'definitely-not-a-real-command-xyz' },
+})
+const missingProbe = await mcp.test('mcp-probe-missing')
+assert.equal(missingProbe.ok, false, 'missing command probe fails')
+const missingText = (missingProbe.error || '') + ' ' + (missingProbe.stderr || '')
+assert.ok(/definitely-not-a-real-command-xyz/.test(missingText), 'missing command error names the command: ' + missingText)
+
+// A command that spawns but never speaks MCP must fail fast (timeout).
+const silentFixture = join(here, '../.host-check-tmp/mcp-silent-server.mjs')
+writeFileSync(silentFixture, `setInterval(() => {}, 1 << 30)\n`)
+await mcp.upsert({
+  id: 'mcp-probe-silent',
+  config: { transport: 'stdio', serverName: 'probe-silent', command: process.execPath, args: [silentFixture] },
+})
+const silentProbe = await mcp.test('mcp-probe-silent')
+assert.equal(silentProbe.ok, false, 'silent stdio server probe fails')
+assert.ok(/timed out/.test(silentProbe.error || ''), 'silent probe reports timeout: ' + silentProbe.error)
+
+// --- streamable-http fixture server: answers initialize over HTTP ---
+const httpServer = createServer((req, res) => {
+  let body = ''
+  req.on('data', (c) => { body += c })
+  req.on('end', () => {
+    let message
+    try { message = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
+    if (message.method === 'initialize') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        jsonrpc: '2.0', id: message.id, result: {
+          protocolVersion: '2025-11-25',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'fixture-http', version: '9.9.9' },
+        },
+      }))
+      return
+    }
+    if (message.method === 'ping') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }))
+      return
+    }
+    if (message.method === 'tools/list') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: [{ name: 'http-fetch' }, { name: 'http-search' }] } }))
+      return
+    }
+    res.writeHead(404); res.end()
+  })
+})
+await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+const httpPort = httpServer.address().port
+await mcp.upsert({
+  id: 'mcp-probe-http',
+  config: { transport: 'streamable-http', serverName: 'probe-http', url: 'http://127.0.0.1:' + httpPort + '/mcp' },
+})
+const httpProbe = await mcp.test('mcp-probe-http')
+assert.equal(httpProbe.ok, true, 'http probe succeeds against a live server')
+assert.equal(httpProbe.transport, 'streamable-http', 'probe reports http transport')
+assert.equal(httpProbe.serverInfo?.name, 'fixture-http', 'http probe reads serverInfo.name')
+assert.equal(httpProbe.toolCount, 2, 'http probe counts tools from tools/list')
+assert.deepEqual(httpProbe.tools, ['http-fetch', 'http-search'], 'http probe returns tool names from tools/list')
+assert.equal(httpProbe.pingOk, true, 'http probe ping succeeds')
+assert.equal(JSON.stringify(httpProbe).includes('undefined'), false, 'http probe result is JSON-safe')
+
+// A dead HTTP endpoint must fail fast with a clear error.
+await mcp.upsert({
+  id: 'mcp-probe-http-dead',
+  config: { transport: 'streamable-http', serverName: 'probe-http-dead', url: 'http://127.0.0.1:1/mcp' },
+})
+const deadHttpProbe = await mcp.test('mcp-probe-http-dead')
+assert.equal(deadHttpProbe.ok, false, 'dead http endpoint probe fails')
+assert.ok(/failed|timed out|refused|ECONNREFUSED/.test(deadHttpProbe.error || ''), 'dead http probe error is diagnosable: ' + deadHttpProbe.error)
+
+// test() rejects for an unknown entry id and for an unparsable config.
+await assert.rejects(() => mcp.test('mcp-does-not-exist'), /not found/, 'test on unknown id rejected')
+httpServer.close()
+
+rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
+
+/* --------------- closeSession: dispose captured handle then delete ---------------
+ * Online sessions are torn down through the captured AgentHandle (the handle
+ * the wrapped ctx.agents.create/resume returned) BEFORE their artifacts are
+ * removed. The test drives a fake agents service whose resume returns a fake
+ * handle, asserts the wrapper captures it, and that closeSession calls
+ * dispose() exactly once before the log directory is removed. A live session
+ * whose handle was never captured must fail closed with a clear message.
+ */
+const closeLogDir = join(here, '../.host-check-tmp/session-close')
+rmSync(closeLogDir, { recursive: true, force: true })
+mkdirSync(closeLogDir, { recursive: true })
+writeFileSync(join(closeLogDir, 'session.jsonl.zstd'), '{}\n')
+
+const liveSessions = new Map()
+const disposeCalls = []
+const fakeHandle = {
+  agent: { id: 'session-online' },
+  dispose: async () => { disposeCalls.push('session-online') },
+}
+const fakeAgents = {
+  resume: async () => { liveSessions.set('session-online', { id: 'session-online' }); return fakeHandle },
+  create: async () => { throw new Error('not used') },
+}
+let closeDetachCalls = []
+const closeCtx = {
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => fn(),
+  get: (name) => (name === 'sessions' ? { get: (id) => liveSessions.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [{ id: 'w-close', sessionIds: ['session-online'], detachSession: async (id) => { closeDetachCalls.push(id) } }],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [{ id: 'session-online', cwd: 'E:/nowhere', createdAt: 1 }],
+    inspect: async () => ({ events: [] }),
+    locate: () => ({ kind: 'jsonl', path: join(closeLogDir, 'session.jsonl.zstd') }),
+  },
+}
+apply(closeCtx)
+// Capture: calling resume through the wrapped service must record the handle.
+const captured = await fakeAgents.resume({ resumeSessionId: 'session-online' })
+assert.equal(captured, fakeHandle, 'wrapped resume returns the original handle untouched')
+// closeSession on a live session disposes the handle then removes artifacts.
+await closeCtx.provided.sessionAdmin.closeSession('session-online')
+assert.deepEqual(disposeCalls, ['session-online'], 'closeSession disposes the captured handle exactly once')
+assert.ok(!existsSync(closeLogDir), 'closeSession removes the log directory')
+assert.deepEqual(closeDetachCalls, ['session-online'], 'closeSession detaches the accounting workspace')
+
+// A live session without a captured handle fails closed (nothing deleted).
+const noHandleDir = join(here, '../.host-check-tmp/session-no-handle')
+rmSync(noHandleDir, { recursive: true, force: true })
+mkdirSync(noHandleDir, { recursive: true })
+writeFileSync(join(noHandleDir, 'session.jsonl.zstd'), '{}\n')
+const liveNoHandle = new Map([['session-no-handle', { id: 'session-no-handle' }]])
+const noHandleCtx = {
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => fn(),
+  get: (name) => (name === 'sessions' ? { get: (id) => liveNoHandle.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [{ id: 'session-no-handle', cwd: 'E:/nowhere', createdAt: 1 }],
+    inspect: async () => ({ events: [] }),
+    locate: () => ({ kind: 'jsonl', path: join(noHandleDir, 'session.jsonl.zstd') }),
+  },
+}
+apply(noHandleCtx)
+await assert.rejects(
+  () => noHandleCtx.provided.sessionAdmin.closeSession('session-no-handle'),
+  /not captured/,
+  'live session without a captured handle refuses close with a clear error',
+)
+assert.ok(existsSync(noHandleDir), 'no-handle failure leaves the log directory intact')
+
+// closeSession on a non-live session behaves exactly like deleteSession.
+const closeNonLiveDir = join(here, '../.host-check-tmp/session-close-nonlive')
+rmSync(closeNonLiveDir, { recursive: true, force: true })
+mkdirSync(closeNonLiveDir, { recursive: true })
+writeFileSync(join(closeNonLiveDir, 'session.jsonl.zstd'), '{}\n')
+const closeNonLiveCtx = {
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => fn(),
+  get: () => undefined,
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [{ id: 'session-close-nonlive', cwd: 'E:/nowhere', createdAt: 1 }],
+    inspect: async () => ({ events: [] }),
+    locate: () => ({ kind: 'jsonl', path: join(closeNonLiveDir, 'session.jsonl.zstd') }),
+  },
+}
+apply(closeNonLiveCtx)
+await closeNonLiveCtx.provided.sessionAdmin.closeSession('session-close-nonlive')
+assert.ok(!existsSync(closeNonLiveDir), 'closeSession on a non-live session removes its artifacts')
+
 rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 
 // The packaged manifest must still round-trip (apply() read it for pluginAdmin).
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization')
+console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete')

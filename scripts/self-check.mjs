@@ -17,18 +17,29 @@ import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
-// The harness checkout supplies the browser platform (React 18, jsdom).
-// Override with DSH_HARNESS_ROOT when running against a different checkout;
-// jsdom is resolved through the harness's own dependency graph rather than
-// a pinned .pnpm path so the test survives harness dependency bumps.
+
+// Resolve the browser platform (React 18, jsdom) either from the harness
+// checkout (local dev, DSH_HARNESS_ROOT override) or from this repo's own
+// devDependencies (CI / npm test). The harness path is the primary source
+// when it exists so local runs always exercise the exact platform the dsh
+// shell renders with; CI installs the same versions as devDependencies and
+// falls back automatically.
 const harnessRoot = process.env.DSH_HARNESS_ROOT
   || 'E:/Demo/cli-tools/deepseek-harness'
+const harnessPkg = join(harnessRoot, 'package.json')
 const harnessWeb = join(harnessRoot, 'packages/client/web/node_modules')
-const harnessReq = createRequire(join(harnessRoot, 'package.json'))
-const { JSDOM } = harnessReq('jsdom')
-const React = req(`${harnessWeb}/react`)
-const { createRoot } = req(`${harnessWeb}/react-dom/client`)
-const act = React.act ?? req(`${harnessWeb}/react-dom/test-utils`).act
+let harnessReq = null
+try {
+  harnessReq = createRequire(harnessPkg)
+  // Prove the harness checkout actually carries jsdom before trusting it.
+  harnessReq('jsdom')
+} catch {
+  harnessReq = null
+}
+const { JSDOM } = harnessReq ? harnessReq('jsdom') : req('jsdom')
+const React = harnessReq ? req(`${harnessWeb}/react`) : req('react')
+const { createRoot } = harnessReq ? req(`${harnessWeb}/react-dom/client`) : req('react-dom/client')
+const act = React.act ?? (harnessReq ? req(`${harnessWeb}/react-dom/test-utils`).act : req('react-dom/test-utils').act)
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
@@ -143,6 +154,16 @@ const ctx = {
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
         }
+        if (method === 'mcpAdmin/test') {
+          ctx.mcpTests = ctx.mcpTests ?? []
+          ctx.mcpTests.push(payload.args.id)
+          return { ok: true, value: {
+            ok: true, transport: 'stdio', ms: 12,
+            serverInfo: { name: 'mock-mcp', version: '1.0.0' },
+            toolCount: 3,
+            tools: ['fetch', 'search', 'browse'],
+          } }
+        }
         if (method === 'mcpAdmin/upsert') {
           ctx.mcpUpserts = ctx.mcpUpserts ?? []
           ctx.mcpUpserts.push(payload.args.entry)
@@ -254,6 +275,32 @@ await act(async () => {
   button('取消').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
 })
 assert.ok(!document.body.textContent.includes('确认删除'), 'cancel restores session actions')
+
+// 8b. Online sessions now offer 关停并删除 (closeSession): the live mock
+// session s2 must render the close button, and its confirm flow calls the
+// closeSession RPC instead of deleteSession.
+assert.ok(document.body.textContent.includes('关停并删除'), 'live session offers 关停并删除')
+ctx.closeDeletes = ctx.closeDeletes ?? []
+const originalCall = ctx.connection.rpc.call
+ctx.connection.rpc.call = async (route, method, payload) => {
+  if (method === 'sessionAdmin/closeSession') {
+    ctx.closeDeletes.push(payload.args.sessionId)
+    return { ok: true, value: { deleted: payload.args.sessionId } }
+  }
+  return originalCall(route, method, payload)
+}
+await act(async () => {
+  const closeBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('关停并删除'))
+  assert.ok(closeBtn !== undefined, 'close button present')
+  closeBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(document.body.textContent.includes('关停该在线会话'), 'close confirmation text warns about stopping the conversation')
+await act(async () => {
+  button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(ctx.closeDeletes, ['s2'], 'close confirm calls sessionAdmin/closeSession with the live session id')
+ctx.connection.rpc.call = originalCall
 
 // 9. Switch to the MCP tab.
 await act(async () => {
@@ -459,6 +506,20 @@ assert.equal(ctx.mcpUpserts[0].config.failOnStartupError, true, 'unchanged start
 assert.deepEqual(ctx.mcpUpserts[0].config.reconnect, { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 }, 'unchanged reconnect policy survives editing')
 assert.ok(document.body.textContent.includes('mcp-existing'), 'saved server listed')
 
+// 12b. MCP connectivity test: click the test button on the existing entry and
+// verify the RPC fires and the success indicator renders with server info.
+const testBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🔌 测试'))
+assert.ok(testBtn !== undefined, 'connectivity test button exists')
+await act(async () => {
+  testBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.ok((ctx.mcpTests ?? []).includes('mcp-existing'), 'connectivity test RPC fired for the entry id')
+assert.ok(document.body.textContent.includes('✅ 连通'), 'success indicator rendered')
+assert.ok(document.body.textContent.includes('mock-mcp'), 'server name from probe rendered')
+assert.ok(document.body.textContent.includes('3 个工具'), 'tool count from probe rendered')
+assert.ok(document.body.textContent.includes('fetch') && document.body.textContent.includes('search') && document.body.textContent.includes('browse'), 'tool names from probe rendered')
+
 // 13. Test MCP headers editing for streamable-http transport: add a new entry
 // with headers, save, and verify the upsert carries the headers.
 await act(async () => {
@@ -472,15 +533,28 @@ const addTextareas = [...host.querySelectorAll('textarea')]
 const addSelects = [...host.querySelectorAll('select')]
 assert.ok(addSelects.length >= 1, 'transport select exists')
 const propsOfEl = (el) => el[Object.keys(el).find((k) => k.startsWith('__reactProps$'))]
+// The id field is auto-filled with a generated id for new servers
+const autoId = addInputs[0].value
+assert.ok(/^mcp-[A-Za-z0-9]{8}$/.test(autoId), 'id auto-generated for a new server: ' + autoId)
+assert.ok(!addInputs[0].disabled, 'generated id field stays editable')
+// The regenerate button swaps in a fresh id
+const regenBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🔄'))
+assert.ok(regenBtn !== undefined, 'regenerate id button exists')
+await act(async () => {
+  regenBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+const regenId = [...host.querySelectorAll('input')][0].value
+assert.ok(regenId !== autoId && /^mcp-[A-Za-z0-9]{8}$/.test(regenId), 'regenerate produces a fresh valid id')
+// Override the generated id with a deterministic one (the field is editable).
+await act(async () => {
+  propsOfEl(addInputs[0]).onChange({ target: { value: 'mcp-http-test' } })
+})
 // Switch to streamable-http transport
 await act(async () => {
   propsOfEl(addSelects[0]).onChange({ target: { value: 'streamable-http' } })
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
-// Fill id
-await act(async () => {
-  propsOfEl(addInputs[0]).onChange({ target: { value: 'mcp-http-test' } })
-})
 // Fill serverName
 await act(async () => {
   propsOfEl(addInputs[1]).onChange({ target: { value: 'http-test' } })

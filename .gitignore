@@ -3,9 +3,11 @@ node_modules/
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.tgz
 
 # dsh / profile runtime artifacts
 out.txt
+.probe/
 
 # cbx local tool state
 .cbx/
