@@ -143,6 +143,15 @@ const ctx = {
         if (method === 'pluginAdmin/list') {
           return { ok: true, value: { profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
         }
+        if (method === 'pluginAdmin/checkUpdates') {
+          ctx.checkUpdateCalls = ctx.checkUpdateCalls ?? []
+          ctx.checkUpdateCalls.push(payload.args)
+          return { ok: true, value: { updates: [
+            { name: 'dsh-remote-tool', version: '0.5.1', latest: '0.9.0', updateAvailable: true },
+            { name: 'dsh-custom-tool', version: '0.2.0', latest: '0.2.0', updateAvailable: false },
+            { name: 'dsh-base', version: '1.2.3', latest: '1.2.3', updateAvailable: false },
+          ] } }
+        }
         if (method === 'sessionAdmin/list') {
           return { ok: true, value: { sessions: ctx.sessionListOverride ?? mockSessions, workspaces: mockWorkspaces } }
         }
@@ -233,6 +242,22 @@ assert.ok(text.includes('包安装'), 'registry install tag')
 assert.ok(text.includes('本地安装'), 'local install tag')
 assert.ok(text.includes('E:\\Demo\\cli-tools\\dsh-custom-tool'), 'local install source path')
 assert.ok(text.includes('全部 (3)'), 'filter pill with count')
+
+// 5b. Remote update check: click "检查更新", the RPC fires, the registry-
+// installed plugin (dsh-remote-tool) gets an update badge + upgrade button,
+// while local-path and in-box plugins do not.
+await act(async () => {
+  button('检查更新').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.equal((ctx.checkUpdateCalls ?? []).length, 1, 'checkUpdates RPC fired once')
+assert.ok(document.body.textContent.includes('⬆ 有新版本 v0.9.0'), 'update badge with latest version rendered')
+assert.ok(document.body.textContent.includes('⬆ 更新'), 'upgrade button rendered')
+const upgradeBtns = [...document.querySelectorAll('button')].filter((b) => b.textContent?.includes('⬆ 更新'))
+assert.equal(upgradeBtns.length, 1, 'exactly one upgrade button (registry-installed only)')
+// The upgrade button must live in the dsh-remote-tool card.
+const remoteCard = [...host.querySelectorAll('.card')].find((c) => c.textContent?.includes('dsh-remote-tool'))
+assert.ok(remoteCard !== undefined && remoteCard.textContent.includes('⬆ 更新'), 'upgrade button belongs to the remote plugin card')
 
 // 6. Test Plugin remove inline confirmation
 await act(async () => {

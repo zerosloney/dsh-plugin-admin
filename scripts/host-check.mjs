@@ -780,10 +780,65 @@ apply(closeNonLiveCtx)
 await closeNonLiveCtx.provided.sessionAdmin.closeSession('session-close-nonlive')
 assert.ok(!existsSync(closeNonLiveDir), 'closeSession on a non-live session removes its artifacts')
 
+/* ------------------- pluginAdmin.checkUpdates -------------------
+ * The registry fetch is injected (fetchLatestVersion takes the registry base
+ * URL), so drive it against a local HTTP stub: dsh-remote-tool has a newer
+ * version, dsh-custom-tool (local path) and dsh-base (in-box) are skipped.
+ */
+const { fetchLatestVersion: fetchLatest, checkPluginUpdate: checkUpdate, resolveNpmRegistry: resolveRegistry } =
+  await import(new URL('../lib/index.js', import.meta.url).href)
+
+const registryServer = createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  if (req.url === '/dsh-remote-tool/latest') {
+    res.end(JSON.stringify({ name: 'dsh-remote-tool', version: '0.9.0' }))
+  } else {
+    res.end(JSON.stringify({ name: 'unknown', version: '0.0.0' }))
+  }
+})
+await new Promise((resolve) => registryServer.listen(0, '127.0.0.1', resolve))
+const registryUrl = 'http://127.0.0.1:' + registryServer.address().port
+
+// fetchLatestVersion against the stub.
+assert.equal(await fetchLatest(registryUrl, 'dsh-remote-tool'), '0.9.0', 'fetchLatestVersion reads the latest dist-tag')
+assert.equal(await fetchLatest(registryUrl, 'scoped/pkg'), '0.0.0', 'scoped names URL-encode to the stub')
+assert.equal(await fetchLatest('http://127.0.0.1:1', 'dsh-remote-tool'), null, 'unreachable registry returns null (never throws)')
+
+// checkPluginUpdate: registry install flags update; local path and in-box skip.
+const remoteUpdate = await checkUpdate(registryUrl, { name: 'dsh-remote-tool', version: '0.5.1', dependency: true, localPath: null })
+assert.equal(remoteUpdate.updateAvailable, true, 'registry install reports updateAvailable')
+assert.equal(remoteUpdate.latest, '0.9.0', 'registry install reports latest version')
+const upToDate = await checkUpdate(registryUrl, { name: 'dsh-remote-tool', version: '0.9.0', dependency: true, localPath: null })
+assert.equal(upToDate.updateAvailable, false, 'up-to-date registry install reports no update')
+const localSkip = await checkUpdate(registryUrl, { name: 'dsh-custom-tool', version: '0.2.0', dependency: true, localPath: 'E:/local' })
+assert.equal(localSkip.updateAvailable, false, 'local-path install is skipped')
+const inBoxSkip = await checkUpdate(registryUrl, { name: 'dsh-base', version: '1.2.3', dependency: false, localPath: null })
+assert.equal(inBoxSkip.updateAvailable, false, 'in-box bundle is skipped')
+const deadRegistry = await checkUpdate('http://127.0.0.1:1', { name: 'dsh-remote-tool', version: '0.5.1', dependency: true, localPath: null })
+assert.equal(deadRegistry.updateAvailable, false, 'dead registry reports no update')
+assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
+registryServer.close()
+
+// resolveNpmRegistry honors the env override.
+process.env.npm_config_registry = 'https://registry.example.com'
+assert.equal(resolveRegistry(join(here, '..')), 'https://registry.example.com', 'npm_config_registry env override wins')
+delete process.env.npm_config_registry
+// A profile-local .npmrc registry wins over the user-level one.
+const npmrcProfile = join(here, '../.host-check-tmp/npmrc-profile')
+mkdirSync(npmrcProfile, { recursive: true })
+writeFileSync(join(npmrcProfile, '.npmrc'), 'registry=https://registry.profile-local.example\n', 'utf8')
+assert.equal(resolveRegistry(npmrcProfile), 'https://registry.profile-local.example', 'profile-local .npmrc registry is honored')
+rmSync(npmrcProfile, { recursive: true, force: true })
+// The official default only applies when neither env nor any .npmrc set it;
+// the host-check machine configures a mirror, so assert the function returns
+// *something* (env- or .npmrc-derived) rather than a hardcoded official URL.
+const defaultRegistry = resolveRegistry(join(here, '..'))
+assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('https://'), 'registry resolution returns a usable URL: ' + defaultRegistry)
+
 rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 
 // The packaged manifest must still round-trip (apply() read it for pluginAdmin).
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete')
+console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution')
