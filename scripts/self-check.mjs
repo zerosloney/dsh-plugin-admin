@@ -598,7 +598,7 @@ const autoId = addInputs[0].value
 assert.ok(/^mcp-[A-Za-z0-9]{8}$/.test(autoId), 'id auto-generated for a new server: ' + autoId)
 assert.ok(!addInputs[0].disabled, 'generated id field stays editable')
 // The regenerate button swaps in a fresh id
-const regenBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🔄'))
+const regenBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🎲'))
 assert.ok(regenBtn !== undefined, 'regenerate id button exists')
 await act(async () => {
   regenBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))

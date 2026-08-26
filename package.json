@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "dsh web UI plugin: unified administration panel — plugin and session management with modern tabbed Web UI (host remote + browser panel)",
   "main": "lib/index.js",
@@ -16,7 +16,7 @@
     "cordis"
   ],
   "scripts": {
-    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs"
+    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs"
   },
   "exports": {
     ".": "./lib/index.js",
