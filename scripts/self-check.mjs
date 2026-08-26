@@ -243,14 +243,11 @@ assert.ok(text.includes('本地安装'), 'local install tag')
 assert.ok(text.includes('E:\\Demo\\cli-tools\\dsh-custom-tool'), 'local install source path')
 assert.ok(text.includes('全部 (3)'), 'filter pill with count')
 
-// 5b. Remote update check: click "检查更新", the RPC fires, the registry-
-// installed plugin (dsh-remote-tool) gets an update badge + upgrade button,
-// while local-path and in-box plugins do not.
-await act(async () => {
-  button('检查更新').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
+// 5b. Remote update check: the panel auto-checks on mount (no manual click),
+// the registry-installed plugin (dsh-remote-tool) gets an update badge +
+// upgrade button, while local-path and in-box plugins do not.
 await new Promise((resolve) => setTimeout(resolve, 40))
-assert.equal((ctx.checkUpdateCalls ?? []).length, 1, 'checkUpdates RPC fired once')
+assert.ok((ctx.checkUpdateCalls ?? []).length >= 1, 'checkUpdates RPC fired automatically on mount')
 assert.ok(document.body.textContent.includes('⬆ 有新版本 v0.9.0'), 'update badge with latest version rendered')
 assert.ok(document.body.textContent.includes('⬆ 更新'), 'upgrade button rendered')
 const upgradeBtns = [...document.querySelectorAll('button')].filter((b) => b.textContent?.includes('⬆ 更新'))
@@ -258,6 +255,12 @@ assert.equal(upgradeBtns.length, 1, 'exactly one upgrade button (registry-instal
 // The upgrade button must live in the dsh-remote-tool card.
 const remoteCard = [...host.querySelectorAll('.card')].find((c) => c.textContent?.includes('dsh-remote-tool'))
 assert.ok(remoteCard !== undefined && remoteCard.textContent.includes('⬆ 更新'), 'upgrade button belongs to the remote plugin card')
+// The manual toolbar button still forces a fresh check.
+await act(async () => {
+  button('检查更新').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.ok((ctx.checkUpdateCalls ?? []).length >= 2, 'manual check-updates button fires again')
 
 // 6. Test Plugin remove inline confirmation
 await act(async () => {
