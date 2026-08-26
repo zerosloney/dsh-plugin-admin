@@ -262,6 +262,38 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 40))
 assert.ok((ctx.checkUpdateCalls ?? []).length >= 2, 'manual check-updates button fires again')
 
+// 5c. Fuzzy plugin search: type "custom" → only the local custom plugin card
+// stays; type a nonsense needle → empty state with search hint appears.
+const searchInput = [...host.querySelectorAll('.search-bar input')][0]
+assert.ok(searchInput !== undefined, 'plugin search input rendered')
+const propsOfSearch = (el) => el[Object.keys(el).find((k) => k.startsWith('__reactProps$'))]
+await act(async () => {
+  propsOfSearch(searchInput).onChange({ target: { value: 'custom' } })
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+const cardTextsAfterSearch = [...host.querySelectorAll('.card')].map((c) => c.textContent || '')
+assert.equal(cardTextsAfterSearch.length, 1, 'search narrows the list to matching cards')
+assert.ok(cardTextsAfterSearch[0].includes('dsh-custom-tool'), 'matching card is dsh-custom-tool')
+// Version substring search: "0.2" matches dsh-custom-tool v0.2.0.
+await act(async () => {
+  propsOfSearch(searchInput).onChange({ target: { value: '0.2' } })
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+const cardsByVersion = [...host.querySelectorAll('.card')].map((c) => c.textContent || '')
+assert.equal(cardsByVersion.length, 1, 'version substring search narrows to one card')
+assert.ok(cardsByVersion[0].includes('dsh-custom-tool'), 'version match finds dsh-custom-tool v0.2.0')
+// Nonsense needle → empty hint.
+await act(async () => {
+  propsOfSearch(searchInput).onChange({ target: { value: 'zzz-nothing' } })
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.ok(document.body.textContent.includes('🔍 无匹配的插件'), 'no-match search shows the search empty hint')
+// Clear the search so later tests see the full list again.
+await act(async () => {
+  propsOfSearch(searchInput).onChange({ target: { value: '' } })
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+
 // 6. Test Plugin remove inline confirmation
 await act(async () => {
   button('卸载').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
