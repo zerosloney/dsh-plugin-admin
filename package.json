@@ -16,7 +16,7 @@
     "cordis"
   ],
   "scripts": {
-    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs"
+    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs"
   },
   "exports": {
     ".": "./lib/index.js",

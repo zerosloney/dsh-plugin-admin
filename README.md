@@ -7,7 +7,7 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
   - 列表展示当前 profile 下的全部 bundle 层（名称、版本，以及**内置 / 包安装 / 本地安装**标记；本地安装的插件额外显示其源路径，依据 profile 依赖清单中的 `link:` / `file:` / 绝对路径 spec 判定）；
   - **名称模糊搜索**：列表上方搜索框支持按插件名 / 版本号 / 本地路径模糊过滤（大小写不敏感子串匹配），可叠加「全部 / 扩展插件 / 系统内置」筛选胶囊，无结果时给出专属空状态提示；
   - 支持扩展插件一键卸载（带有优雅的行内二次确认）；
-  - **远程更新检测（自动）**：打开「插件管理」Tab 即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」可强制手动刷新；查询带超时与 5 分钟缓存（host 侧缓存，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；
+  - **远程更新检测（自动）**：打开「插件管理」Tab 即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」可强制手动刷新；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入管理中心、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录**；
   - 安装/卸载在 host 侧编排 profile 目录下的 pnpm 并自动同步 `package.json` 的 `dsh.profile.bundles` 清单（变更在重启 dsh 后生效）。
 - **💬 会话管理**：
   - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
@@ -87,8 +87,10 @@ node scripts/host-check.mjs
 7. 会话删除二次确认交互；
 8. **侧边栏菜单注入**：验证会话菜单追加「复制会话 ID / 删除会话」，删除项为**两次点击确认**（首击改写标签、二击才触发 RPC）且对**同名会话拒绝删除**；工作区菜单追加「在资源管理器打开」；
 9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列；**连通性测试按钮**（🔌 测试）触发 `mcpAdmin/test` 并在行内渲染 ✅ 连通（含服务器名与工具数量）。
+10. `verify-mcp-cache.mjs`：MCP 连通性测试缓存的 localStorage 往返（预置缓存渲染 / 新探测持久化 + 重挂载恢复 / 配置保存失效缓存）；
+11. `verify-update-reminders.mjs`：插件**更新提醒持久化**（保存下来、更新完删除提醒）——① 已保存的提醒在重开面板且本次检查网络失败时依然渲染且不被抹除；② 检查确认已是最新版本 → 徽标与 localStorage 记录同时清除；③ 点击卡片「⬆ 更新」→ 安装后提醒立即消失（含回调确认后仍不复活）；④ 某个插件查询出错时不丢失已有提醒。
 
-Host 侧自检（`scripts/host-check.mjs`）覆盖六类契约：
+Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 1. `sessionAdmin.deleteSession` 的**定向 detach 契约**：删除会话只允许触碰实际记账该会话的那一个工作区，绝不允许批量遍历（dsh 的 `detachSession` 写入带剪枝语义——记录中所有不在 registry 内存头索引里的会话会被永久剥离；批量调用在索引不完整时会把无关工作区的记账整体清空，表现为所有会话落入"未分组"）；
 2. **`closeSession` 免重启删除**：`installAgentHandleCapture` 透明包装 `ctx.agents.resume` 捕获返回的 `AgentHandle`，`closeSession` 对在线会话先 `dispose()`（断言恰好一次）再删日志与 detach；未被捕获 handle 的在线会话**失败闭合**（明确报错、日志目录完好）；非在线会话经 `closeSession` 与 `deleteSession` 行为一致；
 2. **安装/卸载参数白名单**：`&` `|` `>` `<` `%` `!` 引号、前导 `-`（flag 伪装）等注入向量一律在 spawn 前拒绝，合法包名/作用域/版本/本地路径照常放行；
@@ -97,7 +99,8 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖六类契约：
 5. **registry 写路径挂载探测**：`workspaceRegistry` 缺失 `requireState` / `setState` / `enqueueOperation` 任一成员时，`apply()` 在挂载即抛错并指明缺失项；
 6. **mcpAdmin 配置往返**：对临时 profile 的 `cordis.patch.yml` 做 list / upsert（新增、原位更新）/ remove，验证条目 id、serverName 与最终文件内容正确且仍是合法 YAML；同时校验畸形输入（非法 id / transport / 缺 command）被拒绝；`fsAdmin.reveal` 校验路径参数；
 7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
-8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝。
+8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝；
+9. **checkUpdates 缓存命中回归**：5 分钟 TTL 内第二次查询命中缓存时，`updateAvailable` 按**当前安装版本**重算——仍落后版本 → 提醒保留（修复了缓存只存 latest 导致重开面板提醒丢失）；把安装版本抬到 latest 模拟升级完成 → 提醒自动消除（更新完删除提醒）。
 
 ---
 

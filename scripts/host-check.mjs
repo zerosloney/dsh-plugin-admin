@@ -817,6 +817,78 @@ assert.equal(inBoxSkip.updateAvailable, false, 'in-box bundle is skipped')
 const deadRegistry = await checkUpdate('http://127.0.0.1:1', { name: 'dsh-remote-tool', version: '0.5.1', dependency: true, localPath: null })
 assert.equal(deadRegistry.updateAvailable, false, 'dead registry reports no update')
 assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
+
+// Cache-hit regression: the 5-minute in-memory cache used to store only
+// { name, latest }, so a panel re-open inside the TTL read the cached entry as
+// "up to date" and the ⬆ 有新版本 reminder vanished on the second open. A cache
+// hit must now recompute `updateAvailable` against the CURRENT installed
+// version: still-outdated -> reminder kept; upgraded in between -> cleared.
+const updateProfile = join(here, '../.host-check-tmp/updates/profile')
+const updatePkg = join(updateProfile, 'node_modules/dsh-remote-tool')
+rmSync(updateProfile, { recursive: true, force: true })
+mkdirSync(updatePkg, { recursive: true })
+writeFileSync(join(updateProfile, 'package.json'), JSON.stringify({
+  dependencies: { 'dsh-remote-tool': '^0.5.0' },
+  dsh: { profile: { bundles: ['dsh-remote-tool'] } },
+}, null, 2), 'utf8')
+writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
+  name: 'dsh-remote-tool', version: '0.5.1',
+  dsh: { bundle: { patch: 'cordis.patch.yml' } },
+}, null, 2), 'utf8')
+// Pin this profile's registry to the stub — a profile-local .npmrc wins over
+// the user-level one, so the test never hits a real mirror. npm test injects
+// npm_config_registry into the child env, which resolveNpmRegistry prefers over
+// any .npmrc, so neutralise it for this block.
+delete process.env.npm_config_registry
+writeFileSync(join(updateProfile, '.npmrc'), 'registry=' + registryUrl + '\n', 'utf8')
+const updateCtx = {
+  baseUrl: pathToFileURL(updateProfile).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => fn(),
+  get: () => undefined,
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [],
+    inspect: async () => ({ events: [] }),
+    locate: () => undefined,
+  },
+}
+apply(updateCtx)
+const ua = updateCtx.provided.pluginAdmin
+
+const firstCheck = await ua.checkUpdates()
+const firstHit = firstCheck.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.equal(firstHit.updateAvailable, true, 'first (fresh) check reports an update')
+assert.equal(firstHit.latest, '0.9.0', 'first check reports the stub latest')
+
+// Second call lands inside the 5-minute TTL and is served from the cache WITH
+// the reminder still flagged — this is the regression that used to lose it.
+const secondCheck = await ua.checkUpdates()
+const secondHit = secondCheck.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.equal(secondHit.updateAvailable, true,
+  'cache hit within TTL keeps the updateAvailable reminder (re-opening must not lose it)')
+assert.equal(secondHit.latest, '0.9.0', 'cache hit serves the cached latest')
+assert.equal(secondHit.version, '0.5.1', 'cache hit carries the current installed version')
+
+// Simulate the upgrade completing: bump the installed version, then re-check.
+// The cache hit recomputes against the new version and clears the reminder.
+writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
+  name: 'dsh-remote-tool', version: '0.9.0',
+  dsh: { bundle: { patch: 'cordis.patch.yml' } },
+}, null, 2), 'utf8')
+const thirdCheck = await ua.checkUpdates()
+const thirdHit = thirdCheck.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.equal(thirdHit.updateAvailable, false,
+  'after the upgrade the reminder clears (更新完删除提醒), even on a cache hit')
+assert.equal(thirdHit.latest, '0.9.0', 'post-upgrade cache hit keeps reporting the known latest')
+
+rmSync(join(here, '../.host-check-tmp/updates'), { recursive: true, force: true })
 registryServer.close()
 
 // resolveNpmRegistry honors the env override.
