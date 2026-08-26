@@ -264,7 +264,7 @@ assert.ok((ctx.checkUpdateCalls ?? []).length >= 2, 'manual check-updates button
 
 // 5c. Fuzzy plugin search: type "custom" → only the local custom plugin card
 // stays; type a nonsense needle → empty state with search hint appears.
-const searchInput = [...host.querySelectorAll('.search-bar input')][0]
+const searchInput = [...host.querySelectorAll('.search-wrap input')][0]
 assert.ok(searchInput !== undefined, 'plugin search input rendered')
 const propsOfSearch = (el) => el[Object.keys(el).find((k) => k.startsWith('__reactProps$'))]
 await act(async () => {
