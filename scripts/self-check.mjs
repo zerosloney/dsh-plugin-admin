@@ -237,7 +237,7 @@ assert.ok(text.includes('探索Cordis依赖注入与Typert RPC网关通信协议
 assert.ok(text.includes('alpha-project'), 'session 1 group header / archived session cwd')
 assert.ok(text.includes('beta-project'), 'session 2 group header / live session cwd')
 assert.ok(text.includes('已归档'), 'archived badge')
-assert.ok(text.includes('进行中'), 'live badge')
+assert.ok(text.includes('会话在线'), 'live badge reads 会话在线 (online, not 进行中)')
 assert.ok(text.includes('取消归档'), 'unarchive button for archived session')
 assert.ok(text.includes('未分组'), 'ungrouped bucket header for orphan sessions')
 assert.ok(text.includes('独立会话'), 'ungrouped session card rendered')
