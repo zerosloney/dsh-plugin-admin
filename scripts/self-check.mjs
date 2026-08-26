@@ -133,7 +133,12 @@ const ctx = {
           return { ok: true, value: { profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
         }
         if (method === 'sessionAdmin/list') {
-          return { ok: true, value: { sessions: mockSessions, workspaces: mockWorkspaces } }
+          return { ok: true, value: { sessions: ctx.sessionListOverride ?? mockSessions, workspaces: mockWorkspaces } }
+        }
+        if (method === 'sessionAdmin/deleteSession') {
+          ctx.deletes = ctx.deletes ?? []
+          ctx.deletes.push(payload.args.sessionId)
+          return { ok: true, value: { deleted: payload.args.sessionId } }
         }
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
@@ -313,10 +318,69 @@ assert.ok(sessionMenu.querySelector('[data-dsh-admin-injected]'), 'injected item
 // Verify the separator was added
 assert.ok(sessionMenu.querySelector('[role="separator"][data-dsh-admin-injected]'), 'separator injected before the delete item')
 
+// Two-step confirm on the injected delete item: the first click arms it
+// (relabel), and only the second click fires the RPC — against the single
+// session whose title matches the clicked row exactly.
+const deleteItem = [...sessionMenu.querySelectorAll('button')]
+  .find((b) => b.textContent?.includes('删除会话'))
+assert.ok(deleteItem !== undefined, 'delete menu item present')
+deleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+assert.ok(deleteItem.textContent.includes('再点一次'), 'first click arms the delete item')
+assert.equal((ctx.deletes ?? []).length, 0, 'armed click fires no RPC')
+deleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.deepEqual(ctx.deletes, ['s1'], 'second click deletes the exact-title session')
+assert.ok(document.body.textContent.includes('会话已删除'), 'delete success toast shown')
+
 // Cleanup
 document.body.removeChild(sessionMenu)
 
 document.body.removeChild(sessionTree)
+
+// 10b. Ambiguity refusal: two same-title sessions behind the RPC must
+// never pick a victim — both clicks stay RPC-free and the error toast
+// points at the management panel instead.
+ctx.deletes.length = 0
+ctx.sessionListOverride = [
+  { id: 'dup-a', cwd: 'E:\\Demo\\dup-a', createdAt: 1_000, archived: false, live: false, title: '重名会话', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+  { id: 'dup-b', cwd: 'E:\\Demo\\dup-b', createdAt: 2_000, archived: false, live: false, title: '重名会话', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+]
+const dupTree = document.createElement('div')
+dupTree.setAttribute('role', 'tree')
+const dupRow = document.createElement('div')
+dupRow.setAttribute('role', 'treeitem')
+const dupTitle = document.createElement('span')
+dupTitle.textContent = '重名会话'
+dupRow.appendChild(dupTitle)
+const dupAnchor = document.createElement('button')
+dupAnchor.setAttribute('aria-label', '会话"重名会话"的操作')
+dupAnchor.setAttribute('type', 'button')
+dupRow.appendChild(dupAnchor)
+dupTree.appendChild(dupRow)
+document.body.appendChild(dupTree)
+const dupMenu = document.createElement('div')
+dupMenu.setAttribute('role', 'menu')
+const dupViewport = document.createElement('div')
+dupViewport.setAttribute('role', 'presentation')
+const dupArchiveBtn = document.createElement('button')
+dupArchiveBtn.setAttribute('role', 'menuitem')
+dupArchiveBtn.textContent = '归档会话'
+dupViewport.appendChild(dupArchiveBtn)
+dupMenu.appendChild(dupViewport)
+await new Promise((resolve) => setTimeout(resolve, 40))
+document.body.appendChild(dupMenu)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const dupDeleteItem = [...dupMenu.querySelectorAll('button')]
+  .find((b) => b.textContent?.includes('删除会话'))
+assert.ok(dupDeleteItem !== undefined, 'duplicate-title menu still gets the delete item')
+dupDeleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+dupDeleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.equal(ctx.deletes.length, 0, 'ambiguous title never deletes')
+assert.ok(document.body.textContent.includes('同名会话'), 'ambiguity error toast shown')
+delete ctx.sessionListOverride
+document.body.removeChild(dupMenu)
+document.body.removeChild(dupTree)
 
 // 11. Workspace menu injection: a div[role="menu"] with workspace items
 // triggers "在资源管理器打开" injection.
@@ -471,4 +535,23 @@ const reconnectDisabledUpsert = ctx.mcpUpserts[0]
 assert.equal(reconnectDisabledUpsert.id, 'mcp-existing', 'reconnect-disabled upsert carries the entry id')
 assert.equal(reconnectDisabledUpsert.config.reconnect, undefined, 'reconnect config omitted when disabled')
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, MCP editor save flow, headers editing, reconnect toggle')
+// 14b. env values containing ';' survive editing: pairs split on newlines
+// only, so PATH-style values round-trip whole instead of being truncated
+// at the first separator (Windows paths carry ';' everywhere).
+ctx.mcpUpserts.length = 0
+await act(async () => {
+  button('编辑').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+const envArea = [...host.querySelectorAll('textarea')][0]
+await act(async () => {
+  propsOfEl(envArea).onChange({ target: { value: 'PATH=C:\\a;C:\\b' } })
+})
+const saveBtn3 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('保存'))
+await act(async () => {
+  saveBtn3.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env value with ; survives the newline-only split')
+
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip')

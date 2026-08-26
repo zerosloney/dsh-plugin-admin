@@ -301,6 +301,12 @@ const second = await cacheCtx.provided.sessionAdmin.list()
 assert.equal(inspectCalls, 1, 'second list() reuses the cached summary (revision unchanged)')
 assert.equal(first.sessions[0].title, '缓存标题', 'first list derives the title from events')
 assert.equal(second.sessions[0].title, '缓存标题', 'second list serves the cached title')
+// deleteSession must evict the cache entry: the next list() re-reads the
+// (mock) events instead of serving a summary for a session that no longer
+// exists — and the cache never accumulates dead sessions.
+await cacheCtx.provided.sessionAdmin.deleteSession('session-cached')
+const third = await cacheCtx.provided.sessionAdmin.list()
+assert.equal(inspectCalls, 2, 'deleteSession evicts the cached summary (next list re-reads)')
 
 /* ---------- list() keeps per-session summary read failures visible ----------
  * A broken event log must not masquerade as an empty, healthy session; failed
@@ -440,6 +446,16 @@ await mcp.remove('mcp-web')
 const afterRemove = (await mcp.list()).entries
 assert.equal(afterRemove.length, 1, 'remove deletes one entry')
 assert.equal(afterRemove[0].id, 'mcp-github', 'remaining entry is the right one')
+// Concurrent upserts must both persist: patch-file mutations ride the same
+// serialized operation queue as pluginAdmin, so two queued writes can never
+// interleave a read-modify-write even if an await lands in the body later.
+await Promise.all([
+  mcp.upsert({ id: 'mcp-race-a', config: { transport: 'stdio', serverName: 'race-a', command: 'npx' } }),
+  mcp.upsert({ id: 'mcp-race-b', config: { transport: 'stdio', serverName: 'race-b', command: 'npx' } }),
+])
+const racedEntries = (await mcp.list()).entries
+assert.equal(racedEntries.filter(e => e.id === 'mcp-race-a' || e.id === 'mcp-race-b').length, 2,
+  'concurrent upserts both persist through the operation queue')
 // Reject malformed input.
 await assert.rejects(() => mcp.upsert({ id: 'bad id!', config: { transport: 'stdio', serverName: 'x', command: 'y' } }), /entry id must match/, 'invalid id rejected')
 await assert.rejects(() => mcp.upsert({ id: 'ok', config: { transport: 'http', serverName: 'x' } }), /transport must be/, 'invalid transport rejected')
@@ -457,4 +473,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip')
+console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization')
