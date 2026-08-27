@@ -255,12 +255,17 @@ assert.equal(upgradeBtns.length, 1, 'exactly one upgrade button (registry-instal
 // The upgrade button must live in the dsh-remote-tool card.
 const remoteCard = [...host.querySelectorAll('.card')].find((c) => c.textContent?.includes('dsh-remote-tool'))
 assert.ok(remoteCard !== undefined && remoteCard.textContent.includes('⬆ 更新'), 'upgrade button belongs to the remote plugin card')
-// The manual toolbar button still forces a fresh check.
+// The manual toolbar button forces a fresh check (force flag reaches the host).
 await act(async () => {
   button('检查更新').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
 })
 await new Promise((resolve) => setTimeout(resolve, 40))
 assert.ok((ctx.checkUpdateCalls ?? []).length >= 2, 'manual check-updates button fires again')
+assert.equal(
+  ctx.checkUpdateCalls[ctx.checkUpdateCalls.length - 1].force,
+  true,
+  'manual check-updates forces the host to bypass its cache',
+)
 
 // 5c. Fuzzy plugin search: type "custom" → only the local custom plugin card
 // stays; type a nonsense needle → empty state with search hint appears.
@@ -646,6 +651,40 @@ assert.equal(httpUpsert.id, 'mcp-http-test', 'http upsert carries the entry id')
 assert.equal(httpUpsert.config.transport, 'streamable-http', 'http upsert carries transport')
 assert.equal(httpUpsert.config.url, 'http://localhost:8080/mcp', 'http upsert carries url')
 assert.deepEqual(httpUpsert.config.headers, { Authorization: 'Bearer tok123', 'X-Custom': 'val' }, 'http upsert carries headers')
+
+// 13b. A NEW entry reusing an EXISTING id must be rejected client-side:
+// host upsert locates its block by id and would silently overwrite that
+// entry's whole config. Rejection happens before any RPC — form stays open.
+await act(async () => {
+  button('添加服务器').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+const collInputs = [...host.querySelectorAll('input')]
+await act(async () => {
+  propsOfEl(collInputs[0]).onChange({ target: { value: 'mcp-existing' } })
+})
+await act(async () => {
+  propsOfEl(collInputs[1]).onChange({ target: { value: 'hijack' } })
+})
+// stdio defaults need a command before the save button enables.
+await act(async () => {
+  propsOfEl(collInputs[2]).onChange({ target: { value: 'demo' } })
+})
+const collSave = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('保存'))
+await act(async () => {
+  collSave.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.equal((ctx.mcpUpserts ?? []).length, 2, 'colliding new entry never reaches the host RPC')
+assert.ok(document.body.textContent.includes('已被其他 MCP 条目占用'), 'id collision error surfaced to the user')
+assert.ok(document.body.textContent.includes('添加 MCP 服务器'), 'add form stays open after the rejection')
+// Cancel restores a neutral state for the following sections.
+const collCancel = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === '取消').pop()
+await act(async () => {
+  collCancel.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.ok(!document.body.textContent.includes('添加 MCP 服务器'), 'editor closes cleanly after canceling the collision attempt')
 
 // 14. Test reconnect toggle: open the existing stdio entry, disable reconnect,
 // save, and verify the upsert carries no reconnect config.

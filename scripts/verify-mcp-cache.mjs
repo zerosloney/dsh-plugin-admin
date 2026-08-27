@@ -5,6 +5,8 @@
  *  2. Simulates a fresh probe completing and asserts the result is persisted
  *     to localStorage, then that a remount restores it from storage.
  *  3. Verifies a saved config invalidates the cached probe for that entry.
+ *  4. A FAILED probe ({ok:false}) renders only within the session — it must
+ *     not be persisted, and a remount shows neither ✅ nor ❌ for the entry.
  *
  * Run: node scripts/verify-mcp-cache.mjs
  */
@@ -56,21 +58,21 @@ const baseEntries = [
 ]
 
 // Host state shared across mounts, so list()/upsert() behave like the real
-// host while the RPC calls are recorded.
+// host while the RPC calls are recorded. probeAnswer lets a scenario swap in
+// a failed probe payload (null = the default success).
 const hostState = { entries: JSON.parse(JSON.stringify(baseEntries)), probes: [], upserts: [] }
+let probeAnswer = null
+const defaultProbeAnswer = () => ({
+  ok: true,
+  serverInfo: { name: 'demo-mcp', version: 'v1.0' },
+  toolCount: 3,
+  tools: ['fetch_url', 'fetch_urls', 'browser_install'],
+})
 const call = (method, args) => {
   if (method === 'mcpAdmin/list') return Promise.resolve({ ok: true, value: { entries: hostState.entries } })
   if (method === 'mcpAdmin/test') {
     hostState.probes.push(args.id)
-    return Promise.resolve({
-      ok: true,
-      value: {
-        ok: true,
-        serverInfo: { name: 'demo-mcp', version: 'v1.0' },
-        toolCount: 3,
-        tools: ['fetch_url', 'fetch_urls', 'browser_install'],
-      },
-    })
+    return Promise.resolve({ ok: true, value: (probeAnswer !== null ? probeAnswer : defaultProbeAnswer)() })
   }
   if (method === 'mcpAdmin/upsert') {
     hostState.upserts.push(args.entry)
@@ -192,5 +194,42 @@ assert.ok(!document.body.textContent.includes('✅ 连通'), 'stale indicator re
 s4.root.unmount()
 document.body.removeChild(host4)
 console.log('scenario 3 OK: config save invalidates the cached probe')
+
+// --- Scenario 4: a failed probe stays ephemeral ------------------------------
+// The probe resolves through the gateway as {ok:true, value:{ok:false,...}}:
+// the session must show ❌ for it, but storage must not gain a durable ❌
+// (that would keep flagging an already-recovered server after reopening).
+probeAnswer = () => ({ ok: false, transport: 'stdio', ms: 12, error: 'connection refused' })
+window.localStorage.removeItem(CACHE_KEY)
+const host5 = document.body.appendChild(document.createElement('div'))
+const s5 = mountPanel(host5)
+await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+const mcpTab5 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
+await act(async () => { mcpTab5.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+const testBtn4 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🔌 测试'))
+await act(async () => { testBtn4.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+assert.ok(document.body.textContent.includes('❌ 不通'), 'failed probe renders 不通 in-session')
+assert.ok(document.body.textContent.includes('connection refused'), 'failure reason rendered')
+assert.deepEqual(Object.keys(JSON.parse(window.localStorage.getItem(CACHE_KEY) || '{}')), [],
+  'a failed probe is NOT persisted to localStorage')
+s5.root.unmount()
+document.body.removeChild(host5)
+
+// Remount: neither ✅ nor ❌ comes back from storage for this entry.
+const host6 = document.body.appendChild(document.createElement('div'))
+const s6 = mountPanel(host6)
+await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+const mcpTab6 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
+await act(async () => { mcpTab6.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+assert.ok(!document.body.textContent.includes('✅ 连通') && !document.body.textContent.includes('❌ 不通'),
+  'remount shows no restored status for the failed probe')
+assert.ok(!document.body.textContent.includes('缓存于'), 'no cache label without a cached result')
+s6.root.unmount()
+document.body.removeChild(host6)
+console.log('scenario 4 OK: failed probe stays ephemeral (session-only ❌, nothing persisted)')
+window.localStorage.removeItem(CACHE_KEY)
 
 console.log('verify-mcp-cache OK: all MCP test-cache scenarios passed')

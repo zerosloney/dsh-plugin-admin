@@ -7,7 +7,7 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
   - 列表展示当前 profile 下的全部 bundle 层（名称、版本，以及**内置 / 包安装 / 本地安装**标记；本地安装的插件额外显示其源路径，依据 profile 依赖清单中的 `link:` / `file:` / 绝对路径 spec 判定）；
   - **名称模糊搜索**：列表上方搜索框支持按插件名 / 版本号 / 本地路径模糊过滤（大小写不敏感子串匹配），可叠加「全部 / 扩展插件 / 系统内置」筛选胶囊，无结果时给出专属空状态提示；
   - 支持扩展插件一键卸载（带有优雅的行内二次确认）；
-  - **远程更新检测（自动）**：打开「插件管理」Tab 即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」可强制手动刷新；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入管理中心、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录**；
+  - **远程更新检测（自动）**：打开「插件管理」Tab 即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」是唯一的手动重查入口，**强制绕过 5 分钟缓存直接重查 registry 并刷新缓存内容**（自动检查走缓存，手动检查才是真查）；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入管理中心、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录；更新其中一个插件不会影响其余插件的提醒；升级完成后的自动复核同样**强制绕过缓存**重新查询，registry 在 TTL 窗口内刚发布更新的情况下也不会把刚升完级的插件误标回「有新版本」，检查与升级并发交错时，检查刚发现的提醒也不会被升级提交用旧快照覆盖（合并一律基于当前 state 的函数式更新，持久化由统一的镜像 effect 收口）；
   - 安装/卸载在 host 侧编排 profile 目录下的 pnpm 并自动同步 `package.json` 的 `dsh.profile.bundles` 清单（变更在重启 dsh 后生效）。
 - **💬 会话管理**：
   - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
@@ -15,7 +15,8 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
   - **状态呼吸灯与徽标**：绿色呼吸光晕（**会话在线**，悬停提示说明"在线 = 仍挂载于 dsh host 内存，非正在运行"）、琥珀色标签（**已归档**）、灰色默认点（**已结束**）；
   - **多维快捷搜索与筛选**：输入框支持同时模糊匹配标题、对话摘要、工作目录或 Session ID；支持按状态胶囊筛选（全部、在线、已归档、已结束）；
   - **会话清理与恢复**：支持会话永久物理删除（行内二次防误触确认，彻底清理磁盘日志、工作区记账与归档集合）；**在线会话不再需要重启 dsh**——「关停并删除」通过插件在 host 侧透明捕获的 `AgentHandle` 走 dsh 官方 dispose 链（停止 agent 运行、等待静止、注销 agent、从内存 SessionStore 移除并触发 `session/disposed`，持久化层随即 flush 缓冲事件并释放写路径），然后才删除日志，因此日志不会在下次 flush 复活；支持已归档会话一键取消归档，侧边栏即时联动刷新。
-- **🔌 MCP 配置**：管理中心中的独立 Tab——列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段。
+  - **🔌 MCP 配置**：管理中心中的独立 Tab——列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段；
+  - **测试结果的缓存边界**：只有**成功**的探测结果持久化到 localStorage（重开面板/重启后恢复上次状态并标注「缓存于」时刻）；**失败（❌ 不通）只在当前会话内显示、不落盘**——瞬时故障不会变成跨会话的过期 ❌，旧版本遗留的失败记录会在载入时自动清除；新增表单中手输与既有条目相同的 id 会被**直接拒绝并提示换名**——host 的 upsert 按 id 原位覆盖，不拦截就是静默毁掉该条目的既有配置。
 - **侧边栏右键菜单（会话 & 工作区）**：
   - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到管理中心按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin` 的安全语义——在线会话走 `closeSession`（先 dispose 捕获的 agent handle 再删日志，不再要求重启），非在线会话走 `deleteSession`，均定向 detach。
   - **工作区行右键**：新增**在资源管理器打开**——调用 `fsAdmin.reveal` 在系统文件管理器中定位该工作区目录（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`）。
@@ -27,7 +28,7 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
 - **Host 端（`lib/index.js`，零 dsh 依赖）**：
   - 注入 `['typert', 'workspaceRegistry', 'sessionPersistence']`；
   - 提供并注册四个 RPC 命名空间：
-    - `pluginAdmin`（`list` / `install` / `remove` / `checkUpdates`）：异步 `spawn` pnpm（Windows 走 shell 解析 .cmd shim，5 分钟超时且**进程树强杀**（`taskkill /T /F`，避免超时后残留 pnpm/node 子进程继续写盘），Promise 尾链串行化防并发），镜像 CLI `reconcileBundles` 同步清单，清单写回为**原子写**（临时文件 + rename，崩溃不截断 profile 的 package.json）；安装/卸载参数经**字符白名单**校验（`assertPnpmOperand`），从根上排除 `&` `|` `>` `<` `%` 引号等 cmd 元字符注入向量；`install` / `remove` 返回真实 pnpm 输出尾部（`output` 字段），前端作为提示气泡的悬浮诊断信息展示；`checkUpdates` 对 registry 安装的 bundle 并发查询 npm registry 的 `latest`（registry 解析：`npm_config_registry` env → 项目/用户 `.npmrc` → 官方源；有界并发 4 路、8s 超时、5 分钟缓存），返回 `updateAvailable` / `latest` / `error`，本地路径与内置插件跳过；
+    - `pluginAdmin`（`list` / `install` / `remove` / `checkUpdates`）：异步 `spawn` pnpm（Windows 走 shell 解析 .cmd shim，5 分钟超时且**进程树强杀**（`taskkill /T /F`，避免超时后残留 pnpm/node 子进程继续写盘），Promise 尾链串行化防并发），镜像 CLI `reconcileBundles` 同步清单，清单写回为**原子写**（临时文件 + rename，崩溃不截断 profile 的 package.json）；安装/卸载参数经**字符白名单**校验（`assertPnpmOperand`），从根上排除 `&` `|` `>` `<` `%` 引号等 cmd 元字符注入向量；`install` / `remove` 返回真实 pnpm 输出尾部（`output` 字段），前端作为提示气泡的悬浮诊断信息展示；`checkUpdates` 对 registry 安装的 bundle 并发查询 npm registry 的 `latest`（registry 解析：`npm_config_registry` env → 项目/用户 `.npmrc` → 官方源；有界并发 4 路、8s 超时、5 分钟缓存；`force` 参数为 true 时**绕过缓存强制重查并刷新缓存内容**），返回 `updateAvailable` / `latest` / `error`，本地路径与内置插件跳过；
     - `sessionAdmin` (`list` / `archive` / `unarchive` / `deleteSession` / `closeSession`)：直接对接 `workspaceRegistry` 与 `sessionPersistence`，提供安全幂等的持久化日志清理与归档状态流转；`list` 采用**修订号驱动的摘要缓存**（`listSnapshots` 的 revision token，未变化会话不重读事件日志）与**有界并发**（最多 4 路并行 inspect），并设单会话事件扫描上限兜底；`archive` 校验会话真实存在，拒绝向归档集写入垃圾 id；对 registry 软私有写路径（`requireState` / `setState` / `enqueueOperation`）在 `apply()` 挂载时即做**兼容性探测**，dsh 版本变更会明确报出缺失成员，而不是首次归档时才静默失败。`closeSession` 使**在线会话免重启删除**成为可能：`installAgentHandleCapture` 在挂载时透明包装公开的 `ctx.agents.create` / `resume`（原样调用并返回，仅把返回的 `AgentHandle` 按 session id 存入插件私有 Map），删除在线会话时先 `handle.dispose()` 走 dsh 官方 teardown 链（停止 loop → 等待静止 → 注销 agent → 从 SessionStore 移除 → 触发 `session/disposed` → 持久化层 `retire()` flush 缓冲事件并释放写路径），再删日志——日志不会被下次 flush 复活；未被捕获 handle 的在线会话（如插件挂载前已创建）会明确报错并引导重启，绝不误删。
     - `fsAdmin` (`reveal`)：跨平台在系统文件管理器中定位一个绝对路径（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`），供工作区右键菜单「在资源管理器打开」使用；
     - `mcpAdmin` (`list` / `upsert` / `remove` / `test`)：管理 profile 的 `cordis.patch.yml` 中的 MCP 客户端实例（`@deepseek-ai/dsh-mcp-client`）。基于行级 YAML 块编辑（零依赖）：识别顶层 `- id:` 块并仅改动 `name` 为 MCP 客户端插件的条目，`upsert` 按 id 原位替换或追加，`remove` 整块删除，写回走**原子写**；校验 id / serverName / transport / command / url，拒绝畸形输入；文件变更与插件安装共用同一**串行操作队列**（读-改-写不交错）。`test` 按条目 id 发起**连通性探测**：stdio 子进程（newline JSON-RPC，`initialize` → `initialized` → `tools/list`，超时 `taskkill /T /F` 强杀进程树，捕获 stderr 尾部）或 streamable-http（`fetch` POST `initialize`，兼容 SSE 与纯 JSON，超时 AbortController），返回服务器标识 / 工具数量 / 耗时，或失败原因（命令不存在、连接拒绝、超时等），全程不抛异常。
@@ -87,8 +88,8 @@ node scripts/host-check.mjs
 7. 会话删除二次确认交互；
 8. **侧边栏菜单注入**：验证会话菜单追加「复制会话 ID / 删除会话」，删除项为**两次点击确认**（首击改写标签、二击才触发 RPC）且对**同名会话拒绝删除**；工作区菜单追加「在资源管理器打开」；
 9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列；**连通性测试按钮**（🔌 测试）触发 `mcpAdmin/test` 并在行内渲染 ✅ 连通（含服务器名与工具数量）。
-10. `verify-mcp-cache.mjs`：MCP 连通性测试缓存的 localStorage 往返（预置缓存渲染 / 新探测持久化 + 重挂载恢复 / 配置保存失效缓存）；
-11. `verify-update-reminders.mjs`：插件**更新提醒持久化**（保存下来、更新完删除提醒）——① 已保存的提醒在重开面板且本次检查网络失败时依然渲染且不被抹除；② 检查确认已是最新版本 → 徽标与 localStorage 记录同时清除；③ 点击卡片「⬆ 更新」→ 安装后提醒立即消失（含回调确认后仍不复活）；④ 某个插件查询出错时不丢失已有提醒。
+10. `verify-mcp-cache.mjs`：MCP 连通性测试缓存的 localStorage 往返（预置缓存渲染 / 新探测持久化 + 重挂载恢复 / 配置保存失效缓存 / **失败探测 `{ok:false}` 只存于会话不落盘、重挂载不复活 ❌**）；
+11. `verify-update-reminders.mjs`：插件**更新提醒持久化**（保存下来、更新完删除提醒）——① 已保存的提醒在重开面板且本次检查网络失败时依然渲染且不被抹除；② 检查确认已是最新版本 → 徽标与 localStorage 记录同时清除；③ 点击卡片「⬆ 更新」→ 安装后提醒立即消失（含回调确认后仍不复活）；④ 某个插件查询出错时不丢失已有提醒；⑤ 同时有两个过时插件时**只更新其中一个**，另一个的提醒在重挂载（刷新）后依然保留、localStorage 也只留未更新那条；⑥ **首开即全量查询失败**时逐条渲染「⚠ 更新检查失败」标签并给出失败计数，绝不显示「全部为最新版本」——瞬时错误不写入 localStorage，下一次成功检查自动消退（混合轮次只对确实验证过的条目说「其余均为最新版本」）；⑦ 自动检查在飞期间点击「⬆ 更新」，检查刚发现的其他插件提醒**不会被升级提交用旧快照覆盖**（deferred 桩脚本化交错：先放行检查、再放行安装，中间断言提醒与 localStorage 均在；旧实现在此处会丢失提醒且跳过升级后的强制复核）。
 
 Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 1. `sessionAdmin.deleteSession` 的**定向 detach 契约**：删除会话只允许触碰实际记账该会话的那一个工作区，绝不允许批量遍历（dsh 的 `detachSession` 写入带剪枝语义——记录中所有不在 registry 内存头索引里的会话会被永久剥离；批量调用在索引不完整时会把无关工作区的记账整体清空，表现为所有会话落入"未分组"）；
@@ -100,7 +101,8 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 6. **mcpAdmin 配置往返**：对临时 profile 的 `cordis.patch.yml` 做 list / upsert（新增、原位更新）/ remove，验证条目 id、serverName 与最终文件内容正确且仍是合法 YAML；同时校验畸形输入（非法 id / transport / 缺 command）被拒绝；`fsAdmin.reveal` 校验路径参数；
 7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
 8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝；
-9. **checkUpdates 缓存命中回归**：5 分钟 TTL 内第二次查询命中缓存时，`updateAvailable` 按**当前安装版本**重算——仍落后版本 → 提醒保留（修复了缓存只存 latest 导致重开面板提醒丢失）；把安装版本抬到 latest 模拟升级完成 → 提醒自动消除（更新完删除提醒）。
+9. **checkUpdates 缓存命中回归**：5 分钟 TTL 内第二次查询命中缓存时，`updateAvailable` 按**当前安装版本**重算——仍落后版本 → 提醒保留（修复了缓存只存 latest 导致重开面板提醒丢失）；把安装版本抬到 latest 模拟升级完成 → 提醒自动消除（更新完删除提醒）；
+10. **checkUpdates 强制刷新（force）**：「⬆ 检查更新」传入 `force` 时**绕过 TTL 真正重查 registry**（stub 请求计数递增），返回值立即反映 registry 新版本，且**下一个 TTL 内的普通查询直接吃到 force 刷新后的缓存内容**（检查更新强制更新缓存内容）；升级到刷新后的 latest → 提醒消除。
 
 ---
 

@@ -788,10 +788,15 @@ assert.ok(!existsSync(closeNonLiveDir), 'closeSession on a non-live session remo
 const { fetchLatestVersion: fetchLatest, checkPluginUpdate: checkUpdate, resolveNpmRegistry: resolveRegistry } =
   await import(new URL('../lib/index.js', import.meta.url).href)
 
+// The stub's answer is mutable (for the force-refresh test) and each served
+// request is counted (to prove a forced check really hits the registry).
+let stubLatestVersion = '0.9.0'
+let stubHits = 0
 const registryServer = createServer((req, res) => {
+  stubHits++
   res.writeHead(200, { 'Content-Type': 'application/json' })
   if (req.url === '/dsh-remote-tool/latest') {
-    res.end(JSON.stringify({ name: 'dsh-remote-tool', version: '0.9.0' }))
+    res.end(JSON.stringify({ name: 'dsh-remote-tool', version: stubLatestVersion }))
   } else {
     res.end(JSON.stringify({ name: 'unknown', version: '0.0.0' }))
   }
@@ -887,6 +892,30 @@ const thirdHit = thirdCheck.updates.find((u) => u.name === 'dsh-remote-tool')
 assert.equal(thirdHit.updateAvailable, false,
   'after the upgrade the reminder clears (更新完删除提醒), even on a cache hit')
 assert.equal(thirdHit.latest, '0.9.0', 'post-upgrade cache hit keeps reporting the known latest')
+
+// Forced check (the toolbar 「⬆ 检查更新」button): must bypass the TTL cache,
+// re-query the registry and REFRESH the cached content. Bump the stub, force
+// once, and verify both the fresh answer and that the next (non-forced) call
+// inside the TTL now serves the refreshed value instead of the stale one.
+stubLatestVersion = '0.9.1'
+const hitsBeforeForce = stubHits
+const forcedCheck = await ua.checkUpdates(true)
+const forcedHit = forcedCheck.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.ok(stubHits > hitsBeforeForce, 'forced check re-queries the registry (bypasses the TTL cache)')
+assert.equal(forcedHit.latest, '0.9.1', 'forced check returns the freshly fetched latest')
+assert.equal(forcedHit.updateAvailable, true, 'forced check still flags the outdated plugin')
+const afterForce = await ua.checkUpdates()
+const afterForceHit = afterForce.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.equal(afterForceHit.latest, '0.9.1', 'force refreshed the cache content (检查更新强制更新缓存内容)')
+assert.equal(afterForceHit.updateAvailable, true, 'refreshed cache keeps flagging')
+// Upgrading to the refreshed latest then clears the reminder on a cache hit.
+writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
+  name: 'dsh-remote-tool', version: '0.9.1',
+  dsh: { bundle: { patch: 'cordis.patch.yml' } },
+}, null, 2), 'utf8')
+const settledCheck = await ua.checkUpdates()
+const settledHit = settledCheck.updates.find((u) => u.name === 'dsh-remote-tool')
+assert.equal(settledHit.updateAvailable, false, 'upgrade to the refreshed latest clears the reminder')
 
 rmSync(join(here, '../.host-check-tmp/updates'), { recursive: true, force: true })
 registryServer.close()
