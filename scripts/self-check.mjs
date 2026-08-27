@@ -152,6 +152,19 @@ const ctx = {
             { name: 'dsh-base', version: '1.2.3', latest: '1.2.3', updateAvailable: false },
           ] } }
         }
+        if (method === 'pluginAdmin/install') {
+          ctx.installCalls = ctx.installCalls ?? []
+          ctx.installCalls.push(payload.args.spec)
+          // Tests may inject a failure result; default is success.
+          if (ctx.installResult !== undefined) return ctx.installResult
+          return { ok: true, value: { output: 'Done', profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
+        }
+        if (method === 'pluginAdmin/remove') {
+          ctx.removeCalls = ctx.removeCalls ?? []
+          ctx.removeCalls.push(payload.args.name)
+          if (ctx.removeResult !== undefined) return ctx.removeResult
+          return { ok: true, value: { output: 'Done', profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
+        }
         if (method === 'sessionAdmin/list') {
           return { ok: true, value: { sessions: ctx.sessionListOverride ?? mockSessions, workspaces: mockWorkspaces } }
         }
@@ -308,6 +321,72 @@ await act(async () => {
   button('取消').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
 })
 assert.ok(!document.body.textContent.includes('确认卸载'), 'cancel restores plugin actions')
+
+// 6b. FAILED install/update/remove must keep the error visible (regression:
+// the old failure branches patched the error and then called reloadPlugins()
+// in the same microtask — React 18 batches both updates, so the error text
+// never painted and a failed 更新/安装/卸载 looked like "nothing happened").
+// Each case asserts the error is still on screen AFTER the silent list
+// refresh triggered by the failure has settled, and that a floating error
+// toast was raised for the failure (双通道：红条持久 + toast 醒目).
+const errorToasts = (needle) => [...document.querySelectorAll('.dsh-admin-toast.error')]
+  .some((t) => t.textContent.includes(needle))
+ctx.installResult = { ok: false, error: { message: 'pnpm exited with code 1: ERR_PNPM_MISSING_PACKAGE_NAME' } }
+ctx.removeResult = { ok: false, error: { message: "not a dependency-managed plugin" } }
+// Update failure: the upgrade button on the dsh-remote-tool card.
+await act(async () => {
+  button('⬆ 更新').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.ok((ctx.installCalls ?? []).length >= 1, 'update click reaches pluginAdmin/install')
+assert.equal(ctx.installCalls[0], 'dsh-remote-tool@latest', 'update sends name@latest spec')
+await new Promise((resolve) => setTimeout(resolve, 30))
+assert.ok(
+  document.body.textContent.includes('更新失败：pnpm exited with code 1'),
+  'update failure error stays visible after the silent list refresh',
+)
+assert.ok(errorToasts('更新失败：pnpm exited with code 1'), 'update failure raises a floating error toast')
+// Install failure: type a spec, hit 安装.
+const installInput = [...host.querySelectorAll('.install-wrap input')][0]
+assert.ok(installInput !== undefined, 'install input rendered')
+await act(async () => {
+  propsOfSearch(installInput).onChange({ target: { value: 'dsh-somepkg' } })
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+await act(async () => {
+  button('安装').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+await new Promise((resolve) => setTimeout(resolve, 30))
+assert.ok(
+  document.body.textContent.includes('安装失败：pnpm exited with code 1'),
+  'install failure error stays visible after the silent list refresh',
+)
+assert.ok(errorToasts('安装失败：pnpm exited with code 1'), 'install failure raises a floating error toast')
+// Remove failure (two-step confirm path).
+ctx.installResult = undefined
+await act(async () => {
+  button('卸载').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(document.body.textContent.includes('确认卸载'), 'remove confirm bar appears after install failure')
+await act(async () => {
+  button('确认卸载').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 40))
+assert.ok((ctx.removeCalls ?? []).length >= 1, 'confirm fires pluginAdmin/remove')
+await new Promise((resolve) => setTimeout(resolve, 30))
+assert.ok(
+  document.body.textContent.includes('卸载失败：'),
+  'remove failure error stays visible after the silent list refresh',
+)
+assert.ok(errorToasts('卸载失败：'), 'remove failure raises a floating error toast')
+// Single-toast semantics: each new failure REPLACED the in-flight toast in
+// place, so after three rapid failures exactly one floating toast remains —
+// carrying the LATEST message, not a stack of overlapping nodes.
+const allErrorToasts = [...document.querySelectorAll('.dsh-admin-toast.error')]
+assert.equal(allErrorToasts.length, 1, 'consecutive failures keep exactly one floating toast (replacement, not stacking)')
+assert.ok(allErrorToasts[0].textContent.includes('卸载失败：'), 'the single surviving toast carries the latest failure')
+ctx.removeResult = undefined
 
 // 7. Switch to Sessions tab.
 await act(async () => {
