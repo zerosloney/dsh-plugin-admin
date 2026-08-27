@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "dsh web UI plugin: unified administration panel — plugin and session management with modern tabbed Web UI (host remote + browser panel)",
   "main": "lib/index.js",
