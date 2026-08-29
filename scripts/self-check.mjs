@@ -303,6 +303,11 @@ assert.ok(
   [...pluginListEl.querySelectorAll('.card-title-text')].every((el) => el.getAttribute('title') === el.textContent),
   'plugin names carry a hover title with the full name (two-column wrap instead of ellipsis)',
 )
+const pluginCss = document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]').textContent
+assert.ok(
+  pluginCss.includes('.list.grid2 .card { cursor: pointer'),
+  'extension plugin cards show the pointer cursor, matching the official 插件列表 hover',
+)
 
 // 5b. Remote update check: the panel auto-checks on mount (no manual click),
 // the registry-installed plugin (dsh-remote-tool) gets an update badge +
