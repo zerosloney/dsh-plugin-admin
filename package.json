@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
-  "description": "dsh web UI plugin: administration surfaces for the settings UI — 扩展插件 tab in the Plugins page, plus MCP服务器 and 历史会话 settings pages (host remote + browser panel)",
+  "description": "dsh web UI admin plugin: extension-plugin marketplace tab, MCP server & session-history settings pages, and subagent management (named delegation-tool instances with persona/tool-filter/model config, plus external CLI backend mounting) — all persisted as profile cordis.patch.yml rows that Cordis HMR hot-reloads",
   "main": "lib/index.js",
   "license": "MIT",
   "repository": {
@@ -13,10 +13,13 @@
     "dsh",
     "dsh-plugin",
     "admin",
+    "subagent",
+    "mcp",
+    "session",
     "cordis"
   ],
   "scripts": {
-    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs"
+    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs && node scripts/verify-subagents-host.mjs && node scripts/verify-subagents-client.mjs"
   },
   "exports": {
     ".": "./lib/index.js",

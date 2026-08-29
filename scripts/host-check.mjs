@@ -36,12 +36,34 @@ const workspaceA = workspaceOf('A', [TARGET, 'session-other-a'])
 const workspaceB = workspaceOf('B', ['session-other-b'])
 
 let nextState = null
+// Typert registry emulation: the real registry (harness packages/typert/
+// registry service.ts) allows ONE registration per package name and rejects
+// duplicate invocation ids / endpoints — rules the permissive stub below used
+// to hide (the merged plugin briefly registered two descriptors under the
+// same package, which only explodes against the real registry).
+const typertRegistrations = []
+const typertRegister = (descriptor) => {
+  if (typertRegistrations.some((d) => d.package === descriptor.package)) {
+    throw new Error(`typert: Remote package "${descriptor.package}" is already registered`)
+  }
+  const seen = new Set()
+  for (const invocation of descriptor.invocations) {
+    const endpoint = `${invocation.namespace}/${invocation.method}`
+    if (seen.has(endpoint)) throw new Error(`typert: endpoint "${endpoint}" is already registered`)
+    if (typertRegistrations.some((d) => d.invocations.some((i) => i.id === invocation.id))) {
+      throw new Error(`typert: invocation id "${invocation.id}" is already registered`)
+    }
+    seen.add(endpoint)
+  }
+  typertRegistrations.push(descriptor)
+  return () => {}
+}
 const fakeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { fakeCtx.provided ??= {}; fakeCtx.provided[key] = service },
   effect: (fn) => fn(),
   get: (name) => (name === 'sessions' ? undefined : undefined),
-  typert: { register: () => () => {} },
+  typert: { register: typertRegister },
   workspaceRegistry: {
     list: () => [workspaceA, workspaceB],
     archivedSessionIds: [TARGET, 'session-stays'],
@@ -61,6 +83,17 @@ assert.ok(fakeCtx.provided?.sessionAdmin, 'sessionAdmin service provided')
 assert.ok(fakeCtx.provided?.pluginAdmin, 'pluginAdmin service provided')
 assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
+assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
+// One unified descriptor per package: all five namespaces ride a single
+// registration (a second `typert.register` under 'dsh-plugin-admin' would
+// have thrown in the emulated registry above).
+assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
+assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
+assert.deepEqual(
+  [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
+  ['fsAdmin', 'mcpAdmin', 'pluginAdmin', 'sessionAdmin', 'subagentAdmin'],
+  'unified descriptor carries all five namespaces',
+)
 
 // fsAdmin.reveal validates its input without spawning anything.
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(''), /requires a path string/, 'reveal rejects empty path')

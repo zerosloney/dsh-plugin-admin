@@ -216,19 +216,19 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Three slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, plus the standalone MCP服务器 / 历史会话 settings sections.
-assert.equal(injectedSections.length, 3, 'three slot contributions injected')
+// Four slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, plus the standalone MCP服务器 / 子智能体 / 历史会话 settings sections.
+assert.equal(injectedSections.length, 4, 'four slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['settings.plugins.tab', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×2) and settings.plugins.tab',
+  ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×3) and settings.plugins.tab',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 3, 'three registrations: extensions tab + MCP + session history')
+assert.equal(registeredSections.length, 4, 'four registrations: extensions tab + MCP + subagents + session history')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['session-history'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['session-history'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -242,6 +242,11 @@ assert.equal(mcpSection.options.name, 'settings.section')
 assert.equal(mcpSection.options.order, 25, 'MCP服务器 sits right after Agent 预设 (order 20)')
 assert.equal(mcpSection.options.label, 'MCP服务器', 'MCP section label')
 
+const subagentSection = byId['subagent-admin']
+assert.equal(subagentSection.options.name, 'settings.section')
+assert.equal(subagentSection.options.order, 26, '子智能体 sits right after MCP服务器 (order 25)')
+assert.equal(subagentSection.options.label, '子智能体', 'subagent section label')
+
 const historySection = byId['session-history']
 assert.equal(historySection.options.name, 'settings.section')
 assert.equal(historySection.options.order, 100, '历史会话 sorts last in the settings nav')
@@ -250,10 +255,14 @@ const historyFace = historySection.options.inject()
 assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
 assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
 
-// 4. Style injection: the section stylesheet lands in <head>.
+// 4. Style injection: the section stylesheets land in <head>.
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]'),
   'unified section css injected',
+)
+assert.ok(
+  document.querySelector('style[data-dsh-sa-styles]'),
+  'subagent section css injected',
 )
 
 // Mount helper: render one registered section into a fresh host div. Text
