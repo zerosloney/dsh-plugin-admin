@@ -401,7 +401,7 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 40))
 assert.ok((ctx.installCalls ?? []).length >= 1, 'update click reaches pluginAdmin/install')
-assert.equal(ctx.installCalls[0], 'dsh-remote-tool@latest', 'update sends name@latest spec')
+assert.equal(ctx.installCalls[0], 'dsh-remote-tool@0.9.0', 'update sends the pinned name@<latest> spec (not @latest, which pnpm may silently skip under an existing range constraint)')
 await new Promise((resolve) => setTimeout(resolve, 30))
 assert.ok(
   document.body.textContent.includes('更新失败：pnpm exited with code 1'),

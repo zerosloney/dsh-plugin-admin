@@ -110,7 +110,7 @@ const call = (method, args) => {
   if (method === 'pluginAdmin/install') {
     installCalls.push(args.spec)
     const finishInstall = () => {
-      const target = String(args.spec).replace(/@latest$/, '')
+      const target = String(args.spec).replace(/@[^@]*$/, '')
       const next = plugins.map((p) => (p.name === target ? { ...p, version: installVersion } : p))
       plugins = next
       // Mirror the real host after `install name@latest`: the named plugin is
@@ -224,7 +224,7 @@ const upgradeBtn = [...document.querySelectorAll('button')].find((b) => b.textCo
 assert.ok(upgradeBtn, 'upgrade button present on the registry-installed card')
 await act(async () => { upgradeBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 120)) })
-assert.deepEqual(installCalls, ['dsh-remote-tool@latest'], 'upgrade installs name@latest')
+assert.deepEqual(installCalls, ['dsh-remote-tool@0.9.0'], 'upgrade installs the pinned name@<latest> spec (not @latest, which pnpm may silently skip under an existing range constraint)')
 assert.ok(!theBadge().some((t) => t.includes('⬆ 有新版本')), 'upgrade consumes the reminder immediately')
 assert.ok(checkCalls.length >= 2, 'mount auto-check plus the post-upgrade refresh both ran')
 assert.equal(checkCalls[checkCalls.length - 1].force, true,
