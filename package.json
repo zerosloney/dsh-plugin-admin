@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "type": "module",
   "description": "dsh web UI plugin: administration surfaces for the settings UI — 扩展插件 tab in the Plugins page, plus MCP服务器 and 历史会话 settings pages (host remote + browser panel)",
   "main": "lib/index.js",
