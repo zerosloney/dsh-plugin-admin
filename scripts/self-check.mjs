@@ -731,6 +731,10 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
 assert.ok(document.body.textContent.includes('添加 MCP 服务器'), 'add server form opens')
+// The empty-state hint must be hidden while the add form is open — otherwise it
+// crowds the form and (under the section's bounded/overflow-hidden height) can
+// push the 保存 button out of reach. Regression guard for the empty-state fix.
+assert.ok(!document.body.textContent.includes('暂无 MCP 服务器配置'), 'empty-state hint hidden while the add form is open')
 // All inputs: [0]=id, [1]=serverName, [2]=url, [3]=headers, [4]=reconnectInitialDelayMs, [5]=reconnectMaxDelayMs, [6]=reconnectMaxAttempts
 const addInputs = [...host.querySelectorAll('input')]
 const addTextareas = [...host.querySelectorAll('textarea')]
