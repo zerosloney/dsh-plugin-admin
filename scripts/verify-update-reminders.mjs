@@ -1,6 +1,6 @@
 /**
  * Verification for the plugin update-reminder persistence (the "⬆ 有新版本"
- * badge must survive re-opening the 管理中心 until the plugin is actually
+ * badge must survive re-opening the settings dialog until the plugin is actually
  * updated — 保存下来，更新完删除提醒):
  *  1. A previously persisted reminder renders on a fresh mount even when the
  *     re-opened check hits a network failure (reminder must not vanish).
@@ -133,6 +133,8 @@ const call = (method, args) => {
   return Promise.resolve({ ok: false, error: `unexpected ${method}` })
 }
 
+// apply() now contributes three slot registrations; the plugin-management
+// panel is the `extensions` tab inside the shell-owned 插件 section.
 function mountPanel(container) {
   const injected = []
   const registered = []
@@ -145,8 +147,9 @@ function mountPanel(container) {
     },
   }
   bundle.apply(ctx)
-  injected[0].cb()
-  const section = registered[0]
+  injected.forEach((entry) => entry.cb())
+  const section = registered.find((r) => r.options.id === 'extensions')
+  if (section === undefined) throw new Error('extensions plugins-tab registration not found')
   const face = section.options.inject()
   const root = createRoot(container)
   root.render(React.createElement(section.component, face))

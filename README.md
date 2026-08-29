@@ -1,24 +1,24 @@
 # dsh-plugin-admin
 
-dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中新增一个**管理中心**设置页，内含**插件管理**、**会话管理**、**MCP 配置**三个 Tab，按需加载当前面板。
+dsh web UI 插件：把管理能力拆进设置界面的既有结构——在官方**插件**设置页新增**扩展插件**页签，并在设置栏新增 **MCP服务器** 与 **历史会话** 两个独立设置页，按需加载当前面板。
 
-- **🔌 插件管理**：
+- **🔌 扩展插件**（插件设置页第三个页签，位于「插件配置」「插件列表」之后）：
   - 顶部输入框支持 npm 包名（如 `dsh-xxx`）或本地绝对路径安装插件（回车或点击提交）；
-  - 列表展示当前 profile 下的全部 bundle 层（名称、版本，以及**内置 / 包安装 / 本地安装**标记；本地安装的插件额外显示其源路径，依据 profile 依赖清单中的 `link:` / `file:` / 绝对路径 spec 判定）；
+  - 列表展示当前 profile 下的全部 bundle 层（名称、版本，以及**内置 / 包安装 / 本地安装**标记；本地安装的插件额外显示其源路径，依据 profile 依赖清单中的 `link:` / `file:` / 绝对路径 spec 判定），按 **内置 → 包安装 → 本地安装** 排序，卡片以一行两列栅格展示（窄屏回落单列）；名称过长时单行省略显示，悬停可见完整名称；
   - **名称模糊搜索**：列表上方搜索框支持按插件名 / 版本号 / 本地路径模糊过滤（大小写不敏感子串匹配），可叠加「全部 / 扩展插件 / 系统内置」筛选胶囊，无结果时给出专属空状态提示；
   - 支持扩展插件一键卸载（带有优雅的行内二次确认）；
-  - **远程更新检测（自动）**：打开「插件管理」Tab 即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」是唯一的手动重查入口，**强制绕过 5 分钟缓存直接重查 registry 并刷新缓存内容**（自动检查走缓存，手动检查才是真查）；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入管理中心、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录；更新其中一个插件不会影响其余插件的提醒；升级完成后的自动复核同样**强制绕过缓存**重新查询，registry 在 TTL 窗口内刚发布更新的情况下也不会把刚升完级的插件误标回「有新版本」，检查与升级并发交错时，检查刚发现的提醒也不会被升级提交用旧快照覆盖（合并一律基于当前 state 的函数式更新，持久化由统一的镜像 effect 收口）；
+  - **远程更新检测（自动）**：打开「扩展插件」页签即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（`npm install <name>@latest`）；工具栏「⬆ 检查更新」是唯一的手动重查入口，**强制绕过 5 分钟缓存直接重查 registry 并刷新缓存内容**（自动检查走缓存，手动检查才是真查）；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入页签、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录；更新其中一个插件不会影响其余插件的提醒；升级完成后的自动复核同样**强制绕过缓存**重新查询，registry 在 TTL 窗口内刚发布更新的情况下也不会把刚升完级的插件误标回「有新版本」，检查与升级并发交错时，检查刚发现的提醒也不会被升级提交用旧快照覆盖（合并一律基于当前 state 的函数式更新，持久化由统一的镜像 effect 收口）；
   - 安装/卸载在 host 侧编排 profile 目录下的 pnpm 并自动同步 `package.json` 的 `dsh.profile.bundles` 清单（变更在重启 dsh 后生效）。
-- **💬 会话管理**：
+- **💬 历史会话**（设置栏独立页）：
   - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
   - **元信息直观展示**：显示对话消息计数（如 `5 条消息`）、工作目录路径（`📁 项目名 (完整路径)`）、创建时间及短 Session ID；
   - **状态呼吸灯与徽标**：绿色呼吸光晕（**会话在线**，悬停提示说明"在线 = 仍挂载于 dsh host 内存，非正在运行"）、琥珀色标签（**已归档**）、灰色默认点（**已结束**）；
   - **多维快捷搜索与筛选**：输入框支持同时模糊匹配标题、对话摘要、工作目录或 Session ID；支持按状态胶囊筛选（全部、在线、已归档、已结束）；
   - **会话清理与恢复**：支持会话永久物理删除（行内二次防误触确认，彻底清理磁盘日志、工作区记账与归档集合）；**在线会话不再需要重启 dsh**——「关停并删除」通过插件在 host 侧透明捕获的 `AgentHandle` 走 dsh 官方 dispose 链（停止 agent 运行、等待静止、注销 agent、从内存 SessionStore 移除并触发 `session/disposed`，持久化层随即 flush 缓冲事件并释放写路径），然后才删除日志，因此日志不会在下次 flush 复活；支持已归档会话一键取消归档，侧边栏即时联动刷新。
-  - **🔌 MCP 配置**：管理中心中的独立 Tab——列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段；
+  - **🔌 MCP服务器**（设置栏独立页）：列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段；
   - **测试结果的缓存边界**：只有**成功**的探测结果持久化到 localStorage（重开面板/重启后恢复上次状态并标注「缓存于」时刻）；**失败（❌ 不通）只在当前会话内显示、不落盘**——瞬时故障不会变成跨会话的过期 ❌，旧版本遗留的失败记录会在载入时自动清除；新增表单中手输与既有条目相同的 id 会被**直接拒绝并提示换名**——host 的 upsert 按 id 原位覆盖，不拦截就是静默毁掉该条目的既有配置。
 - **侧边栏右键菜单（会话 & 工作区）**：
-  - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到管理中心按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin` 的安全语义——在线会话走 `closeSession`（先 dispose 捕获的 agent handle 再删日志，不再要求重启），非在线会话走 `deleteSession`，均定向 detach。
+  - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到历史会话按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin` 的安全语义——在线会话走 `closeSession`（先 dispose 捕获的 agent handle 再删日志，不再要求重启），非在线会话走 `deleteSession`，均定向 detach。
   - **工作区行右键**：新增**在资源管理器打开**——调用 `fsAdmin.reveal` 在系统文件管理器中定位该工作区目录（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`）。
 
 ---
@@ -33,7 +33,7 @@ dsh web UI 插件：在浏览器设置弹窗（侧边栏底部“设置”）中
     - `fsAdmin` (`reveal`)：跨平台在系统文件管理器中定位一个绝对路径（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`），供工作区右键菜单「在资源管理器打开」使用；
     - `mcpAdmin` (`list` / `upsert` / `remove` / `test`)：管理 profile 的 `cordis.patch.yml` 中的 MCP 客户端实例（`@deepseek-ai/dsh-mcp-client`）。基于行级 YAML 块编辑（零依赖）：识别顶层 `- id:` 块并仅改动 `name` 为 MCP 客户端插件的条目，`upsert` 按 id 原位替换或追加，`remove` 整块删除，写回走**原子写**；校验 id / serverName / transport / command / url，拒绝畸形输入；文件变更与插件安装共用同一**串行操作队列**（读-改-写不交错）。`test` 按条目 id 发起**连通性探测**：stdio 子进程（newline JSON-RPC，`initialize` → `initialized` → `tools/list`，超时 `taskkill /T /F` 强杀进程树，捕获 stderr 尾部）或 streamable-http（`fetch` POST `initialize`，兼容 SSE 与纯 JSON，超时 AbortController），返回服务器标识 / 工具数量 / 耗时，或失败原因（命令不存在、连接拒绝、超时等），全程不抛异常。
 - **浏览器前端（`lib/client.js`）**：
-  - 注入 `slots` + `connection`，向设置弹窗注册一个 `settings.section`：`plugin-admin`（管理中心, order 25）；页内 Tab 仅挂载当前面板；
+  - 注入 `slots` + `connection`，注册三个界面贡献：向官方插件设置页的 `settings.plugins.tab` 注册「扩展插件」页签（id `extensions`，order 20，排在「插件配置」0 与「插件列表」10 之后）；向设置弹窗注册两个 `settings.section`：`mcp-servers`（MCP服务器, order 25，紧跟「Agent 预设」）与 `session-history`（历史会话, order 100）；面板随官方页签/分区按需挂载；
   - 采用模块表平台词 `require('react')` 与 Shell 共享同一 React 实例；
   - 深度利用 `--dsw-*` design tokens，自适应浅色/深色主题，支持卡片式布局、状态呼吸灯、加载动效（Spinner）、危险操作防误触确认条与空状态提示；
   - 经 `/api` RPC Gateway 调用 Host 对应服务的 Remote 方法；
@@ -80,11 +80,11 @@ node scripts/host-check.mjs
 
 自检套件覆盖：
 1. Bundle 工厂加载与模块导出校验；
-2. 单个“管理中心” `settings.section` 声明与注册，以及插件管理 / 会话管理 / MCP 配置 Tab 的按需切换；
+2. 三个 slot 注册（`settings.plugins.tab`「扩展插件」+ `settings.section`「MCP服务器」/「历史会话」），以及扩展插件 / MCP服务器 / 历史会话面板的按需挂载；
 3. 现代化统一样式注入（`<style>` 挂载与动画定义）；
 4. React 组件真实挂载（JSDOM + React 18）；
-5. 插件管理面板渲染、过滤统计与卸载二次确认交互；**失败反馈可见性**：安装 / 更新 / 卸载的 RPC 返回 `{ok:false}` 时，错误文案渲染后**不被同批次触发的静默列表刷新清除**（旧实现在同一微任务里先写 error 再 reload，React 18 批处理把错误吞掉，失败表现为「点击没反应」），并同步弹出顶部浮动错误 toast（双通道：面板红条持久显示细节 + toast 醒目提示；toast 为**单例**——新提示原位替换旧提示并重启倒计时，同屏至多一条，快速连续失败不会重叠遮挡）；
-6. 会话管理面板渲染（独立组件，无 Tab）、列表与状态渲染；
+5. 扩展插件页签渲染、过滤统计与卸载二次确认交互；**失败反馈可见性**：安装 / 更新 / 卸载的 RPC 返回 `{ok:false}` 时，错误文案渲染后**不被同批次触发的静默列表刷新清除**（旧实现在同一微任务里先写 error 再 reload，React 18 批处理把错误吞掉，失败表现为「点击没反应」），并同步弹出顶部浮动错误 toast（双通道：面板红条持久显示细节 + toast 醒目提示；toast 为**单例**——新提示原位替换旧提示并重启倒计时，同屏至多一条，快速连续失败不会重叠遮挡）；
+6. 历史会话设置页渲染、列表与状态渲染；
 7. 会话删除二次确认交互；
 8. **侧边栏菜单注入**：验证会话菜单追加「复制会话 ID / 删除会话」，删除项为**两次点击确认**（首击改写标签、二击才触发 RPC）且对**同名会话拒绝删除**；工作区菜单追加「在资源管理器打开」；
 9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列；**连通性测试按钮**（🔌 测试）触发 `mcpAdmin/test` 并在行内渲染 ✅ 连通（含服务器名与工具数量）。

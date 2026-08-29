@@ -89,7 +89,8 @@ const call = (method, args) => {
   return Promise.resolve({ ok: false, error: `unexpected ${method}` })
 }
 
-// Mirror the self-check's apply + inject face.
+// Mirror the self-check's apply + inject face. apply() now contributes three
+// slot registrations; the MCP panel is the `mcp-servers` settings section.
 function mountPanel(container) {
   const injected = []
   const registered = []
@@ -102,8 +103,9 @@ function mountPanel(container) {
     },
   }
   bundle.apply(ctx)
-  injected[0].cb()
-  const section = registered[0]
+  injected.forEach((entry) => entry.cb())
+  const section = registered.find((r) => r.options.id === 'mcp-servers')
+  if (section === undefined) throw new Error('mcp-servers settings section not registered')
   const face = section.options.inject()
   const root = createRoot(container)
   root.render(React.createElement(section.component, face))
@@ -120,10 +122,6 @@ window.localStorage.setItem(CACHE_KEY, JSON.stringify({
 const host1 = document.body.appendChild(document.createElement('div'))
 const s1 = mountPanel(host1)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-// Switch to the MCP tab.
-const mcpTab = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.ok(document.body.textContent.includes('✅ 连通'), 'cached result renders 连通')
 assert.ok(document.body.textContent.includes('缓存于'), 'cached result is labelled 缓存于')
 assert.ok(document.body.textContent.includes('3 个工具'), 'cached tool count renders')
@@ -136,9 +134,6 @@ console.log('scenario 1 OK: cached probe restored from localStorage without re-p
 window.localStorage.removeItem(CACHE_KEY)
 const host2 = document.body.appendChild(document.createElement('div'))
 const s2 = mountPanel(host2)
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-const mcpTab2 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab2.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.ok(!document.body.textContent.includes('✅ 连通'), 'no result before testing')
 const testBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🔌 测试'))
@@ -159,9 +154,6 @@ const host3 = document.body.appendChild(document.createElement('div'))
 const before = hostState.probes.length
 const s3 = mountPanel(host3)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-const mcpTab3 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab3.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.equal(hostState.probes.length, before, 'no probe RPC fired on remount')
 assert.ok(document.body.textContent.includes('✅ 连通'), 'remount restores cached result')
 assert.ok(document.body.textContent.includes('缓存于'), 'remount keeps the cache label')
@@ -176,9 +168,6 @@ window.localStorage.setItem(CACHE_KEY, JSON.stringify({
 }))
 const host4 = document.body.appendChild(document.createElement('div'))
 const s4 = mountPanel(host4)
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-const mcpTab4 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab4.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.ok(document.body.textContent.includes('✅ 连通'), 'cached result visible before edit')
 // Open the editor for the first entry and save without touching anything.
@@ -204,9 +193,6 @@ window.localStorage.removeItem(CACHE_KEY)
 const host5 = document.body.appendChild(document.createElement('div'))
 const s5 = mountPanel(host5)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-const mcpTab5 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab5.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 const testBtn4 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🔌 测试'))
 await act(async () => { testBtn4.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
@@ -220,9 +206,6 @@ document.body.removeChild(host5)
 // Remount: neither ✅ nor ❌ comes back from storage for this entry.
 const host6 = document.body.appendChild(document.createElement('div'))
 const s6 = mountPanel(host6)
-await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
-const mcpTab6 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('MCP 配置'))
-await act(async () => { mcpTab6.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.ok(!document.body.textContent.includes('✅ 连通') && !document.body.textContent.includes('❌ 不通'),
   'remount shows no restored status for the failed probe')

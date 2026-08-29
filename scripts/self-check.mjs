@@ -1,11 +1,13 @@
 /**
- * Self-check for the unified administration panel (Plugins & Sessions):
+ * Self-check for the administration surfaces (扩展插件 / MCP服务器 / 历史会话):
  * - Loads the bundle the way the dsh module loader would (factory + platform require table)
  * - Drives apply() against a mock slots/connection context
- * - Asserts slot registration and stylesheet injection
- * - Renders the registered settings section with real React 18 from harness
+ * - Asserts the three slot registrations (plugins-tab contribution + two settings sections)
+ * - Asserts stylesheet injection
+ * - Renders each registered section with real React 18 from harness
  * - Tests Plugin Management render & inline remove confirmation
- * - Tests Tab Switching to Session Management & inline delete confirmation
+ * - Tests Session Management & inline delete confirmation
+ * - Tests MCP server editor save flow
  *
  * Run: node scripts/self-check.mjs
  */
@@ -62,7 +64,7 @@ const exports = registrations[0].factory((spec) => {
 })
 assert.deepEqual(exports.inject, ['slots', 'connection'], 'injects slots + connection')
 
-// 3. apply(): waits on the settings.section declaration and registers one unified page.
+// 3. apply(): waits on the slot declarations and registers the three surfaces.
 const mockPlugins = [
   { name: 'dsh-base', version: '1.2.3', dependency: false, removable: false, localPath: null },
   { name: 'dsh-custom-tool', version: '0.2.0', dependency: true, removable: true, localPath: 'E:\\Demo\\cli-tools\\dsh-custom-tool' },
@@ -214,18 +216,39 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// One settings entry exposes all three panels through internal tabs.
-assert.equal(injectedSections.length, 1, 'one settings.section declaration')
-assert.equal(injectedSections[0].key, 'settings.section', 'injection waits on settings.section')
-injectedSections[0].callback()
-assert.equal(registeredSections.length, 1, 'one management-center section registered')
-const section = registeredSections[0]
-assert.equal(section.options.name, 'settings.section')
-assert.equal(section.options.id, 'plugin-admin', 'management-center section id')
-assert.equal(section.options.order, 25, 'management-center section order')
-assert.equal(section.options.label, '管理中心', 'management-center section label')
-const face = section.options.inject()
-assert.equal(typeof face.call, 'function', 'inject face carries the RPC call')
+// Three slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, plus the standalone MCP服务器 / 历史会话 settings sections.
+assert.equal(injectedSections.length, 3, 'three slot contributions injected')
+assert.deepEqual(
+  injectedSections.map((i) => i.key).sort(),
+  ['settings.plugins.tab', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×2) and settings.plugins.tab',
+)
+injectedSections.forEach((i) => i.callback())
+assert.equal(registeredSections.length, 3, 'three registrations: extensions tab + MCP + session history')
+const byId = {}
+for (const entry of registeredSections) byId[entry.options.id] = entry
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['session-history'], 'expected registration ids present')
+
+const extensions = byId.extensions
+assert.equal(extensions.options.name, 'settings.plugins.tab')
+assert.equal(extensions.options.order, 20, '扩展插件 tab sorts after 插件列表 (order 10)')
+assert.equal(extensions.options.label, '扩展插件', 'extensions tab label')
+const extensionsFace = extensions.options.inject()
+assert.equal(typeof extensionsFace.call, 'function', 'extensions tab inject face carries the RPC call')
+
+const mcpSection = byId['mcp-servers']
+assert.equal(mcpSection.options.name, 'settings.section')
+assert.equal(mcpSection.options.order, 25, 'MCP服务器 sits right after Agent 预设 (order 20)')
+assert.equal(mcpSection.options.label, 'MCP服务器', 'MCP section label')
+
+const historySection = byId['session-history']
+assert.equal(historySection.options.name, 'settings.section')
+assert.equal(historySection.options.order, 100, '历史会话 sorts last in the settings nav')
+assert.equal(historySection.options.label, '历史会话', 'session history section label')
+const historyFace = historySection.options.inject()
+assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
+assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
 
 // 4. Style injection: the section stylesheet lands in <head>.
 assert.ok(
@@ -233,18 +256,28 @@ assert.ok(
   'unified section css injected',
 )
 
-// 5. Render the management center. Plugins is the default tab.
-const host = document.body.appendChild(document.createElement('div'))
-await act(async () => {
-  createRoot(host).render(React.createElement(section.component, face))
-})
-await new Promise((resolve) => setTimeout(resolve, 60))
+// Mount helper: render one registered section into a fresh host div. Text
+// assertions run against document.body, so exactly one panel stays mounted
+// at a time; each panel is unmounted before the next one mounts.
+let host = null
+async function mountSection(section) {
+  host = document.body.appendChild(document.createElement('div'))
+  let root
+  await act(async () => {
+    root = createRoot(host)
+    root.render(React.createElement(section.component, section.options.inject()))
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  return root
+}
+
+// 5. Render the 扩展插件 tab (plugin management, now a 插件-section tab).
+const pluginsRoot = await mountSection(extensions)
 
 const button = (label) => [...document.querySelectorAll('button')].find((b) => b.textContent?.includes(label))
 
-// Verify Plugins tab.
+// Verify Plugins panel content (no tab bar — the shell owns the tab chrome).
 let text = document.body.textContent
-assert.ok(text.includes('插件管理') && text.includes('会话管理') && text.includes('MCP 配置'), 'three management tabs render')
 assert.ok(text.includes('E:/dsh-profiles/web'), 'profile directory displayed')
 assert.ok(text.includes('dsh-base'), 'in-box plugin layer row')
 assert.ok(text.includes('dsh-custom-tool'), 'custom plugin layer row')
@@ -255,6 +288,21 @@ assert.ok(text.includes('包安装'), 'registry install tag')
 assert.ok(text.includes('本地安装'), 'local install tag')
 assert.ok(text.includes('E:\\Demo\\cli-tools\\dsh-custom-tool'), 'local install source path')
 assert.ok(text.includes('全部 (3)'), 'filter pill with count')
+// Two-column grid + category sort: 内置 → 包安装 → 本地安装. The mock host
+// returns base(内置), custom-tool(本地), remote-tool(包安装) — rendering must
+// move remote-tool before custom-tool while keeping the builtin first.
+const pluginListEl = host.querySelector('.list.grid2')
+assert.ok(pluginListEl !== null, 'plugin list renders as a two-column grid')
+const pluginNameOrder = [...pluginListEl.querySelectorAll('.card-title-text')].map((el) => el.textContent)
+assert.deepEqual(
+  pluginNameOrder,
+  ['dsh-base', 'dsh-remote-tool', 'dsh-custom-tool'],
+  'plugin cards sort 内置 → 包安装 → 本地安装 (host order kept within a rank)',
+)
+assert.ok(
+  [...pluginListEl.querySelectorAll('.card-title-text')].every((el) => el.getAttribute('title') === el.textContent),
+  'plugin names carry a hover title with the full name (two-column wrap instead of ellipsis)',
+)
 
 // 5b. Remote update check: the panel auto-checks on mount (no manual click),
 // the registry-installed plugin (dsh-remote-tool) gets an update badge +
@@ -388,11 +436,10 @@ assert.equal(allErrorToasts.length, 1, 'consecutive failures keep exactly one fl
 assert.ok(allErrorToasts[0].textContent.includes('卸载失败：'), 'the single surviving toast carries the latest failure')
 ctx.removeResult = undefined
 
-// 7. Switch to Sessions tab.
-await act(async () => {
-  button('会话管理').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await new Promise((resolve) => setTimeout(resolve, 60))
+// 7. Unmount the plugins panel and mount the 历史会话 section instead.
+await act(async () => { pluginsRoot.unmount() })
+host.remove()
+const sessionsRoot = await mountSection(historySection)
 
 text = document.body.textContent
 assert.ok(text.includes('分析与重构插件系统架构'), 'session 1 title rendered')
@@ -446,11 +493,10 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 assert.deepEqual(ctx.closeDeletes, ['s2'], 'close confirm calls sessionAdmin/closeSession with the live session id')
 ctx.connection.rpc.call = originalCall
 
-// 9. Switch to the MCP tab.
-await act(async () => {
-  button('MCP 配置').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await new Promise((resolve) => setTimeout(resolve, 60))
+// 9. Unmount the sessions panel and mount the MCP服务器 section instead.
+await act(async () => { sessionsRoot.unmount() })
+host.remove()
+const mcpRoot = await mountSection(mcpSection)
 assert.ok(document.body.textContent.includes('MCP 配置'), 'MCP section renders')
 
 // 10. Menu popup injection: when a div[role="menu"] with session items
