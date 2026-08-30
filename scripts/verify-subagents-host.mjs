@@ -226,7 +226,15 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
     writeFileSync(join(dir, 'cordis.patch.yml'), BASE_PATCH)
 
-    const registered = { provided: null, warns: [] }
+    const registered = { provided: null, warns: [], interruptions: [] }
+    const liveChild = {
+      id: 'child-running',
+      status: 'running',
+      session: {
+        header: { origin: 'subagent', parentSession: 'parent-session', delegationDepth: 2 },
+        events: [{ type: 'subagent/descriptor', data: { label: '检查变更', provider: 'spawn', mode: 'continuable' } }],
+      },
+    }
     const ctx = {
       baseUrl: dir,
       logger: { warn: (message) => registered.warns.push(message) },
@@ -239,7 +247,12 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
       subagents: {
         list: () => ['spawn', 'fork'],
         getProvider: (name) => PROVIDERS.get(name),
+        interrupt: (childId, reason) => registered.interruptions.push({ childId, reason }),
       },
+      get: (key) => key === 'agents' ? {
+        list: () => [liveChild, { id: 'idle-child', status: 'idle', session: liveChild.session }, { id: 'root', status: 'running', session: { header: { origin: 'user' }, events: [] } }],
+        get: (id) => id === liveChild.id ? liveChild : undefined,
+      } : undefined,
     }
     // The mount no longer registers its own typert descriptor (the typert
     // registry allows ONE registration per package name); it hands the
@@ -256,6 +269,8 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
       'dsh-plugin-admin/subagent/history',
       'dsh-plugin-admin/subagent/list',
       'dsh-plugin-admin/subagent/remove',
+      'dsh-plugin-admin/subagent/runtimeInterrupt',
+      'dsh-plugin-admin/subagent/runtimeList',
       'dsh-plugin-admin/subagent/upsert',
     ])
     assert.ok(invocations.every(item => item.service === 'subagentAdmin' && item.namespace === 'subagentAdmin'))
@@ -268,6 +283,14 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     assert.equal(initial.meta.providers[0].capabilities.persona, true)
     assert.equal(initial.meta.providers[1].capabilities.persona, false)
     assert.equal(initial.meta.providers[0].continuable, true)
+
+    const runtime = await service.runtimeList()
+    assert.deepEqual(runtime.agents, [{
+      id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
+    }], 'only running subagents are exposed')
+    await service.runtimeInterrupt('child-running', 'parent-session')
+    assert.deepEqual(registered.interruptions, [{ childId: 'child-running', reason: { kind: 'user', parentSessionId: 'parent-session' } }])
+    await assert.rejects(() => service.runtimeInterrupt('child-running', 'other-parent'), /不属于指定父会话/)
 
     const created = await service.upsert({ entry: { id: 'auditor', config: { provider: 'spawn', toolName: 'live_tool', persona: 'Audit everything.', toolFilter: { deny: ['bash'] } } } })
     assert.equal(created.ok, true)

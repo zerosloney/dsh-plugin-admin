@@ -119,7 +119,7 @@ var mockMeta = {
   ],
   providers: [
     { name: 'spawn', capabilities: { outputSchema: true, depthLimit: true, toolFilter: true, persona: true }, continuable: true, inheritsParentContext: false },
-    { name: 'fork', capabilities: { outputSchema: true, depthLimit: true, toolFilter: false, persona: false }, continuable: false, inheritsParentContext: false },
+    { name: 'fork', capabilities: { outputSchema: true, depthLimit: false, toolFilter: false, persona: false }, continuable: false, inheritsParentContext: false },
   ],
   llmProviders: [
     { id: 'optirouter', name: 'OptiRouter' },
@@ -132,6 +132,9 @@ var mockMeta = {
 }
 const mockEntries = []
 let rpcCalls = []
+let mockRuntimeAgents = [{
+  id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
+}]
 
 /* CLI backend mock state: mounted rows keyed by backendId, mirrored into the
  * detection payload the panel consumes. */
@@ -178,6 +181,14 @@ const mockCliDetect = () => ({
 var mockHost = {
   async 'subagentAdmin/list'() {
     return { ok: true, value: await listValue() }
+  },
+  async 'subagentAdmin/runtimeList'() {
+    return { ok: true, value: { agents: mockRuntimeAgents } }
+  },
+  async 'subagentAdmin/runtimeInterrupt'({ childId, parentSessionId }) {
+    rpcCalls.push({ method: 'runtimeInterrupt', childId, parentSessionId })
+    mockRuntimeAgents = mockRuntimeAgents.filter(agent => agent.id !== childId)
+    return { ok: true, value: { ok: true } }
   },
   async 'subagentAdmin/upsert'({ entry }) {
     rpcCalls.push({ method: 'upsert', entry })
@@ -263,8 +274,9 @@ const root = createRoot(container)
 await check('renders the tabbed section and the empty state after list()', async () => {
   await act(async () => { root.render(React.createElement(Section, { ...props, key: 'section' })) })
   assert.ok(container.querySelector('[data-dsh-sa-section]'), 'section root rendered')
+  assert.ok(container.textContent.includes('运行中'), 'runtime tab label rendered')
   assert.ok(container.textContent.includes('子智能体'), 'tab label rendered')
-  assert.ok(container.textContent.includes('还没有受管子智能体'), 'empty state rendered')
+  assert.ok(container.textContent.includes('检查变更'), 'running child rendered')
 })
 
 const clickButton = async (matcher) => {
@@ -280,6 +292,19 @@ const clickButton = async (matcher) => {
 const flush = async (ms = 30) => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) })
 }
+
+/* 6 ── runtime tab: displays actual children and requires confirmation to stop. */
+await check('运行中 tab lists a child and interrupts it only after confirmation', async () => {
+  assert.ok(container.textContent.includes('父会话：parent-session'), 'parent session displayed')
+  const before = rpcCalls.length
+  await clickButton(button => button.textContent.trim() === '中断')
+  assert.equal(rpcCalls.length, before, 'first click only arms')
+  await clickButton(button => button.textContent.includes('确认中断'))
+  assert.equal(rpcCalls.length, before + 1)
+  assert.deepEqual(rpcCalls[rpcCalls.length - 1], { method: 'runtimeInterrupt', childId: 'child-running', parentSessionId: 'parent-session' })
+  assert.ok(container.textContent.includes('当前没有运行中的子智能体'), 'list refreshes after interrupt')
+  await clickButton(button => button.textContent.trim() === '子智能体')
+})
 
 // jsdom 29 + React 18.3 event delegation does not deliver input/keydown events
 // in this environment, so drive the exact handlers through the element's React
@@ -308,24 +333,28 @@ const pressEnter = async (node) => {
 
 /* 6 ── create flow: open form, fill, save → upsert payload + card */
 await check('create form posts the full four-field payload and renders the card', async () => {
+  const before = rpcCalls.length
   await clickButton(button => button.textContent.includes('新建子智能体'))
   assert.ok(container.querySelector('.form'), 'form opened')
   await setInput('如 researcher', 'auditor')
   await setInput('如 web_researcher', 'strict_auditor')
   await setInput('该子智能体的人设', '你只做审计：输出必须以 AUDIT: 开头，且不许使用任何写工具。')
+  await clickButton(button => button.textContent.includes('高级设置'))
   // deny chip via the tag input (preset value + Enter adds a chip)
-  const denyWrap = [...container.querySelectorAll('.tag-input')][1]
-  const denyInput = denyWrap.querySelector('input')
-  Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(denyInput, 'write')
-  await pressEnter(denyInput)
-  Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(denyInput, 'edit')
-  await pressEnter(denyInput)
+  const addDenyTool = async (value) => {
+    const denyInput = [...container.querySelectorAll('.tag-input')][1].querySelector('input')
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(denyInput, value)
+    await fiberHandler(denyInput, 'onChange', { target: denyInput, currentTarget: denyInput })
+    await pressEnter(denyInput)
+  }
+  await addDenyTool('write')
+  await addDenyTool('edit')
   // model field
   await setInput('留空继承，如 auto', 'auto')
   await clickButton(button => button.textContent.trim() === '保存')
-  assert.equal(rpcCalls.length, 1)
-  assert.equal(rpcCalls[0].method, 'upsert')
-  const payload = rpcCalls[0].entry
+  assert.equal(rpcCalls.length, before + 1)
+  assert.equal(rpcCalls[rpcCalls.length - 1].method, 'upsert')
+  const payload = rpcCalls[rpcCalls.length - 1].entry
   assert.equal(payload.id, 'auditor')
   assert.equal(payload.config.toolName, 'strict_auditor')
   assert.equal(payload.config.provider, 'spawn')
@@ -336,7 +365,40 @@ await check('create form posts the full four-field payload and renders the card'
   assert.ok(container.textContent.includes('已挂载'), 'live badge rendered')
 })
 
-/* 7 ── client-side validation blocks reserved names without an RPC */
+/* 8 ── progressive disclosure + provider capabilities converge before save. */
+await check('advanced settings are collapsed and provider changes clear unsupported options', async () => {
+  await clickButton(button => button.textContent.trim() === '编辑')
+  assert.ok(container.querySelector('.form-actions'), 'save actions stay in a dedicated footer')
+  assert.ok(!container.textContent.includes('工具约束（toolFilter'), 'advanced settings start collapsed')
+  await setInput('该子智能体的人设', '临时 persona')
+  await clickButton(button => button.textContent.includes('高级设置'))
+  var selects = [...container.querySelectorAll('select')]
+  var backgroundSelect = selects.find(node => node.value === 'one-shot')
+  assert.ok(backgroundSelect, 'background mode shown in advanced settings')
+  Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set.call(backgroundSelect, 'continuable')
+  await fiberHandler(backgroundSelect, 'onChange', { target: backgroundSelect, currentTarget: backgroundSelect })
+  var providerSelect = [...container.querySelectorAll('select')].find(node => node.value === 'spawn')
+  assert.ok(providerSelect, 'provider selector found')
+  Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set.call(providerSelect, 'fork')
+  await fiberHandler(providerSelect, 'onChange', { target: providerSelect, currentTarget: providerSelect })
+  await flush()
+  assert.ok(container.textContent.includes('已按「fork」的能力清除或调整'), 'capability adjustment is explained')
+  const persona = [...container.querySelectorAll('textarea')].find(node => (node.getAttribute('placeholder') || '').includes('人设'))
+  assert.equal(persona.value, '', 'unsupported persona is cleared')
+  assert.equal(persona.disabled, true, 'unsupported persona cannot be selected')
+  backgroundSelect = [...container.querySelectorAll('select')].find(node => node.value === 'one-shot')
+  assert.equal(backgroundSelect.querySelector('option[value="continuable"]').disabled, true, 'unsupported mode is disabled')
+  const depthField = [...container.querySelectorAll('.field')].find(node => node.textContent.includes('最大委托深度'))
+  const depthManaged = depthField.querySelector('input[type="checkbox"]')
+  assert.equal(depthManaged.checked, true, 'numeric depth becomes provider-managed')
+  assert.equal(depthManaged.disabled, true, 'unsupported numeric depth cannot be selected')
+  const toolInput = [...container.querySelectorAll('input')].find(node => node.getAttribute('aria-label') === '仅允许工具')
+  assert.equal(toolInput.disabled, true, 'unsupported tool constraint cannot be selected')
+  assert.ok(container.textContent.includes('仅当前候选工具可保存'), 'tool wording matches host validation')
+  await clickButton(button => button.textContent.trim() === '取消')
+})
+
+/* 9 ── client-side validation blocks reserved names without an RPC */
 await check('reserved tool name is blocked client-side (no RPC fired)', async () => {
   const before = rpcCalls.length
   await clickButton(button => button.textContent.includes('新建子智能体'))
@@ -388,6 +450,7 @@ await check('变更记录 tab fetches and renders the journal', async () => {
 await check('model/provider picker lists configured LLM providers', async () => {
   await clickButton(button => button.textContent.trim() === '子智能体')
   await clickButton(button => button.textContent.includes('新建子智能体'))
+  await clickButton(button => button.textContent.includes('高级设置'))
   var inputs = [...container.querySelectorAll('input')]
   var providerInput = inputs.find(function (n) { return (n.getAttribute('placeholder') || '').includes('optirouter') })
   assert.ok(providerInput, 'provider picker input present')
