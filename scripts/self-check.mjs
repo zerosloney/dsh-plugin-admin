@@ -129,6 +129,22 @@ const mockMcpEntries = [{
   },
 }]
 
+const mockCommands = [
+  { name: 'review', description: '按团队规范审查改动', inputHint: '[<file-path>]', prompt: '审查 $ARGUMENTS', images: false, enabled: true, active: true, conflict: null, fileError: undefined },
+  { name: 'draft', description: '草稿命令', inputHint: null, prompt: '草稿', images: false, enabled: false, active: false, conflict: null, fileError: undefined },
+]
+const mockHookPayload = {
+  hooksPath: 'C:/Users/demo/.dsh/hooks.json',
+  bridgePackage: '@deepseek-ai/dsh-hooks-claude-code',
+  bridgeMounted: false,
+  bridgeInstalled: false,
+  bridgeRowPresent: false,
+  hooks: [
+    { id: 'PreToolUse/0/0', event: 'PreToolUse', matcher: 'write|edit', command: 'node guard.js', timeoutSec: 30, enabled: true },
+    { id: 'disabled/0', event: 'Stop', matcher: '', command: 'stop.sh', timeoutSec: null, enabled: false },
+  ],
+}
+
 const injectedSections = []
 const registeredSections = []
 const ctx = {
@@ -178,6 +194,26 @@ const ctx = {
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
         }
+        if (method === 'commandHookAdmin/listCommands') {
+          return { ok: true, value: { commandsDir: 'C:/Users/demo/.dsh/commands', commands: ctx.commandList ?? mockCommands } }
+        }
+        if (method === 'commandHookAdmin/listHooks') {
+          return { ok: true, value: ctx.hookList ?? mockHookPayload }
+        }
+        if (method === 'commandHookAdmin/bridgeInstall') {
+          ctx.bridgeInstalls = ctx.bridgeInstalls ?? []
+          ctx.bridgeInstalls.push(true)
+          return { ok: true, value: {
+            ...mockHookPayload,
+            bridgeInstalled: true,
+            bridgeRowPresent: true,
+          } }
+        }
+        if (method === 'commandHookAdmin/bridgeRemove') {
+          ctx.bridgeRemoves = ctx.bridgeRemoves ?? []
+          ctx.bridgeRemoves.push(true)
+          return { ok: true, value: { ...mockHookPayload } }
+        }
         if (method === 'mcpAdmin/test') {
           ctx.mcpTests = ctx.mcpTests ?? []
           ctx.mcpTests.push(payload.args.id)
@@ -216,19 +252,20 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Four slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, plus the standalone MCP服务器 / 子智能体 / 历史会话 settings sections.
-assert.equal(injectedSections.length, 4, 'four slot contributions injected')
+// Five slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, plus the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话
+// settings sections.
+assert.equal(injectedSections.length, 5, 'five slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×3) and settings.plugins.tab',
+  ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×4) and settings.plugins.tab',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 4, 'four registrations: extensions tab + MCP + subagents + session history')
+assert.equal(registeredSections.length, 5, 'five registrations: extensions tab + MCP + subagents + command hooks + session history')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['session-history'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -247,6 +284,13 @@ assert.equal(subagentSection.options.name, 'settings.section')
 assert.equal(subagentSection.options.order, 26, '子智能体 sits right after MCP服务器 (order 25)')
 assert.equal(subagentSection.options.label, '子智能体', 'subagent section label')
 
+const commandHookSection = byId['command-hook-admin']
+assert.equal(commandHookSection.options.name, 'settings.section')
+assert.equal(commandHookSection.options.order, 27, '命令与钩子 sits right after 子智能体 (order 26)')
+assert.equal(commandHookSection.options.label, '命令与钩子', 'command hooks section label')
+const commandHookFace = commandHookSection.options.inject()
+assert.equal(typeof commandHookFace.call, 'function', 'command hooks inject face carries the RPC call')
+
 const historySection = byId['session-history']
 assert.equal(historySection.options.name, 'settings.section')
 assert.equal(historySection.options.order, 100, '历史会话 sorts last in the settings nav')
@@ -264,6 +308,20 @@ assert.ok(
   document.querySelector('style[data-dsh-sa-styles]'),
   'subagent section css injected',
 )
+assert.ok(
+  document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]'),
+  'command hooks section css injected',
+)
+// The command-hook section must keep the unified visual recipes (segmented
+// tabs, blue primary buttons, notice tints) — a regression here would drift
+// it back to the standalone plugin's private look (underline tabs, dark primary).
+const chCss = document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]').textContent
+assert.ok(chCss.includes('.tab.active'), 'CH tabs use the segmented tab recipe')
+assert.ok(
+  chCss.includes('.btn.primary') && chCss.includes('--dsw-static-blue-500'),
+  'CH buttons use the unified blue primary',
+)
+assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH banners/badges use the unified notice/tag recipes')
 
 // Mount helper: render one registered section into a fresh host div. Text
 // assertions run against document.body, so exactly one panel stays mounted
@@ -876,5 +934,54 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 40))
 assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env value with ; survives the newline-only split')
+
+// 15. Mount the 命令与钩子 section (merged from dsh-command-hook-admin):
+// two tabs over the two stores, plus the bridge install/uninstall affordance.
+await act(async () => { mcpRoot.unmount() })
+const commandHookRoot = await mountSection(commandHookSection)
+
+text = document.body.textContent
+assert.ok(text.includes('提示词命令'), 'commands tab renders')
+assert.ok(text.includes('/review'), 'live command row rendered')
+assert.ok(text.includes('已停用'), 'disabled command badge rendered')
+assert.ok(text.includes('C:/Users/demo/.dsh/commands'), 'commands storage path shown')
+
+// 15b. The 钩子 tab: rows + bridge banner with the install affordance while
+// the stock bridge is neither installed nor mounted.
+await act(async () => {
+  button('钩子').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+text = document.body.textContent
+assert.ok(text.includes('node guard.js'), 'hook command row rendered')
+assert.ok(text.includes('stop.sh'), 'disabled hook row rendered (sidecar)')
+assert.ok(text.includes('当前未安装 hooks 桥'), 'bridge-missing banner rendered')
+const installBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('安装并挂载 hooks 桥'))
+assert.ok(installBtn, 'one-click bridge install button rendered while missing')
+
+await act(async () => {
+  installBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.equal((ctx.bridgeInstalls ?? []).length, 1, 'bridgeInstall RPC fired')
+assert.ok(document.body.textContent.includes('hooks 桥已安装并写入 profile，重启 dsh 后生效'), 'install note rendered (not silently wiped)')
+assert.ok(document.body.textContent.includes('重启 dsh 后挂载生效'), 'banner flipped to the installed-but-not-mounted state')
+const uninstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('卸载桥'))
+assert.ok(uninstallBtn, 'uninstall affordance rendered once installed')
+
+// 15c. Uninstall is a two-click confirm.
+await act(async () => {
+  uninstallBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.equal((ctx.bridgeRemoves ?? []).length, 0, 'first click only arms the confirm')
+const confirmRemove = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认卸载'))
+assert.ok(confirmRemove, 'confirm button rendered after the first click')
+await act(async () => {
+  confirmRemove.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.equal((ctx.bridgeRemoves ?? []).length, 1, 'second click fires bridgeRemove')
+assert.ok(document.body.textContent.includes('hooks 桥已卸载'), 'remove note rendered')
 
 console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip')

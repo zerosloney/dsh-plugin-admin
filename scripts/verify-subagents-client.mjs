@@ -74,7 +74,7 @@ await check('exports apply + inject ["slots", "connection"]', () => {
   assert.equal(typeof exports.apply, 'function')
 })
 
-/* 3 ── apply(): styles + the subagent-admin settings section among the four
+/* 3 ── apply(): styles + the subagent-admin settings section among the five
  *    unified slot contributions (connection wired to the mock host below). */
 const slotRegistrations = []
 const injectedSlots = []
@@ -94,8 +94,8 @@ await check('apply() injects styles and registers the 子智能体 settings sect
   assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the plugins tab + three settings sections',
+    ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+    'unified apply injects the plugins tab + four settings sections',
   )
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')

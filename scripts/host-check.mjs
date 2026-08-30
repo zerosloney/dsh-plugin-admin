@@ -17,6 +17,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
+
+// Every apply() call in this script mounts a command-hook fs.watch; collect
+// each mount's effect disposers so the final cleanup can release them all —
+// a live watcher on a since-deleted temp dir wedges the drain on Windows.
+const globalEffectDisposers = []
+
 const { apply, localSpecPath, assertPnpmOperand } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk.
@@ -36,6 +42,12 @@ const workspaceA = workspaceOf('A', [TARGET, 'session-other-a'])
 const workspaceB = workspaceOf('B', ['session-other-b'])
 
 let nextState = null
+// Isolate the command-hook store: applyCommandHookAdmin reads $DSH_HOME at
+// mount (and creates + watches the commands dir), so point it at a temp home
+// instead of the developer's real ~/.dsh.
+const chaHome = join(here, '../.host-check-tmp/dsh-home')
+mkdirSync(join(chaHome, 'commands'), { recursive: true })
+process.env.DSH_HOME = chaHome
 // Typert registry emulation: the real registry (harness packages/typert/
 // registry service.ts) allows ONE registration per package name and rejects
 // duplicate invocation ids / endpoints — rules the permissive stub below used
@@ -61,8 +73,19 @@ const typertRegister = (descriptor) => {
 const fakeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { fakeCtx.provided ??= {}; fakeCtx.provided[key] = service },
-  effect: (fn) => fn(),
+  // Collect (not run) the disposers so the final cleanup can release the
+  // command-hook fs.watch — a live watcher on a deleted temp dir wedges the
+  // drain on Windows.
+  effect: (fn) => {
+    const dispose = fn()
+    if (typeof dispose === 'function') globalEffectDisposers.push(dispose)
+  },
   get: (name) => (name === 'sessions' ? undefined : undefined),
+  commands: {
+    // The merged command-hook admin live-registers file-backed slash
+    // commands; the host-check only needs the mount to be observable.
+    register: (definition) => () => {},
+  },
   typert: { register: typertRegister },
   workspaceRegistry: {
     list: () => [workspaceA, workspaceB],
@@ -84,16 +107,24 @@ assert.ok(fakeCtx.provided?.pluginAdmin, 'pluginAdmin service provided')
 assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
-// One unified descriptor per package: all five namespaces ride a single
+assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
+// One unified descriptor per package: all six namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['fsAdmin', 'mcpAdmin', 'pluginAdmin', 'sessionAdmin', 'subagentAdmin'],
-  'unified descriptor carries all five namespaces',
+  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'sessionAdmin', 'subagentAdmin'],
+  'unified descriptor carries all six namespaces',
 )
+// The merged command-hook invocations must all be present (commands + hooks
+// + the solidified bridge lifecycle).
+const chaIds = typertRegistrations[0].invocations.map((i) => i.id)
+for (const tail of ['commands/listCommands', 'commands/saveCommand', 'commands/deleteCommand', 'hooks/listHooks', 'hooks/saveHook', 'hooks/deleteHook', 'hooks/setHookEnabled', 'hooks/bridgeInstall', 'hooks/bridgeRemove']) {
+  assert.ok(chaIds.includes(`dsh-plugin-admin/${tail}`), `unified descriptor carries ${tail}`)
+}
+
 
 // fsAdmin.reveal validates its input without spawning anything.
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(''), /requires a path string/, 'reveal rejects empty path')
@@ -122,7 +153,7 @@ const listCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? undefined : undefined),
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -209,7 +240,7 @@ const sharedCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -244,7 +275,7 @@ const archiveCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -276,7 +307,7 @@ const brokenCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -305,7 +336,7 @@ const cacheCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -350,7 +381,7 @@ const summaryFailureCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -385,7 +416,7 @@ const becomingLiveCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => name === 'sessions' ? { get: (id) => liveAfterList.get(id) } : undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -424,7 +455,7 @@ const mcpCtx = {
   baseUrl: pathToFileURL(mcpProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -516,7 +547,7 @@ const placeholderCtx = {
   baseUrl: pathToFileURL(placeholderProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -724,7 +755,7 @@ const closeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? { get: (id) => liveSessions.get(id) } : name === 'agents' ? fakeAgents : undefined),
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -760,7 +791,7 @@ const noHandleCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? { get: (id) => liveNoHandle.get(id) } : name === 'agents' ? fakeAgents : undefined),
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -793,7 +824,7 @@ const closeNonLiveCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -883,7 +914,7 @@ const updateCtx = {
   baseUrl: pathToFileURL(updateProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => fn(),
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -969,10 +1000,16 @@ rmSync(npmrcProfile, { recursive: true, force: true })
 const defaultRegistry = resolveRegistry(join(here, '..'))
 assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('https://'), 'registry resolution returns a usable URL: ' + defaultRegistry)
 
+// Release every mounted command-hook fs.watch before removing the temp
+// home, and restore the developer's real DSH_HOME.
+for (const dispose of globalEffectDisposers) {
+  try { dispose() } catch { /* teardown is idempotent per contract */ }
+}
+delete process.env.DSH_HOME
 rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 
 // The packaged manifest must still round-trip (apply() read it for pluginAdmin).
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution')
+console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided')
