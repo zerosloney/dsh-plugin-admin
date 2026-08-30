@@ -19,6 +19,7 @@ import {
   missingPackagesFor,
   parseCliBackends,
   parseManagedEntries,
+  probePathCommand,
   removeCliFromLines,
   removeFromLines,
   serializeEntryLines,
@@ -557,6 +558,21 @@ await check('apply(): generic cliUpsert/cliRemove persist cli.json and register 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+/* 15 ── real PATH probe semantics: an installed CLI is never mistaken for an
+ * absent one, whatever its `--version` behavior; only fs-verified misses
+ * report ok:false. */
+await check('probePathCommand: presence/version separation on bare names and absolute paths', async () => {
+  const absentName = await probePathCommand('dsh-plugin-admin-probe-missing-cli')
+  assert.deepEqual(absentName, { ok: false, version: null }, 'absent bare name misses')
+  const node = await probePathCommand('node')
+  assert.equal(node.ok, true, 'node is on PATH (this script runs under it)')
+  assert.ok(node.version === null || typeof node.version === 'string', 'version stays best-effort')
+  const absolute = await probePathCommand(process.execPath)
+  assert.equal(absolute.ok, true, 'absolute executable path resolves via the path branch')
+  const absentAbsolute = await probePathCommand(join(tmpdir(), 'dsh-plugin-admin-probe-missing', 'no-such-cli.exe'))
+  assert.deepEqual(absentAbsolute, { ok: false, version: null }, 'absent absolute path misses')
 })
 
 console.log(results.join('\n'))
