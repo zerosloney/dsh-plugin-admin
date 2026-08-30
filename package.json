@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "type": "module",
   "description": "dsh web UI admin plugin: extension-plugin marketplace tab, MCP server & session-history settings pages, and subagent management (named delegation-tool instances with persona/tool-filter/model config, plus external CLI backend mounting) — all persisted as profile cordis.patch.yml rows that Cordis HMR hot-reloads",
   "main": "lib/index.js",
