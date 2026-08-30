@@ -731,6 +731,13 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
 assert.ok(document.body.textContent.includes('添加 MCP 服务器'), 'add server form opens')
+// The editor card must carry the mcp-editor scroll-viewport class — the CSS
+// gives it max-height + overflow-y:auto + sticky action row so a tall form
+// scrolls inside the bounded settings dialog instead of clipping 保存.
+// Regression guard: this class once existed only as a React key (dead CSS).
+const editorCard = host.querySelector('.card.mcp-editor')
+assert.ok(editorCard !== null, 'MCP editor card carries the mcp-editor scroll-viewport class')
+assert.ok(editorCard.querySelector('.card-actions') !== null, 'MCP editor action row lives inside the scroll viewport')
 // The empty-state hint must be hidden while the add form is open — otherwise it
 // crowds the form and (under the section's bounded/overflow-hidden height) can
 // push the 保存 button out of reach. Regression guard for the empty-state fix.
