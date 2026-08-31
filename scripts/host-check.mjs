@@ -81,6 +81,10 @@ const fakeCtx = {
     if (typeof dispose === 'function') globalEffectDisposers.push(dispose)
   },
   get: (name) => (name === 'sessions' ? undefined : undefined),
+  // project-agents listens on agent lifecycle events; the host-check only
+  // needs the registration to be observable, the listeners never fire.
+  on: (name, fn) => () => {},
+  logger: { info: () => {}, warn: () => {} },
   commands: {
     // The merged command-hook admin live-registers file-backed slash
     // commands; the host-check only needs the mount to be observable.
@@ -108,15 +112,15 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all six namespaces ride a single
+// One unified descriptor per package: all seven namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'sessionAdmin', 'subagentAdmin'],
-  'unified descriptor carries all six namespaces',
+  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin'],
+  'unified descriptor carries all seven namespaces',
 )
 // The merged command-hook invocations must all be present (commands + hooks
 // + the solidified bridge lifecycle).
@@ -155,6 +159,7 @@ const listCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? undefined : undefined),
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => workspaces,
@@ -242,6 +247,7 @@ const sharedCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -277,6 +283,7 @@ const archiveCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -309,6 +316,7 @@ const brokenCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -338,6 +346,7 @@ const cacheCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -383,6 +392,7 @@ const summaryFailureCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [], archivedSessionIds: [],
@@ -418,6 +428,7 @@ const becomingLiveCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => name === 'sessions' ? { get: (id) => liveAfterList.get(id) } : undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [], archivedSessionIds: [],
@@ -449,7 +460,7 @@ rmSync(becomingLiveDir, { recursive: true, force: true })
  */
 const mcpProfile = join(here, '../.host-check-tmp/mcp-profile')
 mkdirSync(mcpProfile, { recursive: true })
-writeFileSync(join(mcpProfile, 'package.json'), JSON.stringify({ name: 'mcp-test-profile' }))
+writeFileSync(join(mcpProfile, 'package.json'), JSON.stringify({ name: 'mcp-test-profile', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.1.1-rc.2' } }))
 writeFileSync(join(mcpProfile, 'cordis.patch.yml'), '[]\n')
 const mcpCtx = {
   baseUrl: pathToFileURL(mcpProfile).href,
@@ -457,6 +468,7 @@ const mcpCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -530,6 +542,54 @@ const patchText = readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8')
 assert.ok(patchText.includes('mcp-github'), 'patch file retains the entry id')
 assert.ok(patchText.includes('github2'), 'patch file carries the updated serverName')
 assert.ok(patchText.includes('@deepseek-ai/dsh-mcp-client'), 'patch file names the MCP client plugin')
+// Every authored row must ride the loader-compliant `- insert:` wrapper —
+// a bare `- id:` row is an id-targeted override the loader DROPS when no
+// base entry carries that id (the shipped bug: MCP/bridge rows never
+// composed, and the panel kept asking for a restart that could not help).
+assert.ok(!/^- id: mcp-/m.test(patchText), 'no bare legacy MCP rows authored')
+assert.ok((patchText.match(/^- insert:/gm) ?? []).length >= 2, 'entries wrapped in insert blocks')
+
+// A legacy bare row (authored by panel versions before the insert fix) is
+// still listed, flagged legacy, and upgraded to the insert shape on save.
+const legacyProfile = join(here, '../.host-check-tmp/mcp-legacy')
+mkdirSync(legacyProfile, { recursive: true })
+writeFileSync(join(legacyProfile, 'package.json'), JSON.stringify({ name: 'mcp-legacy-profile', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.1.1-rc.2' } }))
+writeFileSync(join(legacyProfile, 'cordis.patch.yml'), `- id: mcp-old
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    transport: stdio
+    serverName: fetcher
+    command: npx
+`)
+const legacyCtx = {
+  baseUrl: pathToFileURL(legacyProfile).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: () => undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+}
+apply(legacyCtx)
+const legacySvc = legacyCtx.provided.mcpAdmin
+const legacyList = (await legacySvc.list()).entries
+assert.equal(legacyList.length, 1, 'legacy bare row still listed')
+assert.equal(legacyList[0].legacy, true, 'legacy row flagged')
+assert.equal(legacyList[0].config.command, 'npx', 'legacy config parsed')
+await legacySvc.upsert({ id: 'mcp-old', config: { transport: 'stdio', serverName: 'fetcher', command: 'npx', args: ['-y', 'fetcher-mcp'] } })
+const legacyPatch = readFileSync(join(legacyProfile, 'cordis.patch.yml'), 'utf8')
+assert.ok(!/^- id: mcp-old/m.test(legacyPatch), 'bare legacy row upgraded away')
+assert.ok(legacyPatch.includes('- insert:'), 'upgraded to insert wrapper')
+const upgraded = (await legacySvc.list()).entries
+assert.equal(upgraded[0].legacy, false, 'upgraded row no longer flagged')
+assert.deepEqual(upgraded[0].config.args, ['-y', 'fetcher-mcp'], 'upgraded config round-trips')
 
 /* --- upsert must REPLACE the '[]' placeholder, not append below it ---
  * A fresh profile's cordis.patch.yml is '[]' — a complete YAML document. If
@@ -539,7 +599,7 @@ assert.ok(patchText.includes('@deepseek-ai/dsh-mcp-client'), 'patch file names t
  */
 const placeholderProfile = join(here, '../.host-check-tmp/mcp-placeholder-profile')
 mkdirSync(placeholderProfile, { recursive: true })
-writeFileSync(join(placeholderProfile, 'package.json'), JSON.stringify({ name: 'placeholder-test' }))
+writeFileSync(join(placeholderProfile, 'package.json'), JSON.stringify({ name: 'placeholder-test', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.1.1-rc.2' } }))
 // Mirror the real file: a header comment block + the '[]' placeholder.
 writeFileSync(join(placeholderProfile, 'cordis.patch.yml'),
   '# Your patch layer for this dsh profile\n# applied after every bundle layer\n[]\n')
@@ -549,6 +609,7 @@ const placeholderCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -757,6 +818,7 @@ const closeCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? { get: (id) => liveSessions.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [{ id: 'w-close', sessionIds: ['session-online'], detachSession: async (id) => { closeDetachCalls.push(id) } }],
@@ -793,6 +855,7 @@ const noHandleCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: (name) => (name === 'sessions' ? { get: (id) => liveNoHandle.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -826,6 +889,7 @@ const closeNonLiveCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -916,6 +980,7 @@ const updateCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   get: () => undefined,
+  on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     requireState: () => ({ archivedSessionIds: [] }),

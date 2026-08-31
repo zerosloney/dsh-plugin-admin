@@ -22,7 +22,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyCommandHookAdmin, BRIDGE_PACKAGE } from '../lib/command-hook-admin.js'
+import { applyCommandHookAdmin, BRIDGE_PACKAGE, ensureProfileDependency, harnessLockstepVersion, profileDependencyInstalled } from '../lib/command-hook-admin.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -47,7 +47,7 @@ function makeStubCtx(profileDir) {
   const provided = new Map()
   const effects = []
   const registered = []
-  const loaderEntries = []
+  const registryRuntimes = []
   const ctx = {
     baseUrl: profileDir,
     commands: {
@@ -57,16 +57,18 @@ function makeStubCtx(profileDir) {
         return () => { entry.__disposed = true }
       },
     },
+    // The plugin registry is how the bridge detection enumerates live
+    // plugins (runtime.name carries each plugin's declared name).
+    registry: {
+      entries: () => registryRuntimes.map(({ name, fibers }) => [{ name }, { name, fibers }]),
+    },
     get(key) {
-      if (key === 'loader') {
-        return { entries: () => loaderEntries }
-      }
       return provided.get(key)
     },
     provide(key, service) { provided.set(key, service) },
     effect(fn, label) { effects.push({ fn, label }) },
   }
-  const stub = { ctx, provided, effects, registered, loaderEntries }
+  const stub = { ctx, provided, effects, registered, registryRuntimes }
   allStubs.push(stub)
   return stub
 }
@@ -265,19 +267,105 @@ try {
     await assert.rejects(() => service.deleteHook('PreToolUse/99/0'), /钩子不存在/)
   })
 
-  await check('hooks: bridge hot-restart through Fiber.update', async () => {
+  await check('hooks: bridge detection rides the registry; hot-restart through Fiber.update', async () => {
     const fiberUpdates = []
-    mounted.loaderEntries.push({
-      options: { name: '@deepseek-ai/dsh-hooks-claude-code', config: { configPath: hooksPath } },
-      fiber: { update: async (config, noSave) => fiberUpdates.push([config, noSave]) },
+    // Installed + patch row present but not composed in this process → the
+    // panel must NOT claim the bridge is mounted (the reported bug: it did).
+    assert.equal((await service.listHooks()).bridgeMounted, false)
+    mounted.registryRuntimes.push({
+      name: 'hooks-claude-code',
+      fibers: [{
+        update: async (config, noSave) => fiberUpdates.push([config, noSave]),
+        entry: { options: { config: { configPath: hooksPath } } },
+      }],
     })
+    assert.equal((await service.listHooks()).bridgeMounted, true, 'registry runtime name flips the mounted flag')
     await service.saveHook({ event: 'Stop', matcher: '', command: 'stop.sh' })
     assert.equal(fiberUpdates.length, 1, 'bridge restarted after save')
     assert.deepEqual(fiberUpdates[0], [{ configPath: hooksPath }, true], 'entry config passed with noSave=true')
-    mounted.loaderEntries.length = 0
+    mounted.registryRuntimes.length = 0
+    assert.equal((await service.listHooks()).bridgeMounted, false, 'teardown of the bridge runtime unmounts the flag')
   })
 
   /* 4 ── bridge package lifecycle */
+  await check('ensureProfileDependency: present path skips pnpm, missing path installs', async () => {
+    const calls = []
+    const reconciles = []
+    const runner = makeStubPnpm(profileDir, calls)
+    const manifestPath = join(profileDir, 'package.json')
+    const writeManifest = (dependencies) => {
+      writeFileSync(manifestPath, JSON.stringify({ name: 'cha-fixture', dependencies }, null, 2) + '\n', 'utf8')
+    }
+    writeManifest({ [BRIDGE_PACKAGE]: '^1.0.0' })
+    let dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1))
+    assert.equal(dep.state, 'present')
+    assert.deepEqual(calls, [], 'no pnpm on the present path')
+    assert.deepEqual(reconciles, [])
+    writeManifest({})
+    assert.equal(profileDependencyInstalled(profileDir, BRIDGE_PACKAGE), false)
+    dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1))
+    assert.equal(dep.state, 'installed')
+    assert.deepEqual(calls, [[profileDir, 'add', BRIDGE_PACKAGE]], 'missing dep pnpm-added')
+    assert.equal(reconciles.length, 1, 'bundle list reconciled after install')
+    assert.equal(dep.output, `stub-pnpm add ${BRIDGE_PACKAGE}`, 'pnpm output tail returned')
+    assert.equal(profileDependencyInstalled(profileDir, BRIDGE_PACKAGE), true, 'manifest now carries the dep')
+    // Lockstep pinning: an exact @deepseek-ai/dsh-* dependency in the
+    // manifest pins the add; range/link specs and foreign scopes do not.
+    writeManifest({ '@deepseek-ai/dsh-base': '0.1.1-rc.2', 'dsh-plugin-admin': 'link:E:/x' })
+    assert.equal(harnessLockstepVersion(profileDir), '0.1.1-rc.2')
+    writeManifest({})
+    dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1), '0.1.1-rc.2')
+    assert.deepEqual(calls.at(-1), [profileDir, 'add', `${BRIDGE_PACKAGE}@0.1.1-rc.2`], 'version pinned onto the add spec')
+    assert.equal(harnessLockstepVersion(profileDir), undefined, 'no exact dsh dep → no pin (range/link ignored)')
+    // pnpm v11's ignored-builds warning exits non-zero after a SUCCESSFUL
+    // add: tolerated only when the manifest actually gained the dependency.
+    writeManifest({})
+    const tolerantRunner = async (dir, args) => {
+      calls.push([dir, ...args])
+      const pkg = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      pkg.dependencies = { ...(pkg.dependencies ?? {}), [args[1]]: '^1.0.0' }
+      writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8')
+      throw new Error(`pnpm ${args.join(' ')} exited with code 1:\n[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: koffi`)
+    }
+    dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, tolerantRunner)
+    assert.equal(dep.state, 'installed', 'ignored-builds failure tolerated when the dep landed')
+    writeManifest({})
+    const failingRunner = async (dir, args) => {
+      calls.push([dir, ...args])
+      throw new Error(`pnpm ${args.join(' ')} exited with code 1:\n[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: koffi`)
+    }
+    await assert.rejects(() => ensureProfileDependency(profileDir, BRIDGE_PACKAGE, failingRunner), /IGNORED_BUILDS/,
+      'tolerated-looking failure without the dep still throws')
+    // Peer completion: dsh profiles pin autoInstallPeers:false, so the
+    // package's @deepseek-ai/dsh-* peers must become direct deps too —
+    // pinned in lockstep with the installed main package; cordis is skipped
+    // (provided by the harness runtime); present-path healing included.
+    const fakePkgDir = join(profileDir, 'node_modules', BRIDGE_PACKAGE)
+    mkdirSync(fakePkgDir, { recursive: true })
+    writeFileSync(join(fakePkgDir, 'package.json'), JSON.stringify({
+      name: BRIDGE_PACKAGE,
+      version: '0.1.1-rc.2',
+      peerDependencies: {
+        '@deepseek-ai/dsh-hook-protocol': '^0.1.1-rc.2',
+        '@deepseek-ai/cordis': '^4.0.1',
+      },
+    }), 'utf8')
+    writeManifest({ [BRIDGE_PACKAGE]: '^1.0.0' })
+    dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1))
+    assert.equal(dep.state, 'installed', 'main present but a dsh peer missing → heal installs')
+    assert.deepEqual(calls.at(-1), [profileDir, 'add', '@deepseek-ai/dsh-hook-protocol@0.1.1-rc.2'],
+      'missing dsh peer added at the installed version; cordis skipped')
+    writeManifest({ [BRIDGE_PACKAGE]: '^1.0.0', '@deepseek-ai/dsh-hook-protocol': '0.1.1-rc.2' })
+    const callsBeforePeers = calls.length
+    dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1))
+    assert.equal(dep.state, 'present', 'main + peers present → nothing installed')
+    assert.equal(calls.length, callsBeforePeers, 'no pnpm when the peer set is complete')
+    rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
+    // Leave the dep ABSENT so the bridge-install test below still exercises
+    // its install path (it expects one pnpm add).
+    writeManifest({})
+  })
+
   await check('bridge: install pnpm-adds and authors the mount row', async () => {
     const pnpmCalls = []
     const reconciles = []
@@ -300,7 +388,8 @@ try {
     assert.ok(!patch.includes('[]'), 'empty-list placeholder replaced')
     assert.ok(patch.includes("name: '@deepseek-ai/dsh-hooks-claude-code'"), 'bridge row present')
     assert.ok(patch.includes(JSON.stringify(hooksPath)), 'configPath points at this panel hooks.json')
-    assert.ok(patch.includes('- id: hooks-claude-code'), 'stable row id')
+    assert.ok(patch.includes('- insert:'), 'loader-compliant insert wrapper')
+    assert.ok(patch.includes('    - id: hooks-claude-code'), 'stable row id nested under the wrapper')
     // Placeholder replacement must keep the pre-existing MCP row intact.
     assert.ok(patch.includes('# header comment'), 'header comment preserved')
   })
@@ -337,7 +426,45 @@ try {
     assert.ok(patch.includes('hooks-claude-code'), 'bridge row appended after it')
   })
 
+  await check('bridge: legacy bare row is upgraded, and only counts when insert-shaped', async () => {
+    // The reported production bug: a bare `- id:` bridge row is an id-targeted
+    // override the loader DROPS (no base entry carries that id), so the bridge
+    // never composed and the banner kept asking for a restart.
+    writeFileSync(patchPath, `- id: hooks-claude-code
+  name: '@deepseek-ai/dsh-hooks-claude-code'
+  config:
+    configPath: "${hooksPath.replaceAll('\\', '\\\\')}"
+`, 'utf8')
+    let stub = makeStubCtx(profileDir)
+    let svc = stub.provided.get === undefined ? undefined : (applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) }), stub.provided.get('commandHookAdmin'))
+    assert.equal((await svc.listHooks()).bridgeRowPresent, false, 'bare legacy row is NOT present for the banner')
+    const result = await svc.bridgeInstall()
+    assert.equal(result.row, 'upgraded', 'legacy bare row upgraded in place')
+    assert.equal(result.bridgeRowPresent, true)
+    const patch = readFileSync(patchPath, 'utf8')
+    assert.ok(patch.includes('- insert:'), 'compliant wrapper authored')
+    assert.equal(patch.split("name: '@deepseek-ai/dsh-hooks-claude-code'").length - 1, 1, 'exactly one bridge row after upgrade')
+    assert.ok(!/^- id: hooks-claude-code/m.test(patch), 'legacy bare row gone')
+    // A second install over the compliant row is a no-op.
+    stub = makeStubCtx(profileDir)
+    svc = (applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) }), stub.provided.get('commandHookAdmin'))
+    assert.equal((await svc.bridgeInstall()).row, 'present')
+  })
+
   await check('bridge: remove drops the row and the dependency', async () => {
+    // Self-contained precondition (earlier tests rewrite the patch file).
+    writeFileSync(patchPath, `- insert:
+    - id: hooks-claude-code
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: "${hooksPath.replaceAll('\\', '\\\\')}"
+- id: "mcp-existing"
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    transport: stdio
+    serverName: fetcher
+    command: npx
+`, 'utf8')
     const pnpmCalls = []
     const stub = makeStubCtx(profileDir)
     applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, pnpmCalls) })
