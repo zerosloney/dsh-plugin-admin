@@ -6,6 +6,7 @@ pnpm-debug.log*
 *.tgz
 
 # dsh / profile runtime artifacts
+.host-check-tmp/
 out.txt
 .probe/
 

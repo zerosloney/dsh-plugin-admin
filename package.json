@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "0.8.1",
+  "version": "0.8.3",
   "type": "module",
-  "description": "dsh web UI admin plugin: extension-plugin marketplace tab, MCP server & session-history settings pages, subagent management (named delegation-tool instances with persona/tool-filter/model config, plus external CLI backend mounting), slash-command & Claude-Code-format hook administration (file-backed live commands, hooks.json + disable sidecar, stock hooks-bridge install/uninstall), and project-level .agents recognition (per-project markdown commands scoped per session, per-session project hooks bridge, read-only .agents inspector) — all persisted as profile cordis.patch.yml rows or dsh-home JSON that Cordis HMR / live registration hot-applies",
+  "description": "dsh web UI admin plugin: extension-plugin marketplace tab, MCP server & session-history settings pages, subagent management (named delegation-tool instances with persona/tool-filter/model config, plus external CLI backend mounting), slash-command & Claude-Code-format hook administration (file-backed live commands, hooks.json + disable sidecar, stock hooks-bridge install/uninstall), and project-level .agents recognition (per-project markdown commands scoped per session, per-session project hooks bridge, read-only .agents inspector), a live expanded todo-list dock above the composer (todos projection strip with strikethrough/spinner glyphs, step + file-change footer) — all persisted as profile cordis.patch.yml rows or dsh-home JSON that Cordis HMR / live registration hot-applies",
   "main": "lib/index.js",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,7 @@
     "cordis"
   ],
   "scripts": {
-    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs && node scripts/verify-subagents-host.mjs && node scripts/verify-subagents-client.mjs && node scripts/verify-command-hooks.mjs && node scripts/verify-project-commands.mjs && node scripts/verify-project-hooks.mjs"
+    "test": "node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs && node scripts/verify-subagents-host.mjs && node scripts/verify-subagents-client.mjs && node scripts/verify-command-hooks.mjs && node scripts/verify-project-commands.mjs && node scripts/verify-project-hooks.mjs && node scripts/verify-todo-panel.mjs"
   },
   "exports": {
     ".": "./lib/index.js",

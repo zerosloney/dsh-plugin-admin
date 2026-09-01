@@ -252,20 +252,20 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Five slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, plus the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话
-// settings sections.
-assert.equal(injectedSections.length, 5, 'five slot contributions injected')
+// Six slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话
+// settings sections, and the 待办清单 dock above the composer.
+assert.equal(injectedSections.length, 6, 'six slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×4) and settings.plugins.tab',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×4), settings.plugins.tab, and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 5, 'five registrations: extensions tab + MCP + subagents + command hooks + session history')
+assert.equal(registeredSections.length, 6, 'six registrations: extensions tab + MCP + subagents + command hooks + session history + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -299,6 +299,11 @@ const historyFace = historySection.options.inject()
 assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
 assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
 
+const todoDock = byId['todo-admin']
+assert.equal(todoDock.options.name, 'conversation.input.dock', 'todo dock mounts above the composer')
+assert.equal(todoDock.options.order, 5, 'todo dock sorts just after the shell todo strip (order 0)')
+assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock inject face carries the RPC call')
+
 // 4. Style injection: the section stylesheets land in <head>.
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]'),
@@ -311,6 +316,10 @@ assert.ok(
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]'),
   'command hooks section css injected',
+)
+assert.ok(
+  document.querySelector('style[data-plugin-css="dsh-plugin-admin/todo-dock.css"]'),
+  'todo dock css injected',
 )
 // The command-hook section must keep the unified visual recipes (segmented
 // tabs, blue primary buttons, notice tints) — a regression here would drift
