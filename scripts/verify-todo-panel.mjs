@@ -24,7 +24,6 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { readFileSync as _rf } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -329,6 +328,9 @@ await checkAsync('renders the list, per-file git rows, and the footer totals', a
   assert.equal(fileRows[1].dataset.st, 'A')
   assert.equal(fileRows[2].dataset.st, 'D')
   assert.ok(fileRows[0].textContent.includes('lib/client.js'), 'file path rendered')
+  assert.equal(fileRows[0].querySelector('.dir')?.textContent, 'lib/', 'directory prefix rendered as its own dim span')
+  assert.equal(fileRows[0].querySelector('.name')?.textContent, 'client.js', 'filename rendered as its own span')
+  assert.equal(fileRows[2].querySelector('.dir'), null, 'top-level file has no dir prefix span')
   assert.ok(fileRows[0].textContent.includes('+10') && fileRows[0].textContent.includes('-3'), 'per-file +/- rendered')
 
   const footer = document.querySelector('.todo-footer')
