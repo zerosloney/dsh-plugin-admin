@@ -72,6 +72,7 @@ const typertRegister = (descriptor) => {
 }
 const fakeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   provide: (key, service) => { fakeCtx.provided ??= {}; fakeCtx.provided[key] = service },
   // Collect (not run) the disposers so the final cleanup can release the
   // command-hook fs.watch — a live watcher on a deleted temp dir wedges the
@@ -84,7 +85,7 @@ const fakeCtx = {
   // project-agents listens on agent lifecycle events; the host-check only
   // needs the registration to be observable, the listeners never fire.
   on: (name, fn) => () => {},
-  logger: { info: () => {}, warn: () => {} },
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   commands: {
     // The merged command-hook admin live-registers file-backed slash
     // commands; the host-check only needs the mount to be observable.
@@ -119,8 +120,8 @@ assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin'],
-  'unified descriptor carries all seven namespaces',
+  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin', 'webhookAdmin'],
+  'unified descriptor carries all nine namespaces',
 )
 // The merged command-hook invocations must all be present (commands + hooks
 // + the solidified bridge lifecycle).
@@ -154,6 +155,7 @@ const workspaces = [
 const orphanId = 'session-orphan'
 detachCalls.length = 0
 const listCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -242,6 +244,7 @@ const sharedRoot = join(here, '../.host-check-tmp/co-tenant')
 mkdirSync(join(sharedRoot, 'inside'), { recursive: true })
 writeFileSync(join(sharedRoot, 'inside', 'session-shared.jsonl.zstd'), '{}\n')
 const sharedCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -278,6 +281,7 @@ assert.ok(existsSync(join(sharedRoot, 'inside')), 'shared directory untouched af
  * entries that can never be listed or cleared from the UI.
  */
 const archiveCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -311,6 +315,7 @@ await assert.rejects(
  * fail the plugin mount loudly, not break archive state on first use.
  */
 const brokenCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -341,6 +346,7 @@ assert.throws(() => apply(brokenCtx), /missing archived-set write path members \
  */
 let inspectCalls = 0
 const cacheCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -387,6 +393,7 @@ assert.equal(inspectCalls, 2, 'deleteSession evicts the cached summary (next lis
  */
 let failedInspectCalls = 0
 const summaryFailureCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -423,6 +430,7 @@ mkdirSync(becomingLiveDir, { recursive: true })
 writeFileSync(join(becomingLiveDir, 'session.jsonl.zstd'), '{}\n')
 const liveAfterList = new Map()
 const becomingLiveCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -463,6 +471,7 @@ mkdirSync(mcpProfile, { recursive: true })
 writeFileSync(join(mcpProfile, 'package.json'), JSON.stringify({ name: 'mcp-test-profile', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.1.1-rc.2' } }))
 writeFileSync(join(mcpProfile, 'cordis.patch.yml'), '[]\n')
 const mcpCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(mcpProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -549,6 +558,45 @@ assert.ok(patchText.includes('@deepseek-ai/dsh-mcp-client'), 'patch file names t
 assert.ok(!/^- id: mcp-/m.test(patchText), 'no bare legacy MCP rows authored')
 assert.ok((patchText.match(/^- insert:/gm) ?? []).length >= 2, 'entries wrapped in insert blocks')
 
+/* ------------------- mcpAdmin.callTool (playground invoke) ----------------
+ * The panel's ▶ 执行工具 rides mcpAdmin/callTool. When the service method was
+ * missing the typert gateway rejected the gesture with "active Service
+ * 'mcpAdmin' has no callable method 'callTool'". Exercise it end-to-end
+ * against a local stdio MCP echo server.
+ */
+await assert.rejects(() => mcp.callTool('', 't'), /requires an entry id/, 'callTool without id rejected')
+await assert.rejects(() => mcp.callTool('mcp-github', ''), /requires a tool name/, 'callTool without tool rejected')
+await assert.rejects(() => mcp.callTool('mcp-nope', 't'), /not found/, 'callTool unknown entry rejected')
+await assert.rejects(() => mcp.callTool('mcp-github', 't', ['bad']), /must be a JSON object/, 'callTool non-object args rejected')
+const echoServerPath = join(here, '../.host-check-tmp/mcp-echo-server.mjs')
+writeFileSync(echoServerPath, `// Minimal newline-delimited JSON-RPC MCP stdio server for the callTool check.
+import { createInterface } from 'node:readline'
+const write = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+createInterface({ input: process.stdin }).on('line', (line) => {
+  if (line.trim() === '') return
+  let msg
+  try { msg = JSON.parse(line) } catch { return }
+  if (msg.id === undefined) return // notification (e.g. notifications/initialized)
+  if (msg.method === 'initialize') {
+    write({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-11-25', capabilities: {}, serverInfo: { name: 'echo', version: '0.0.1' } } })
+  } else if (msg.method === 'tools/list') {
+    write({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'echo', description: 'echo back the arguments', inputSchema: { type: 'object' } }] } })
+  } else if (msg.method === 'tools/call') {
+    write({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'echo:' + JSON.stringify(msg.params?.arguments ?? {}) }] } })
+  } else {
+    write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'method not found: ' + msg.method } })
+  }
+})
+`)
+await mcp.upsert({ id: 'mcp-echo', config: { transport: 'stdio', serverName: 'echo', command: process.execPath, args: [echoServerPath] } })
+const echoCall = await mcp.callTool('mcp-echo', 'echo', { msg: 'ping' })
+assert.equal(echoCall.ok, true, 'echo tools/call succeeds: ' + (echoCall.ok ? '' : String(echoCall.error)))
+assert.equal(echoCall.value.isError, false, 'echo result is not flagged as an error')
+assert.equal(echoCall.value.text, 'echo:{"msg":"ping"}', 'echo result carries the call arguments')
+const unknownToolCall = await mcp.callTool('mcp-echo', 'nope', {})
+assert.equal(unknownToolCall.ok, false, 'unknown tool surfaces as ok:false')
+assert.match(unknownToolCall.error, /not offered/, 'unknown tool error names the offering')
+
 // A legacy bare row (authored by panel versions before the insert fix) is
 // still listed, flagged legacy, and upgraded to the insert shape on save.
 const legacyProfile = join(here, '../.host-check-tmp/mcp-legacy')
@@ -562,6 +610,7 @@ writeFileSync(join(legacyProfile, 'cordis.patch.yml'), `- id: mcp-old
     command: npx
 `)
 const legacyCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(legacyProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -604,6 +653,7 @@ writeFileSync(join(placeholderProfile, 'package.json'), JSON.stringify({ name: '
 writeFileSync(join(placeholderProfile, 'cordis.patch.yml'),
   '# Your patch layer for this dsh profile\n# applied after every bundle layer\n[]\n')
 const placeholderCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(placeholderProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -813,6 +863,7 @@ const fakeAgents = {
 }
 let closeDetachCalls = []
 const closeCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -850,6 +901,7 @@ mkdirSync(noHandleDir, { recursive: true })
 writeFileSync(join(noHandleDir, 'session.jsonl.zstd'), '{}\n')
 const liveNoHandle = new Map([['session-no-handle', { id: 'session-no-handle' }]])
 const noHandleCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -884,6 +936,7 @@ rmSync(closeNonLiveDir, { recursive: true, force: true })
 mkdirSync(closeNonLiveDir, { recursive: true })
 writeFileSync(join(closeNonLiveDir, 'session.jsonl.zstd'), '{}\n')
 const closeNonLiveCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
@@ -975,6 +1028,7 @@ writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
 delete process.env.npm_config_registry
 writeFileSync(join(updateProfile, '.npmrc'), 'registry=' + registryUrl + '\n', 'utf8')
 const updateCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(updateProfile).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },

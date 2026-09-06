@@ -285,9 +285,11 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     assert.equal(initial.meta.providers[0].continuable, true)
 
     const runtime = await service.runtimeList()
+    void console.error('DEBUG runtime:', JSON.stringify(runtime.agents))
     assert.deepEqual(runtime.agents, [{
       id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
-    }], 'only running subagents are exposed')
+      eventCount: 1,
+    }], 'only running subagents are exposed (with activity count)')
     await service.runtimeInterrupt('child-running', 'parent-session')
     assert.deepEqual(registered.interruptions, [{ childId: 'child-running', reason: { kind: 'user', parentSessionId: 'parent-session' } }])
     await assert.rejects(() => service.runtimeInterrupt('child-running', 'other-parent'), /不属于指定父会话/)

@@ -74,7 +74,7 @@ await check('exports apply + inject ["slots", "connection"]', () => {
   assert.equal(typeof exports.apply, 'function')
 })
 
-/* 3 ── apply(): styles + the subagent-admin settings section among the five
+/* 3 ── apply(): styles + the subagent-admin settings section among the eleven
  *    unified slot contributions (connection wired to the mock host below). */
 const slotRegistrations = []
 const injectedSlots = []
@@ -94,8 +94,8 @@ await check('apply() injects styles and registers the 子智能体 settings sect
   assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the plugins tab + four settings sections + the todo dock',
+    ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+    'unified apply injects the seven settings sections + the todo dock + schedule dock + the harvested input.right bell',
   )
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')
@@ -134,6 +134,7 @@ const mockEntries = []
 let rpcCalls = []
 let mockRuntimeAgents = [{
   id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
+  eventCount: 17,
 }]
 
 /* CLI backend mock state: mounted rows keyed by backendId, mirrored into the
@@ -277,6 +278,9 @@ await check('renders the tabbed section and the empty state after list()', async
   assert.ok(container.textContent.includes('运行中'), 'runtime tab label rendered')
   assert.ok(container.textContent.includes('子智能体'), 'tab label rendered')
   assert.ok(container.textContent.includes('检查变更'), 'running child rendered')
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+  assert.ok(container.textContent.includes('⏱'), 'live elapsed counter rendered on the running card')
+  assert.ok(container.textContent.includes('17 事件'), 'activity count tag rendered from runtimeList')
 })
 
 const clickButton = async (matcher) => {

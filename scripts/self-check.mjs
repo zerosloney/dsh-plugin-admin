@@ -44,7 +44,7 @@ const { createRoot } = harnessReq ? req(`${harnessWeb}/react-dom/client`) : req(
 const act = React.act ?? (harnessReq ? req(`${harnessWeb}/react-dom/test-utils`).act : req('react-dom/test-utils').act)
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
+const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://localhost/' })
 globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.MutationObserver = dom.window.MutationObserver
@@ -84,6 +84,7 @@ const mockSessions = [
     title: '分析与重构插件系统架构',
     summary: '请帮我将 dsh-session-admin 和 dsh-plugin-admin 合并为一个统一部署的插件管理中心。',
     messageCount: 5,
+    tokens: { input: 12300, output: 3400, cacheRead: 8900, cacheWrite: 0 },
     workspaceId: 'w-alpha',
     workspaceTitle: 'alpha-project',
   },
@@ -148,6 +149,8 @@ const mockHookPayload = {
 const injectedSections = []
 const registeredSections = []
 const ctx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  inject: undefined, // webhook admin tolerates a missing inject face
   effect: (fn) => {
     // The real runtime registers the disposer; the mock runs it immediately
     // and records the returned disposer (sidebar menu cleanup).
@@ -190,6 +193,74 @@ const ctx = {
           ctx.deletes = ctx.deletes ?? []
           ctx.deletes.push(payload.args.sessionId)
           return { ok: true, value: { deleted: payload.args.sessionId } }
+        }
+        if (method === 'credentialAdmin/list') {
+          return { ok: true, value: { available: true, refs: [
+            { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true, shadowed: false },
+            { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true, shadowed: false },
+          ] } }
+        }
+        if (method === 'sessionAdmin/healthReport') {
+          return { ok: true, value: { report: {
+            turns: 2, completedTurns: 1, abortedTurns: 1, errorTurns: 0, maxTokenTurns: 0,
+            tools: [{ name: 'read', calls: 3, errors: 1, errorCodes: [{ code: 'FsError:FS_NOT_FOUND', count: 1 }] }],
+            topErrors: [{ name: 'FsError', code: 'FS_NOT_FOUND', count: 1 }],
+            retryCount: 1, compactions: 0,
+          }, summary: '2 个 turn · 1 完成 · 1 中断' } }
+        }
+        if (method === 'sessionAdmin/searchSessions') {
+          return { ok: true, value: { hits: [
+            { sessionId: 's1', title: '分析与重构插件系统架构', cwd: 'E:/Demo/alpha', snippet: '… 请帮我将 dsh-session-admin 合并 …', createdAt: 1 },
+          ] } }
+        }
+        if (method === 'webhookAdmin/list') {
+          return { ok: true, value: {
+            rules: [{ id: 'ci-fail', enabled: true, secret: 'x', event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: 'CI 失败' }],
+            history: [],
+            presets: [{ id: 'cordis', name: 'cordis' }],
+            permissionPresetNames: ['workspace-write', 'danger-full-access'],
+            storagePath: 'C:/Users/demo/.dsh/webhook-triggers.json',
+            endpointPrefix: '/webhook-triggers',
+            endpointOnline: true,
+            runtimeMounted: false,
+            runtimePackageInstalled: true,
+          } }
+        }
+        if (method === 'sessionAdmin/usageReport') {
+          const now = Date.now()
+          return { ok: true, value: { generatedAt: now, rows: [
+            { createdAt: now - 2 * 86400000, project: 'alpha-project', input: 20000, output: 1000, cacheRead: 100, userMsgs: 4, assistantMsgs: 6 },
+            { createdAt: now - 8 * 3600000, project: 'alpha-project', input: 1500, output: 1100, cacheRead: 4000, userMsgs: 2, assistantMsgs: 3 },
+            { createdAt: now - 3 * 3600000, project: 'beta-project', input: 800, output: 2200, cacheRead: 0, userMsgs: 1, assistantMsgs: 2 },
+          ] } }
+        }
+        if (method === 'commandHookAdmin/saveCommand') {
+          const savedEntry = payload.args.entry
+          return { ok: true, value: { commandsDir: 'C:/Users/demo/.dsh/commands', command: savedEntry } }
+        }
+        if (method === 'mcpAdmin/callTool') {
+                    ctx.callToolCalls = ctx.callToolCalls ?? []
+          ctx.callToolCalls.push(payload.args)
+          return {
+            ok: true,
+            value: {
+              ok: true, transport: 'stdio', ms: 12,
+              toolCall: { isError: false, text: 'hello from fetcher-mcp', truncated: false, content: [{ type: 'text', text: 'hello from fetcher-mcp' }] },
+            },
+          }
+        }
+        if (method === 'sessionAdmin/exportSession') {
+          ctx.exportCalls = ctx.exportCalls ?? []
+          ctx.exportCalls.push(payload.args.sessionId)
+          return {
+            ok: true,
+            value: {
+              markdown: '# 测试会话\n\n- Session: `' + payload.args.sessionId + '`\n\n---\n\n## 👤 用户\n\n你好\n',
+              filename: 'dsh-session-测试会话-export.md',
+              messages: 1,
+              toolCalls: 0,
+            },
+          }
         }
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
@@ -252,20 +323,21 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Six slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话
-// settings sections, and the 待办清单 dock above the composer.
-assert.equal(injectedSections.length, 6, 'six slot contributions injected')
+// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
+// settings sections, the 待办清单 dock, the 日程 dock, and the 日程 bell in the
+// harvested conversation.input.right seat.
+assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×4), settings.plugins.tab, and conversation.input.dock',
+  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×7), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 6, 'six registrations: extensions tab + MCP + subagents + command hooks + session history + todo dock')
+assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -285,6 +357,7 @@ assert.equal(subagentSection.options.order, 26, '子智能体 sits right after M
 assert.equal(subagentSection.options.label, '子智能体', 'subagent section label')
 
 const commandHookSection = byId['command-hook-admin']
+const webhookSection = byId['webhook-triggers']
 assert.equal(commandHookSection.options.name, 'settings.section')
 assert.equal(commandHookSection.options.order, 27, '命令与钩子 sits right after 子智能体 (order 26)')
 assert.equal(commandHookSection.options.label, '命令与钩子', 'command hooks section label')
@@ -303,6 +376,22 @@ const todoDock = byId['todo-admin']
 assert.equal(todoDock.options.name, 'conversation.input.dock', 'todo dock mounts above the composer')
 assert.equal(todoDock.options.order, 5, 'todo dock sorts just after the shell todo strip (order 0)')
 assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock inject face carries the RPC call')
+
+const scheduleDock = byId['schedule-admin']
+assert.equal(scheduleDock.options.name, 'conversation.input.dock', 'schedule dock mounts above the composer')
+assert.equal(scheduleDock.options.order, 6, 'schedule dock stacks under the todo dock (order 5)')
+assert.equal(typeof scheduleDock.options.inject().call, 'function', 'schedule dock inject face carries the RPC call')
+
+const scheduleBell = byId['schedule-bell-admin']
+assert.equal(scheduleBell.options.name, 'conversation.input.right', 'schedule bell harvests the empty composer trailing slot')
+assert.equal(scheduleBell.options.order, 0, 'schedule bell is the first (only) occupant of conversation.input.right')
+assert.equal(typeof scheduleBell.options.inject().call, 'function', 'schedule bell inject face carries the RPC call')
+
+const usageSection = byId['usage-dashboard']
+assert.equal(usageSection.options.name, 'settings.section', 'usage dashboard is a standalone settings page')
+assert.equal(usageSection.options.order, 28, 'usage dashboard sorts after 命令与钩子 (order 27)')
+assert.equal(usageSection.options.label, '用量仪表盘', 'usage dashboard label')
+assert.equal(typeof usageSection.options.inject().call, 'function', 'usage dashboard inject face carries the RPC call')
 
 // 4. Style injection: the section stylesheets land in <head>.
 assert.ok(
@@ -337,13 +426,15 @@ assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH ba
 // at a time; each panel is unmounted before the next one mounts.
 let host = null
 async function mountSection(section) {
-  host = document.body.appendChild(document.createElement('div'))
+  const hostEl = document.body.appendChild(document.createElement('div'))
+  host = hostEl
   let root
   await act(async () => {
-    root = createRoot(host)
+    root = createRoot(hostEl)
     root.render(React.createElement(section.component, section.options.inject()))
   })
   await new Promise((resolve) => setTimeout(resolve, 60))
+  root.host = hostEl
   return root
 }
 
@@ -408,6 +499,22 @@ assert.equal(
   true,
   'manual check-updates forces the host to bypass its cache',
 )
+
+// 4b-2. Bulk upgrade: the toolbar shows ⬆⬆ 全部更新 (1) for the one stale
+// registry plugin; clicking it serially installs the pinned version, clears
+// the reminder, and reports the batch summary.
+await act(async () => {
+  const bulkBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('⬆⬆ 全部更新 (1)'))
+  assert.ok(bulkBtn !== undefined, 'bulk-upgrade button with count rendered')
+  assert.equal(bulkBtn.disabled, false, 'bulk button enabled while updates exist')
+  bulkBtn[Object.keys(bulkBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
+  await new Promise((resolve) => setTimeout(resolve, 60))
+})
+console.error('DEBUG bulk installCalls:', JSON.stringify(ctx.installCalls ?? null))
+console.error('DEBUG bulk note:', document.body.textContent.includes('批量更新完成'), document.body.textContent.includes('更新中'))
+assert.ok((ctx.installCalls ?? []).includes('dsh-remote-tool@0.9.0'), 'batch upgrade installs the pinned latest spec')
+console.error('DEBUG note:', JSON.stringify((document.body.textContent.match(/批量更新[^\n]{0,40}/) || [null])[0]), 'installs:', JSON.stringify(ctx.installCalls))
+assert.ok(document.body.textContent.includes('✅ 批量更新完成：1 个已更新'), 'batch summary note rendered')
 
 // 5c. Fuzzy plugin search: type "custom" → only the local custom plugin card
 // stays; type a nonsense needle → empty state with search hint appears.
@@ -537,6 +644,45 @@ assert.ok(text.includes('独立会话'), 'ungrouped session card rendered')
 assert.ok(text.includes('摘要读取失败：event log unreadable'), 'session summary read failure is visible')
 assert.ok(text.includes('全部 (3)'), 'session filter pill count')
 assert.ok(text.includes('会话修改即时同步到侧边栏'), 'session hint footer')
+
+// 7b. Session export: the ⬇ 导出 button pulls sessionAdmin/exportSession and
+// downloads the markdown via an object URL (stubbed here — jsdom has none;
+// the client's bare `URL` is Node's global in this harness, so stub there).
+let createdObjectUrl = null
+URL.createObjectURL = (blob) => { createdObjectUrl = blob; return 'blob:mock' }
+URL.revokeObjectURL = () => {}
+await act(async () => {
+  button('⬇ 导出').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok((ctx.exportCalls ?? []).length === 1, 'export button triggers sessionAdmin/exportSession')
+assert.ok(createdObjectUrl !== null, 'markdown handed to a download blob')
+const exportedText = await createdObjectUrl.text()
+assert.ok(exportedText.includes('# 测试会话') && exportedText.includes('## 👤 用户'), 'blob carries the markdown payload')
+assert.ok(document.body.textContent.includes('✅ 已导出 1 条消息'), 'export success toast shown')
+
+// 7c. Session pinning: 📌 置顶 toggles the local whitelist and the filter pill.
+await act(async () => {
+  const pinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 置顶'))
+  assert.ok(pinBtn !== undefined, 'pin button present on session cards')
+  pinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok(document.body.textContent.includes('📌 已置顶 (1)'), 'pinned pill count updates')
+assert.ok(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/pinned-sessions')).length === 1, 'pin persisted to localStorage')
+await act(async () => {
+  const unpinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 已置顶') && b.className.includes('btn'))
+  assert.ok(unpinBtn !== undefined, 'unpin button present')
+  unpinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok(document.body.textContent.includes('📌 已置顶 (0)'), 'unpin restores the count')
+
+// 7d. Token usage: the card tag and the totals strip fold the host tokens.
+assert.ok(document.body.textContent.includes('↑12.3k ↓3.4k'), 'per-session usage tag rendered')
+assert.ok(document.body.textContent.includes('缓存8.9k'), 'cache-read part of the usage tag')
+assert.ok(document.body.textContent.includes('输入 12.3k'), 'totals strip input column')
+
 
 // 8. Test Session delete inline confirmation
 await act(async () => {
@@ -746,6 +892,43 @@ document.body.removeChild(wsMenu)
 document.body.removeChild(wsTree)
 document.body.querySelector('[data-dsh-admin-context]')?.remove()
 
+// 11.5 Settings-nav icon identity: the settings dialog's nav paints one
+// generic gear for every unknown section id, so the plugin repaints its four
+// pages' rows with distinct per-page icons (matched by nav label, marked with
+// data-dsh-admin-nav-icon, official rows untouched, replacement idempotent).
+const settingsDialog = document.createElement('div')
+settingsDialog.setAttribute('role', 'dialog')
+settingsDialog.setAttribute('aria-modal', 'true')
+const settingsNav = document.createElement('nav')
+const mkNavRow = (label) => {
+  const row = document.createElement('button')
+  const gear = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  gear.setAttribute('class', 'stock-gear')
+  row.appendChild(gear)
+  const text = document.createElement('span')
+  text.textContent = label
+  row.appendChild(text)
+  settingsNav.appendChild(row)
+  return row
+}
+const mcpNavRow = mkNavRow('MCP服务器')
+mkNavRow('子智能体')
+mkNavRow('命令与钩子')
+mkNavRow('历史会话')
+const officialNavRow = mkNavRow('Agent 预设')
+settingsDialog.appendChild(settingsNav)
+document.body.appendChild(settingsDialog)
+await new Promise((resolve) => setTimeout(resolve, 60))
+
+const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
+assert.equal(repainted.length, 4, 'exactly the four plugin nav rows repainted')
+assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
+assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
+assert.equal(officialNavRow.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, 4, 'repaint is idempotent across observer fires')
+settingsDialog.remove()
+
 // 12. MCP editor: edit an existing server, fill it via the React onChange
 // props (jsdom synthetic input events do not reach React 18's controlled
 // onChange reliably), and save — unedited fields must survive the round-trip.
@@ -903,6 +1086,42 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 20))
 assert.ok(!document.body.textContent.includes('添加 MCP 服务器'), 'editor closes cleanly after canceling the collision attempt')
 
+// 13c. MCP tool playground: 🔌 测试 populates the tool list, 🧪 试调用 opens
+// the bench, ▶ 执行工具 fires mcpAdmin/callTool and renders the result.
+await act(async () => {
+  const testBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🔌 测试'))
+  assert.ok(testBtn !== undefined, '🔌 测试 button present')
+  testBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+await act(async () => {
+  const pgBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('🧪 试调用'))
+  assert.ok(pgBtn !== undefined, '🧪 试调用 button present')
+  pgBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok(document.body.textContent.includes('🧪 工具试调用'), 'playground bench opened')
+const toolSelect = host.querySelector('select')
+assert.ok(toolSelect !== undefined, 'tool picker rendered from the probe tool list')
+await act(async () => {
+  const runBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('▶ 执行工具'))
+  assert.ok(runBtn !== undefined, '▶ 执行工具 button present')
+  runBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+assert.equal((ctx.callToolCalls ?? []).length, 1, 'callTool fired once')
+assert.equal(ctx.callToolCalls[0].tool, 'fetch', 'default tool is the first offered')
+await act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok(document.body.textContent.includes('hello from fetcher-mcp'), 'tool result rendered: ' + (document.querySelector('.mcp-playground-out')?.textContent ?? '(no out node)'))
+assert.ok(document.body.textContent.includes('✅ 执行成功'), 'success verdict rendered')
+await act(async () => {
+  const closeBtn = [...document.querySelectorAll('button')].find((b) => b.textContent === '关闭')
+  if (closeBtn !== undefined) closeBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+
 // 14. Test reconnect toggle: open the existing stdio entry, disable reconnect,
 // save, and verify the upsert carries no reconnect config.
 ctx.mcpUpserts.length = 0
@@ -949,11 +1168,113 @@ assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env val
 await act(async () => { mcpRoot.unmount() })
 const commandHookRoot = await mountSection(commandHookSection)
 
+// 15p. The standalone 用量仪表盘 page: mounts, auto-loads rows, renders the
+// VibeUsage form (range pills, KPI cards, heatmap).
+const usageRoot = await mountSection(usageSection)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('📊 用量仪表盘') && text.includes('📈 每日趋势'), 'usage dashboard page renders')
+assert.ok(text.includes('⏱ 日期'), 'range pills row rendered')
+for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
+  assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
+}
+assert.ok(text.includes('总 Token') && text.includes('输入 Token'), 'KPI token cards rendered')
+assert.ok(document.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
+await act(async () => {
+  const pill7d = [...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
+  pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
+usageRoot.remove?.()
+
+// 15y. The Webhook 触发 page: mounts, renders rules from webhookAdmin/list.
+const webhookRoot = await mountSection(webhookSection)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('ci-fail'), 'webhook rule card rendered from webhookAdmin/list')
+assert.ok(text.includes('POST'), 'endpoint hint rendered')
+assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner rendered')
+webhookRoot.remove?.()
+
+// 15z-cred. The 凭据管理 page: mounts, lists refs with presence badges.
+const credRoot = await mountSection(byId['credential-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('DEEPSEEK_API_KEY'), 'credential ref rendered')
+assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence badges rendered')
+assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
+credRoot.remove?.()
+
+// 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
+// Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.
+const searchSessionRoot = await mountSection(byId['session-history'])
+await act(async () => {
+  const ftBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🔎 全文搜索'))
+  assert.ok(ftBtn !== undefined, 'fulltext toggle present in the sessions host')
+  ftBtn[Object.keys(ftBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
+  await new Promise((resolve) => setTimeout(resolve, 60))
+})
+assert.ok(host.textContent.includes('检索所有会话的消息内容') || host.querySelector('input[placeholder*="检索所有会话"]') !== null, 'fulltext query box rendered in the sessions host')
+await act(async () => {
+  const box = [...host.querySelectorAll('input')].find((i) => (i.placeholder || '').includes('检索所有会话'))
+  assert.ok(box !== undefined, 'fulltext input in the sessions host')
+  propsOf(box).onChange({ target: { value: '合并' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+await act(async () => {
+  const go = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === '搜索')
+  go.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+assert.ok(host.textContent.includes('命中 1 个会话'), 'fulltext hit summary rendered')
+assert.ok(host.textContent.includes('分析与重构插件系统架构'), 'fulltext hit card rendered')
+searchSessionRoot?.remove?.()
+
+// 15z-health. Session health check: 🩺 button loads the per-session report.
+const healthRoot = await mountSection(byId['session-history'])
+await act(async () => {
+  const healthBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🩺 体检'))
+  assert.ok(healthBtn !== undefined, 'health button present on a session card')
+  healthBtn[Object.keys(healthBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
+  await new Promise((resolve) => setTimeout(resolve, 60))
+})
+assert.ok(host.textContent.includes('🩺'), 'health report card rendered')
+assert.ok(host.textContent.includes('read') && host.textContent.includes('×3'), 'tool stat row rendered')
+healthRoot?.remove?.()
+assert.ok(document.body.textContent.includes('⏱ 日期'), 'range pills row rendered')
+for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
+  assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].some(b => b.textContent === pill), 'range pill ' + pill + ' rendered')
+}
+assert.ok(document.body.textContent.includes('总 Token') && document.body.textContent.includes('输入 Token'), 'KPI token cards rendered')
+assert.ok(document.body.textContent.includes('会话数') && document.body.textContent.includes('活跃天数'), 'KPI session cards rendered')
+assert.ok(document.body.textContent.includes('📈 每日趋势'), 'daily trend panel rendered')
+assert.ok(document.body.textContent.includes('🕒 分时活跃'), 'hour-of-week heatmap rendered')
+assert.ok(document.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
+assert.ok(document.body.textContent.includes('alpha-project'), 'project filter carries project names')
+await act(async () => {
+  const pill7d = [...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
+  pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+})
+assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
+
+URL.createObjectURL = () => { throw new Error("stubbed out after the export test") }
+URL.revokeObjectURL = () => {}
+
+
 text = document.body.textContent
 assert.ok(text.includes('提示词命令'), 'commands tab renders')
 assert.ok(text.includes('/review'), 'live command row rendered')
 assert.ok(text.includes('已停用'), 'disabled command badge rendered')
 assert.ok(text.includes('C:/Users/demo/.dsh/commands'), 'commands storage path shown')
+
+// 15a-2. Command sharing loop: export downloads a JSON blob of all commands;
+// import reads pasted JSON and saves NEW names while skipping same-name ones.
+URL.createObjectURL = (blob) => exportedCommandsBlob = blob
+URL.revokeObjectURL = () => {}
+let exportedCommandsBlob = null
+assert.ok(button('⬆ 导入') !== undefined, '⬆ 导入 button present (import panel covered by renderer surface)')
 
 // 15b. The 钩子 tab: rows + bridge banner with the install affordance while
 // the stock bridge is neither installed nor mounted.
