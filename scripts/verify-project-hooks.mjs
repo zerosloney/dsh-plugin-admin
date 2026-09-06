@@ -83,7 +83,7 @@ function makeStubCtx(shell) {
       listeners.set(name, fn)
       return () => {}
     },
-    effect: (fn) => effects.push(fn),
+    effect: (fn) => { effects.push(fn); return fn() },
     get: (name) => (name === 'sessionPersistence'
       ? { locate: (header) => ({ kind: 'jsonl', path: `/logs/${header?.id ?? 'x'}.jsonl` }) }
       : undefined),

@@ -21,7 +21,7 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { applyCommandHookAdmin, BRIDGE_PACKAGE, ensureProfileDependency, harnessLockstepVersion, profileDependencyInstalled } from '../lib/command-hook-admin.js'
 
 const results = []
@@ -66,7 +66,7 @@ function makeStubCtx(profileDir) {
       return provided.get(key)
     },
     provide(key, service) { provided.set(key, service) },
-    effect(fn, label) { effects.push({ fn, label }) },
+    effect(fn, label) { effects.push({ fn, label }); const d = fn(); return d },
   }
   const stub = { ctx, provided, effects, registered, registryRuntimes }
   allStubs.push(stub)
@@ -90,7 +90,7 @@ function makeStubPnpm(profileDir, calls) {
     const manifestPath = join(profileDir, 'package.json')
     const pkg = JSON.parse(readFileSync(manifestPath, 'utf8'))
     pkg.dependencies = pkg.dependencies ?? {}
-    if (args[0] === 'add') pkg.dependencies[args[1]] = '^1.0.0'
+    if (args[0] === 'add') pkg.dependencies[args[1]] = args[1].startsWith('link:') ? args[1] : '^1.0.0'
     if (args[0] === 'remove') delete pkg.dependencies[args[1]]
     writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8')
     return `stub-pnpm ${args.join(' ')}`
@@ -317,6 +317,66 @@ try {
     dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, runner, () => reconciles.push(1), '0.1.1-rc.2')
     assert.deepEqual(calls.at(-1), [profileDir, 'add', `${BRIDGE_PACKAGE}@0.1.1-rc.2`], 'version pinned onto the add spec')
     assert.equal(harnessLockstepVersion(profileDir), undefined, 'no exact dsh dep → no pin (range/link ignored)')
+
+    // Host-copy preference: a peer whose package exists in the RUNNING
+    // HOST's node_modules is linked there (with a pnpm.overrides pin) —
+    // never re-materialized from the registry, whose same-version tarball
+    // can be an older build (the dsh-llm /api/llm 404 incident).
+    const hostPeer = '@deepseek-ai/dsh-llm'
+    const hostNodeModules = dirname(profileDir) // fixture: pretend the host root sits beside the profile dir
+    writeFileSync(join(hostNodeModules, 'node_modules_placeholder'), '')
+    mkdirSync(join(hostNodeModules, 'node_modules', hostPeer, 'lib'), { recursive: true })
+    writeFileSync(join(hostNodeModules, 'node_modules', hostPeer, 'package.json'), JSON.stringify({ name: hostPeer, version: '0.0.0-host' }))
+    // Point hostPeerLinkSpec's host root at the fixture: argv[1] would be
+    // <hostRoot>/lib/bin.js, so place a bin there.
+    const realArgv1 = process.argv[1]
+    // argv[1] three dirnames up must land on hostNodeModules: place the bin
+    // at <hostNodeModules>/<dsh-pkg>/lib/bin.js like the real launcher.
+    mkdirSync(join(hostNodeModules, 'dsh', 'lib'), { recursive: true })
+    writeFileSync(join(hostNodeModules, 'dsh', 'lib', 'bin.js'), '')
+    process.argv[1] = join(hostNodeModules, 'dsh', 'lib', 'bin.js')
+    // Local runner: this test's adds only ever target the bridge or the host
+    // link, and pnpm records a link: spec verbatim in the manifest.
+    const linkRunner = async (dir, args) => {
+      calls.push([dir, ...args])
+      const pkg = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      pkg.dependencies = pkg.dependencies ?? {}
+      if (args[0] === 'add') {
+        const spec = args[1]
+        const name = spec.startsWith('link:') ? hostPeer : BRIDGE_PACKAGE
+        pkg.dependencies[name] = spec
+      }
+      writeFileSync(manifestPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8')
+      return `stub-pnpm ${args.join(' ')}`
+    }
+    // The bridge "installed" in the profile declares dsh-llm as a peer, so
+    // the completion loop has a peer to resolve.
+    mkdirSync(join(profileDir, 'node_modules', BRIDGE_PACKAGE), { recursive: true })
+    writeFileSync(join(profileDir, 'node_modules', BRIDGE_PACKAGE, 'package.json'),
+      JSON.stringify({ name: BRIDGE_PACKAGE, version: '1.0.0', peerDependencies: { [hostPeer]: '^0.1.1-rc.2' } }))
+    try {
+      const hostSpec = 'link:' + join(hostNodeModules, 'node_modules', hostPeer).split('\\').join('/')
+      writeManifest({})
+      dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, linkRunner, () => reconciles.push(1), '0.1.1-rc.2')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      assert.equal(manifest.dependencies[hostPeer], hostSpec, 'peer linked to the host copy, not registry')
+      assert.equal(manifest.pnpm.overrides[hostPeer], hostSpec, 'pnpm.overrides pins the host link against later re-resolutions')
+      assert.deepEqual(calls.at(-1), [profileDir, 'add', hostSpec], 'add runs with the host link spec')
+      // Idempotent: spec already correct → no further pnpm.
+      const before = calls.length
+      dep = await ensureProfileDependency(profileDir, BRIDGE_PACKAGE, linkRunner, () => reconciles.push(1), '0.1.1-rc.2')
+      assert.equal(calls.length, before, 'correct host link skips re-add')
+    } finally {
+      process.argv[1] = realArgv1
+      rmSync(join(hostNodeModules, 'dsh'), { recursive: true, force: true })
+      rmSync(join(hostNodeModules, 'node_modules'), { recursive: true, force: true })
+      rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
+      rmSync(join(hostNodeModules, 'node_modules_placeholder'), { force: true })
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      delete manifest.dependencies[hostPeer]
+      delete manifest.pnpm
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
+    }
     // pnpm v11's ignored-builds warning exits non-zero after a SUCCESSFUL
     // add: tolerated only when the manifest actually gained the dependency.
     writeManifest({})

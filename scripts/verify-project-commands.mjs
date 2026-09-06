@@ -59,6 +59,7 @@ function makeStubCtx() {
     },
     effect(fn, _label) {
       effects.push(fn)
+      return fn()
     },
     provide() {},
   }
