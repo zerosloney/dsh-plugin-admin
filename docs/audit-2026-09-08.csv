@@ -1,0 +1,16 @@
+bug_id,severity,category,file,line,title,status,fix_branch,verification
+BUG-A1,Major,Integration,scripts/repair-workspace-accounts.mjs,30,netstat live-host guard regex can never match,FIXED,fix/repo-audit,regex validated against real netstat output + end-to-end dry-run
+BUG-A2,Major,EdgeCase,scripts/repair-workspace-accounts.mjs,81,realpathSync on deleted workspace path aborts whole repair,FIXED,fix/repo-audit,reproduced ENOENT pre-fix; temp-home dry-run repairs valid and skips deleted
+BUG-A3,Minor,EdgeCase,scripts/repair-workspace-accounts.mjs,77,corrupt workspace.json gives raw stack trace,FIXED,fix/repo-audit,catch with recovery guidance and exit 1
+BUG-B1,Major,ErrorHandling,lib/client.js,5788,ChProjectTab mount-time list failure silently swallowed,FIXED,fix/repo-audit,TDD self-check 15d fault injection red->green; npm test exit 0
+BUG-C1,Minor,CI,.github/workflows/ci.yml,11,no concurrency group,FIXED,fix/repo-audit,cancel-in-progress group added
+BUG-C2,Minor,CI,.github/workflows/release.yml,11,no concurrency group on publish,FIXED,fix/repo-audit,serialized group added
+RJ-01,Rejected,-,scripts/repair-workspace-accounts.mjs,65,realpathSync(header.cwd) unguarded,REJECTED_FALSE_POSITIVE,-,call is inside try/catch (62-69)
+RJ-02,Rejected,-,scripts/verify-todo-panel.mjs,143,git clean -fd lacks --force,REJECTED_FALSE_POSITIVE,-,-f IS --force in git-clean CLI
+RJ-03,Rejected,-,lib/client.js,2491,loadPinnedIds JSON.parse unguarded,REJECTED_FALSE_POSITIVE,-,try/catch present at 2488-2493
+RJ-04,Informational,Race,lib/client.js,1721,two-tab MCP duplicate-id race,REJECTED_NEGLIGIBLE,-,requires ~1e-14 random-id collision; host upsert serializes
+RJ-05,Informational,Race,lib/client.js,"4329,4718,5313,5618",missing alive guards on mount effects,REJECTED_NO_CONSEQUENCE,-,React 18 setState-after-unmount is silent no-op
+RJ-06,Informational,Leak,lib/client.js,7455,disposeSidebar var dropped,REJECTED_NO_BUG,-,ctx.effect return value auto-registers the disposer
+RJ-07,Informational,Injection,lib/client.js,394,svg.innerHTML with host-derived key,REJECTED_NO_DATA_FLOW,-,label is lookup key into fixed templates
+RJ-08,Informational,Robustness,lib/client.js,3411,SA_CSS_TEXT.join guard,REJECTED_HYPOTHETICAL,-,static constant array
+RJ-09,Informational,Resilience,lib/bring-explorer.ps1,64,6s retry window,REJECTED_BY_DESIGN,-,documented fail-soft contract; correct exit codes

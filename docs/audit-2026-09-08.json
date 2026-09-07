@@ -1,0 +1,105 @@
+{
+  "repository": "dsh-plugin-admin",
+  "auditDate": "2026-09-08",
+  "branch": "fix/repo-audit",
+  "baseline": "v1.8.1 (55c0965)",
+  "scope": {
+    "sourceFiles": 22,
+    "surfaces": ["host modules (8, previously audited)", "client.js (7589 lines, first deep audit)", "verify scripts (12)", "repair script", "CI workflows (2)", "PowerShell helper"],
+    "dependencyVulnerabilities": 0
+  },
+  "fixed": [
+    {
+      "id": "BUG-A1",
+      "severity": "Major",
+      "category": "Integration",
+      "file": "scripts/repair-workspace-accounts.mjs",
+      "line": 30,
+      "title": "netstat live-host guard regex can never match",
+      "evidence": "regex tested false against every LISTENING line of real Windows netstat -ano output; real rows have local/foreign/state columns only, the regex assumed a fourth",
+      "impact": "the only protection against repairing under a live dsh was dead; in-memory domain write-back would clobber the repair",
+      "fix": "3-column regex /:3080\\s+\\S+\\s+LISTENING\\b/i with a verified format sample comment",
+      "verification": "fires on synthetic :3080 row; zero false positives on existing listeners; end-to-end dry-run pass"
+    },
+    {
+      "id": "BUG-A2",
+      "severity": "Major",
+      "category": "EdgeCase",
+      "file": "scripts/repair-workspace-accounts.mjs",
+      "line": 81,
+      "title": "realpathSync on deleted workspace path aborts the whole repair",
+      "evidence": "reproduced: ENOENT from one bad record stops the for/of loop; remaining workspaces unrepaired",
+      "impact": "a deleted/renamed project directory defeats the tool whose purpose is repairing damaged state",
+      "fix": "per-record try/catch skip; Array.isArray guard for damaged sessionIds",
+      "verification": "temp home with 1 valid + 1 deleted workspace: valid repaired, bad skipped, exit 0"
+    },
+    {
+      "id": "BUG-A3",
+      "severity": "Minor",
+      "category": "EdgeCase",
+      "file": "scripts/repair-workspace-accounts.mjs",
+      "line": 77,
+      "title": "corrupt workspace.json produces a raw stack trace",
+      "evidence": "JSON.parse unguarded; no recovery guidance",
+      "impact": "operator gets a stack trace instead of a recovery instruction",
+      "fix": "catch with restore-from-backup guidance, exit 1",
+      "verification": "code path review; covered by A2 harness layout"
+    },
+    {
+      "id": "BUG-B1",
+      "severity": "Major",
+      "category": "ErrorHandling",
+      "file": "lib/client.js",
+      "line": 5788,
+      "title": "ChProjectTab mount-time list failure silently swallowed",
+      "evidence": ".catch(function () {}) while the same component's load() reports via setError(messageOf(e))",
+      "impact": "session dropdown silently empty on any list error; no user feedback",
+      "fix": ".catch(function (e) { setError(messageOf(e)) })",
+      "verification": "TDD: self-check 15d fault-injection assertion red then green; full suite exit 0"
+    },
+    {
+      "id": "BUG-C1",
+      "severity": "Minor",
+      "category": "CI",
+      "file": ".github/workflows/ci.yml",
+      "line": 11,
+      "title": "no concurrency group",
+      "evidence": "superseded pushes stack parallel runs",
+      "impact": "wasted runners; late result can mask newest-commit result perception",
+      "fix": "concurrency group ci-${{ github.ref }} with cancel-in-progress: true",
+      "verification": "workflow YAML reviewed; CI validates on push"
+    },
+    {
+      "id": "BUG-C2",
+      "severity": "Minor",
+      "category": "CI",
+      "file": ".github/workflows/release.yml",
+      "line": 11,
+      "title": "no concurrency group on publish",
+      "evidence": "concurrent tag pushes can race npm publish",
+      "impact": "publish races on the registry",
+      "fix": "concurrency group release-${{ github.ref }} with cancel-in-progress: false",
+      "verification": "workflow YAML reviewed; Release validates on tag push"
+    }
+  ],
+  "rejected": [
+    { "claim": "realpathSync(header.cwd):65 unguarded", "source": "scripts agent", "reason": "call sits inside the try/catch at lines 62-69; the real bare call was line 81 (fixed)" },
+    { "claim": "git clean -fd lacks --force", "source": "scripts agent", "reason": "-f IS --force; clean never touches .git — misread CLI semantics" },
+    { "claim": "loadPinnedIds JSON.parse unguarded", "source": "client agent (1900-3800)", "reason": "try/catch present at 2488-2493; quote had truncated context" },
+    { "claim": "two-tab MCP duplicate-id race (Major)", "source": "client agent (1-1900)", "reason": "requires 8-char random-id collision (~1e-14, agent's own math); host upsert serializes; informational" },
+    { "claim": "4x missing alive guards are Major", "source": "client agent (3800+)", "reason": "React 18 setState-after-unmount is a documented silent no-op; inconsistency without consequence; informational" },
+    { "claim": "disposeSidebar dropped causes observer leak", "source": "client agent (1-1900)", "reason": "ctx.effect return value is the auto-registered disposer (verified); vestigial var only" },
+    { "claim": "svg.innerHTML injection surface", "source": "client agent (1-1900)", "reason": "label is a lookup key into fixed templates; no data flows into HTML" },
+    { "claim": "SA_CSS_TEXT.join needs a guard", "source": "client agent (1900-3800)", "reason": "static constant array; hypothetical" },
+    { "claim": "bring-explorer.ps1 retry window too short", "source": "scripts agent", "reason": "documented fail-soft contract; exit codes correct; won't-fix" }
+  ],
+  "previousRounds": {
+    "v1.8.1": { "critical": 3, "medium": 6, "minor": 6, "wonNotFix": 2 },
+    "note": "host-side modules audited and fixed before this pass; re-verified no regression"
+  },
+  "validation": {
+    "npmAudit": "0 vulnerabilities (official registry)",
+    "npmTest": "12/12 suites, exit 0",
+    "releaseGate": "all 12 verify scripts confirmed fail-capable with correct exit-code propagation"
+  }
+}
