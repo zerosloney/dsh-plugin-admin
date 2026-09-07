@@ -162,6 +162,18 @@ await checkAsync('saveRule + list round-trips a steer rule', async () => {
   assert.equal(existsSync(storagePath), true, 'rules file persisted')
 })
 
+await checkAsync('saveRule + list round-trip preserves model.maxTokens (create rule)', async () => {
+  const service = ctx.provided.webhookAdmin
+  const saved = await service.saveRule({
+    id: 'nightly-md', enabled: true, secret: 'topsecret', event: '',
+    action: { mode: 'create', workspacePath: 'E:/repos/app', agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
+  })
+  assert.equal(saved.ok, true)
+  const stored = saved.rules.find(rule => rule.id === 'nightly-md')
+  assert.ok(stored !== undefined, 'create rule persisted')
+  assert.deepEqual(stored.action.model, { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 }, 'maxTokens survives the storage round-trip (normalizeRule must not drop it)')
+})
+
 await checkAsync('saveRule with an empty secret keeps the stored secret on edit', async () => {
   const service = ctx.provided.webhookAdmin
   await service.saveRule({ id: 'ci-fail', secret: '', event: 'push', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'CI 失败：$PAYLOAD' })
