@@ -187,6 +187,7 @@ const ctx = {
           return { ok: true, value: { output: 'Done', profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
         }
         if (method === 'sessionAdmin/list') {
+          if (ctx.sessionListFail) return { ok: false, error: { message: ctx.sessionListFail } }
           return { ok: true, value: { sessions: ctx.sessionListOverride ?? mockSessions, workspaces: mockWorkspaces } }
         }
         if (method === 'sessionAdmin/deleteSession') {
@@ -1313,5 +1314,16 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 60))
 assert.equal((ctx.bridgeRemoves ?? []).length, 1, 'second click fires bridgeRemove')
 assert.ok(document.body.textContent.includes('hooks 桥已卸载'), 'remove note rendered')
+
+// 15d. The 项目 tab: an initial sessionAdmin/list failure must surface in
+// the tab. The mount-time list call used to swallow every error with an
+// empty .catch, leaving the session dropdown silently unpopulated.
+ctx.sessionListFail = '注入：列表服务不可用'
+await act(async () => {
+  button('项目').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.ok(document.body.textContent.includes('注入：列表服务不可用'), 'project tab surfaces the session-list load error')
+ctx.sessionListFail = undefined
 
 console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip')

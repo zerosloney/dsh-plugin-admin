@@ -27,7 +27,10 @@ const sessionsRoot = join(home, 'sessions')
 // dsh web holds the storage domain in memory; repairing under it loses the race.
 if (!dryRun) {
   const listeners = execSync('netstat -ano', { windowsHide: true }).toString()
-  if (/:3080\s+\S+\s+0\.0\.0\.0:0\s+LISTENING/.test(listeners)) {
+  // Real `netstat -ano` LISTENING row: `TCP  <local>  <foreign=0.0.0.0:0>  LISTENING  <pid>`.
+  // The former 4-column pattern (local, foreign, ANOTHER 0.0.0.0:0, state) can
+  // never match a real row, which silently disabled this live-host guard.
+  if (/:3080\s+\S+\s+LISTENING\b/i.test(listeners)) {
     console.error('refusing to run: a dsh web instance is listening on 127.0.0.1:3080 — close it first (use --dry-run to preview)')
     process.exit(1)
   }
@@ -74,17 +77,33 @@ for (const bucket of sessionsByPath.values()) {
   bucket.sort((left, right) => right.createdAt - left.createdAt || (left.id < right.id ? -1 : 1))
 }
 
-const storage = JSON.parse(readFileSync(storagePath, 'utf8'))
+let storage
+try {
+  storage = JSON.parse(readFileSync(storagePath, 'utf8'))
+} catch (error) {
+  console.error(`cannot parse ${storagePath} — restore it from a *.bak-* copy or fix it manually: ${error instanceof Error ? error.message : error}`)
+  process.exit(1)
+}
 const now = new Date().toISOString()
 const records = storage.tables?.workspaces ?? {}
 for (const record of Object.values(records)) {
-  const members = sessionsByPath.get(realpathSync(record.path))?.map(entry => entry.id) ?? []
+  // A workspace whose directory was deleted or renamed has no canonical
+  // realpath — skip that record; the repair must never abort midway and
+  // leave the remaining workspaces unrepaired.
+  let canonical
+  try {
+    canonical = realpathSync(record.path)
+  } catch {
+    continue
+  }
+  const members = sessionsByPath.get(canonical)?.map(entry => entry.id) ?? []
   const known = new Set(members)
+  const currentIds = Array.isArray(record.sessionIds) ? record.sessionIds : []
   // Keep any existing accounted id whose log still exists (none expected after
   // the wipe; preserved in case a record was partially damaged).
-  const merged = [...new Set([...record.sessionIds.filter(id => known.has(id)), ...members])]
+  const merged = [...new Set([...currentIds.filter(id => known.has(id)), ...members])]
   if (JSON.stringify(merged) === JSON.stringify(record.sessionIds)) continue
-  console.log(`${record.title} (${record.path}): ${record.sessionIds.length} -> ${merged.length} sessions`)
+  console.log(`${record.title} (${record.path}): ${currentIds.length} -> ${merged.length} sessions`)
   record.sessionIds = merged
   record.updatedAt = now
 }

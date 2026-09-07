@@ -9,6 +9,12 @@ permissions:
   contents: read
   id-token: write # npm publish --provenance via OIDC
 
+# One publish at a time; a second tag queue behind the running publish
+# instead of racing it on the registry.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest

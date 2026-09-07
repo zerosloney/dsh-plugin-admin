@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Superseded pushes cancel in-flight runs: the newest commit's result is the
+# only one that matters for the merge gate.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
