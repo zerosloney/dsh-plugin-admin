@@ -197,8 +197,8 @@ const ctx = {
         }
         if (method === 'credentialAdmin/list') {
           return { ok: true, value: { available: true, refs: [
-            { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true, shadowed: false },
-            { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true, shadowed: false },
+            { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true },
+            { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true },
           ] } }
         }
         if (method === 'sessionAdmin/healthReport') {
@@ -216,7 +216,7 @@ const ctx = {
         }
         if (method === 'webhookAdmin/list') {
           return { ok: true, value: {
-            rules: [{ id: 'ci-fail', enabled: true, secret: 'x', event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: 'CI 失败' }],
+            rules: [{ id: 'ci-fail', enabled: true, event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: 'CI 失败' }],
             history: [],
             presets: [{ id: 'cordis', name: 'cordis' }],
             permissionPresetNames: ['workspace-write', 'danger-full-access'],

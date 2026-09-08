@@ -23,7 +23,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, localSpecPath, assertPnpmOperand } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk.
 const logDir = join(here, '../.host-check-tmp/session-to-delete')
@@ -113,7 +113,7 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all seven namespaces ride a single
+// One unified descriptor per package: all nine namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
@@ -218,6 +218,17 @@ for (const good of ['dsh-plugin-admin', '@scope/pkg', '@scope/pkg@^1.2.3',
   '//nas/share/pkg', '/opt/plugins/x', 'github:user/repo', 'user/repo', '1.2.3', '^0.5.0']) {
   assert.equal(assertPnpmOperand('t', good), good, `allowlist accepts ${good}`)
 }
+
+/* --------------- win32 caret escaping for the cmd.exe shell ---------------
+ * pnpm runs through cmd.exe on Windows, which consumes `^` as its escape
+ * character — an unescaped `name@^1.2.3` operand would silently arrive as
+ * `name@1.2.3` (exact pin instead of a range). pnpmSpawnArgs doubles the
+ * caret there and passes other platforms through untouched.
+ */
+assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@^1.2.3'], 'win32'), ['add', 'pkg@^^1.2.3'], 'win32 doubles the caret')
+assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@~1.2.3'], 'win32'), ['add', 'pkg@~1.2.3'], 'tilde needs no escaping')
+assert.deepEqual(pnpmSpawnArgs(['remove', 'pkg@^1.2.3'], 'linux'), ['remove', 'pkg@^1.2.3'], 'posix passes through untouched')
+assert.deepEqual(pnpmSpawnArgs(['add', 'plain-pkg'], 'darwin'), ['add', 'plain-pkg'], 'plain specs pass through')
 
 /* ------------------ localSpecPath classification ------------------
  * Remote git/tarball URLs must never surface as local installs (the old

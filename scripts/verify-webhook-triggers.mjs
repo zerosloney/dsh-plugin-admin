@@ -158,7 +158,7 @@ await checkAsync('saveRule + list round-trips a steer rule', async () => {
   const saved = await service.saveRule({ id: 'ci-fail', enabled: true, secret: 'topsecret', event: 'push', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'CI 失败：$PAYLOAD' })
   assert.equal(saved.ok, true)
   assert.equal(saved.rules.length, 1)
-  assert.equal(saved.rules[0].secret, 'topsecret')
+  assert.ok(!('secret' in saved.rules[0]), 'list payload must never carry the plaintext secret')
   assert.equal(existsSync(storagePath), true, 'rules file persisted')
 })
 
@@ -177,8 +177,11 @@ await checkAsync('saveRule + list round-trip preserves model.maxTokens (create r
 await checkAsync('saveRule with an empty secret keeps the stored secret on edit', async () => {
   const service = ctx.provided.webhookAdmin
   await service.saveRule({ id: 'ci-fail', secret: '', event: 'push', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'CI 失败：$PAYLOAD' })
-  const list = await service.list()
-  assert.equal(list.rules[0].secret, 'topsecret', 'empty secret inherits the stored one')
+  // list() deliberately no longer carries the secret; verify inheritance
+  // where the value actually lives — the persisted rules file.
+  const stored = JSON.parse(readFileSync(storagePath, 'utf8'))
+  const kept = stored.rules.find(entry => entry.id === 'ci-fail')
+  assert.equal(kept.secret, 'topsecret', 'empty secret inherits the stored one')
 })
 
 await checkAsync('saveRule rejects an empty secret for a new rule', async () => {

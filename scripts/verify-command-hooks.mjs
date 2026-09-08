@@ -551,6 +551,30 @@ try {
     assert.equal(result.action, 'row-removed')
   })
 
+  await check('hooks: malformed stores degrade the list and block writes until healed', async () => {
+    const originalHooks = readFileSync(hooksPath, 'utf8')
+    const originalDisabled = existsSync(disabledPath) ? readFileSync(disabledPath, 'utf8') : null
+    try {
+      writeFileSync(hooksPath, '{ not json', 'utf8')
+      const stub = makeStubCtx(profileDir)
+      applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) })
+      const svc = stub.provided.get('commandHookAdmin')
+      const listed = svc.listHooks()
+      assert.ok(typeof listed.fileError === 'string' && listed.fileError.includes('hooks.json'),
+        'parse error surfaces in the list payload instead of bricking the panel')
+      await assert.rejects(() => svc.saveHook({ event: 'PreToolUse', command: 'heal.sh' }),
+        /已拒绝修改以保护文件内容/, 'save refuses while the store is unreadable')
+      await assert.rejects(() => svc.deleteHook('PreToolUse/0/0'),
+        /已拒绝修改以保护文件内容/, 'delete refuses while the store is unreadable')
+      writeFileSync(hooksPath, originalHooks, 'utf8')
+      assert.equal(svc.listHooks().fileError, undefined, 'fileError clears once the file parses again')
+    } finally {
+      writeFileSync(hooksPath, originalHooks, 'utf8')
+      if (originalDisabled === null) rmSync(disabledPath, { force: true })
+      else writeFileSync(disabledPath, originalDisabled, 'utf8')
+    }
+  })
+
   await check('teardown: disposers release the live registrations', () => {
     assert.ok(mounted.registered.length >= 1, 'registrations captured')
     // Every stub mount (the bridge checks mount extra instances) must release

@@ -87,6 +87,9 @@ function makeStubCtx(shell) {
     get: (name) => (name === 'sessionPersistence'
       ? { locate: (header) => ({ kind: 'jsonl', path: `/logs/${header?.id ?? 'x'}.jsonl` }) }
       : undefined),
+    // projectAdmin/list fences cwd against the registry's known workspaces;
+    // the temp tree plays that role for the tests below.
+    workspaceRegistry: { list: () => [{ path: tempRoot }] },
     shell,
   }
 }
@@ -335,6 +338,19 @@ try {
     assert.equal(emptyView.hooksSource, null)
     assert.deepEqual(emptyView.skills, [])
     await assert.rejects(() => adminCtx.provided.projectAdmin.list(''), /需要一个 cwd 路径/, 'empty cwd rejects')
+    const unrelated = mkdtempSync(join(tmpdir(), 'proj-unrelated-'))
+    try {
+      await assert.rejects(
+        () => adminCtx.provided.projectAdmin.list(join(unrelated, 'deep', 'sub')),
+        /不在 dsh 已知工作区内/,
+        'cwd outside known workspaces (and not an ancestor of one) rejects',
+      )
+      // A workspace root itself and a directory inside it stay readable.
+      const insideView = await adminCtx.provided.projectAdmin.list(join(tempRoot, 'project'))
+      assert.equal(insideView.projectRoot, join(tempRoot, 'project'), 'in-workspace cwd still resolves')
+    } finally {
+      rmSync(unrelated, { recursive: true, force: true })
+    }
   })
 
   await check('teardown aborts detached runs and clears the cache', () => {
