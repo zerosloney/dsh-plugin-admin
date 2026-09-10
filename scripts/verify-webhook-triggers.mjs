@@ -30,6 +30,11 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
+// A workspace path that is absolute ON THE RUNNING PLATFORM: validateRuleEntry
+// enforces isAbsolute(workspacePath), and a Windows-style 'E:/...' literal
+// fails that check on POSIX runners.
+const WORKSPACE = join(tmpdir(), 'repos', 'app')
+
 const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, WEBHOOK_RUNTIME_PACKAGE } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
 
 const results = []
@@ -80,7 +85,7 @@ check('validateRuleEntry accepts well-formed steer and create rules', () => {
   assert.equal(steer.promptTemplate, '$PAYLOAD')
   const create = validateRuleEntry({
     id: 'nightly', secret: '', event: '',
-    action: { mode: 'create', workspacePath: 'E:/repos/app', agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
+    action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
   }, [])
   assert.equal(create.action.mode, 'create')
   assert.deepEqual(create.action.model, { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 })
@@ -95,7 +100,7 @@ check('validateRuleEntry rejects malformed entries', () => {
   assert.throws(bad({ id: 'ok2', action: { mode: 'nope' } }), /必须是 "steer" 或 "create"/, 'unknown mode rejected')
   assert.throws(bad({ id: 'ok3', action: { mode: 'steer' } }), /steer 模式需要 sessionId/, 'steer needs session')
   assert.throws(bad({ id: 'ok4', action: { mode: 'create', workspacePath: 'relative/path', agentPreset: 'p', permissionPreset: 'w' } }), /绝对路径/, 'create needs absolute path')
-  assert.throws(bad({ id: 'ok5', action: { mode: 'create', workspacePath: 'E:/x' } }), /create 模式需要 agentPreset/, 'create needs preset')
+  assert.throws(bad({ id: 'ok5', action: { mode: 'create', workspacePath: WORKSPACE } }), /create 模式需要 agentPreset/, 'create needs preset')
   assert.throws(bad({ id: 'ok6', secret: 'x'.repeat(257), action: { mode: 'steer', sessionId: 's' } }), /secret 长度/, 'secret bound enforced')
 })
 
@@ -166,7 +171,7 @@ await checkAsync('saveRule + list round-trip preserves model.maxTokens (create r
   const service = ctx.provided.webhookAdmin
   const saved = await service.saveRule({
     id: 'nightly-md', enabled: true, secret: 'topsecret', event: '',
-    action: { mode: 'create', workspacePath: 'E:/repos/app', agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
+    action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
   })
   assert.equal(saved.ok, true)
   const stored = saved.rules.find(rule => rule.id === 'nightly-md')
@@ -291,7 +296,7 @@ await checkAsync('HTTP handler: 400 invalid JSON and 413 oversized body', async 
 
 await checkAsync('HTTP handler: create-mode without runtime fails 503', async () => {
   await ctx.provided.webhookAdmin.saveRule({
-    id: 'nightly', secret: 'topsecret', action: { mode: 'create', workspacePath: 'E:/repos/app', agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+    id: 'nightly', secret: 'topsecret', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
   })
   const res = mockRes()
   await handler(jsonRequest({ ruleId: 'nightly' }), res)
