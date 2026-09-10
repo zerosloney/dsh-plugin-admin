@@ -170,11 +170,18 @@ const fileCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
+    // Real handle-based contract: list() → { header, revision } snapshots,
+    // stat() → one snapshot or undefined, open(id,'read') → read handle.
     list: async () => [
-      { id: 'git-session', cwd: repoDir },
-      { id: 'git-session-2', cwd: repoDir },
-      { id: 'plain-session', cwd: here },
+      { header: { id: 'git-session', cwd: repoDir, createdAt: 1 }, revision: 'r1' },
+      { header: { id: 'git-session-2', cwd: repoDir, createdAt: 2 }, revision: 'r2' },
+      { header: { id: 'plain-session', cwd: here, createdAt: 3 }, revision: 'r3' },
     ],
+    stat: async (id) => {
+      const cwd = id === 'git-session' || id === 'git-session-2' ? repoDir : id === 'plain-session' ? here : undefined
+      return cwd === undefined ? undefined : { header: { id, cwd, createdAt: 1 }, revision: 'r', sizeBytes: null }
+    },
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 await apply(fileCtx)
@@ -287,8 +294,14 @@ const exportCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'exp-session', title: '修复登录', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }],
-    inspect: async (id) => (id === 'exp-session' ? { events: EXPORT_EVENTS } : { events: [] }),
+    list: async () => [{ header: { id: 'exp-session', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r' }],
+    stat: async (id) => (id === 'exp-session'
+      ? { header: { id: 'exp-session', title: '修复登录', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r', sizeBytes: null }
+      : undefined),
+    open: async (id) => ({
+      read: async () => (id === 'exp-session' ? EXPORT_EVENTS : []),
+      close: async () => {},
+    }),
   },
 }
 await apply(exportCtx)

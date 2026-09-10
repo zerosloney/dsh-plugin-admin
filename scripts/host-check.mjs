@@ -1,13 +1,18 @@
 /**
  * Host-half self-check for the admin remotes (lib/index.js):
  * - Mounts apply() against a fake typert/workspaceRegistry/sessionPersistence context
+ *   (the persistence mocks follow the REAL handle-based contract: list() returns
+ *   { header, revision } snapshots, stat() observes one session, open(id, 'read')
+ *   hands out a read handle with read(offset, length)/close)
  * - Drives sessionAdmin.deleteSession and asserts the targeted-detach contract:
  *   exactly ONE detachSession call, on the workspace that accounts the deleted
  *   session, and never on unrelated workspaces (a batch detach lets the
  *   registry's mutate-time membership prune strip whole workspace records —
  *   the bug that emptied workspace accounting and dumped sessions into
  *   ungrouped)
- * - Asserts log-dir removal and archived-set cleanup
+ * - Asserts log-dir removal (via the derived JSONL layout under $DSH_HOME),
+ *   the standard-layout fail-loud, archived-set cleanup, and the mount-time
+ *   loud-fail probes for the registry and persistence seams
  *
  * Run: node scripts/host-check.mjs
  */
@@ -23,15 +28,15 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf } = await import(new URL('../lib/index.js', import.meta.url).href)
 
-// The log artifact deleteSession is expected to remove from disk.
-const logDir = join(here, '../.host-check-tmp/session-to-delete')
-rmSync(logDir, { recursive: true, force: true })
-mkdirSync(logDir, { recursive: true })
-writeFileSync(join(logDir, 'session.jsonl.zstd'), '{}\n')
-
+// The log artifact deleteSession is expected to remove from disk. The plugin
+// derives the physical directory from the JSONL backend's layout under
+// $DSH_HOME, so the fixture directory must sit exactly where the derivation
+// points (DSH_HOME is isolated further down, before this header is created).
 const TARGET = 'session-target'
+const targetHeader = { id: TARGET, cwd: 'E:/nowhere', createdAt: 1 }
+
 const detachCalls = []
 const workspaceOf = (name, sessionIds) => ({
   sessionIds,
@@ -44,10 +49,15 @@ const workspaceB = workspaceOf('B', ['session-other-b'])
 let nextState = null
 // Isolate the command-hook store: applyCommandHookAdmin reads $DSH_HOME at
 // mount (and creates + watches the commands dir), so point it at a temp home
-// instead of the developer's real ~/.dsh.
+// instead of the developer's real ~/.dsh. The session-log layout derivation
+// reads the same variable at call time.
 const chaHome = join(here, '../.host-check-tmp/dsh-home')
 mkdirSync(join(chaHome, 'commands'), { recursive: true })
 process.env.DSH_HOME = chaHome
+const logDir = sessionLogDirFor(targetHeader)
+rmSync(logDir, { recursive: true, force: true })
+mkdirSync(logDir, { recursive: true })
+writeFileSync(join(logDir, 'session.jsonl.zstd'), '{}\n')
 // Typert registry emulation: the real registry (harness packages/typert/
 // registry service.ts) allows ONE registration per package name and rejects
 // duplicate invocation ids / endpoints — rules the permissive stub below used
@@ -100,9 +110,11 @@ const fakeCtx = {
     enqueueOperation: (operation) => operation(),
   },
   sessionPersistence: {
-    list: async () => [{ id: TARGET, cwd: 'E:/nowhere', createdAt: 1 }],
-    inspect: async () => ({ events: [] }),
-    locate: () => ({ kind: 'jsonl', path: join(logDir, 'session.jsonl.zstd') }),
+    // Real contract shape: list() returns { header, revision } snapshots,
+    // stat() observes one session, open(id, 'read') hands out a read handle.
+    list: async () => [{ header: targetHeader, revision: 'rev-target' }],
+    stat: async (id) => (id === TARGET ? { header: targetHeader, revision: 'rev-target', sizeBytes: 3 } : undefined),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 
@@ -172,11 +184,11 @@ const listCtx = {
   },
   sessionPersistence: {
     list: async () => [
-      { id: 'session-alpha-1', cwd: 'E:/Demo/alpha-project', createdAt: 100 },
-      { id: orphanId, cwd: 'E:/Demo/loose-project', createdAt: 200 },
+      { header: { id: 'session-alpha-1', cwd: 'E:/Demo/alpha-project', createdAt: 100 }, revision: 'r-alpha' },
+      { header: { id: orphanId, cwd: 'E:/Demo/loose-project', createdAt: 200 }, revision: 'r-orphan' },
     ],
-    inspect: async () => ({ events: [] }),
-    locate: () => undefined,
+    stat: async () => undefined,
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(listCtx)
@@ -246,15 +258,33 @@ assert.equal(localSpecPath('file:./pkg.tgz'), './pkg.tgz', 'file: resolves to it
 assert.equal(localSpecPath('^1.2.3'), null, 'semver range is not local')
 assert.equal(localSpecPath('1.2.3'), null, 'plain version is not local')
 
-/* ------------ deleteSession fails closed on shared log dirs ------------
- * The recursive rm owns the whole artifact directory. If another session
- * resolves into the same directory, deletion must refuse instead of
- * wiping the neighbor's log with it.
+/* ------------ layout encoders mirror the JSONL backend ------------
+ * sessionLogDirFor derives the physical session directory through the
+ * projectKey/encodeSegment algorithms. The vectors below pin the exact
+ * escaping rules (format.ts): safe characters pass, separator runs collapse
+ * to one dash, other code units escape as ~XXXX (uppercase 4-hex), the slug
+ * wraps in double dashes, and '.'/'..' get their dedicated forms.
  */
-const sharedRoot = join(here, '../.host-check-tmp/co-tenant')
-mkdirSync(join(sharedRoot, 'inside'), { recursive: true })
-writeFileSync(join(sharedRoot, 'inside', 'session-shared.jsonl.zstd'), '{}\n')
-const sharedCtx = {
+assert.equal(encodeSegmentOf('session-target'), 'session-target', 'plain ids pass through')
+assert.equal(encodeSegmentOf('.'), '~002E', "dot gets the dedicated escape")
+assert.equal(encodeSegmentOf('..'), '~002E~002E', "dotdot gets the dedicated escape")
+assert.equal(encodeSegmentOf('a~b'), 'a~007Eb', 'tilde escapes')
+assert.equal(encodeSegmentOf('中文'), '~4E2D~6587', 'non-ASCII escapes per code unit')
+assert.equal(projectKeyOf('E:/Demo/cli-tools'), '--E-Demo-cli-tools--', 'separator runs collapse to one dash; slug wraps in double dashes')
+assert.equal(projectKeyOf('a//b'), '--a-b--', 'consecutive separators do not stack dashes')
+assert.equal(projectKeyOf('/'), '--root--', 'all-separator paths fall back to root')
+const derivedDir = sessionLogDirFor(targetHeader)
+assert.ok(derivedDir && derivedDir.endsWith(join('--E-nowhere--', 'session-target')),
+  'session dir derives to <home>/sessions/<projectKey>/<id>: ' + String(derivedDir))
+
+/* -------- deleteSession fail-louds when the standard layout misses --------
+ * The persistence seam reports durable bytes (stat().sizeBytes) but the
+ * derived session-log directory does not exist — a custom backend root or a
+ * layout drift. Pretending success would orphan the log on disk, so the
+ * removal refuses with an actionable error. A session that never
+ * materialized (no durable bytes, no directory) stays a clean no-op.
+ */
+const missingDirCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
@@ -271,21 +301,23 @@ const sharedCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [
-      { id: 'session-shared', cwd: 'E:/nowhere-a', createdAt: 1 },
-      { id: 'session-neighbor', cwd: 'E:/nowhere-b', createdAt: 2 },
-    ],
-    inspect: async () => ({ events: [] }),
-    locate: (h) => ({ kind: 'jsonl', path: join(sharedRoot, 'inside', h.id + '.jsonl.zstd') }),
+    list: async () => [],
+    stat: async (id) => ({ header: { id, cwd: 'E:/nowhere-a', createdAt: 1 }, revision: 'r', sizeBytes: 4096 }),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
-apply(sharedCtx)
+apply(missingDirCtx)
 await assert.rejects(
-  () => sharedCtx.provided.sessionAdmin.deleteSession('session-shared'),
-  /same directory/,
-  'co-located neighbor blocks the recursive rm',
+  () => missingDirCtx.provided.sessionAdmin.deleteSession('session-ghost-bytes'),
+  /standard layout/,
+  'materialized bytes with no derived directory refuse the delete instead of orphaning the log',
 )
-assert.ok(existsSync(join(sharedRoot, 'inside')), 'shared directory untouched after refusal')
+// stat() → undefined (never materialized) resolves cleanly.
+missingDirCtx.sessionPersistence.stat = async () => undefined
+await assert.doesNotReject(
+  () => missingDirCtx.provided.sessionAdmin.deleteSession('session-unmaterialized'),
+  'an unmaterialized session (no durable bytes) deletes cleanly',
+)
 
 /* --------------- archive() validates session existence ---------------
  * Archiving an unknown id would pollute the archived set with garbage
@@ -309,9 +341,9 @@ const archiveCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-real', cwd: 'E:/nowhere', createdAt: 1 }],
-    inspect: async () => ({ events: [] }),
-    locate: () => undefined,
+    list: async () => [{ header: { id: 'session-real', cwd: 'E:/nowhere', createdAt: 1 }, revision: 'r' }],
+    stat: async () => undefined,
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(archiveCtx)
@@ -343,19 +375,49 @@ const brokenCtx = {
   },
   sessionPersistence: {
     list: async () => [],
-    inspect: async () => ({ events: [] }),
-    locate: () => undefined,
+    stat: async () => undefined,
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 assert.throws(() => apply(brokenCtx), /missing archived-set write path members \[setState\]/, 'mount fails loudly on a partial registry API')
 
 
+/* --------- apply() probes the persistence seam at mount ---------
+ * A dsh version that drops list/stat/open must fail the plugin mount loudly
+ * (mirroring the registry write-path probe above) instead of breaking every
+ * session-admin call on first use.
+ */
+const brokenPersistenceCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: () => undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [],
+    // stat deliberately missing — the handle-based seam requires it.
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing members \[stat\]/, 'mount fails loudly on a partial persistence API')
+
+
 /* ------------ list() reuses the summary cache across calls ------------
  * With a stable revision the second list() must not re-read events; the
- * inspect counter stays at the first-call count. Without revision tokens
- * (mocks) the TTL path still works but is not asserted here.
+ * open-handle counter stays at the first-call count.
  */
-let inspectCalls = 0
+let readCalls = 0
+const cacheHeader = { id: 'session-cached', cwd: 'E:/nowhere', createdAt: 1 }
 const cacheCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
@@ -373,22 +435,21 @@ const cacheCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-cached', cwd: 'E:/nowhere', createdAt: 1 }],
-    listSnapshots: async () => [{ header: { id: 'session-cached' }, revision: 'rev-1' }],
-    inspect: async () => {
-      inspectCalls++
-      return {
-        events: [{ type: 'session/title', data: { title: '缓存标题' } }],
-        revision: 'rev-1',
-      }
-    },
-    locate: () => undefined,
+    list: async () => [{ header: cacheHeader, revision: 'rev-1' }],
+    stat: async () => ({ header: cacheHeader, revision: 'rev-1', sizeBytes: null }),
+    open: async () => ({
+      read: async () => {
+        readCalls++
+        return [{ type: 'session/title', data: { title: '缓存标题' } }]
+      },
+      close: async () => {},
+    }),
   },
 }
 apply(cacheCtx)
 const first = await cacheCtx.provided.sessionAdmin.list()
 const second = await cacheCtx.provided.sessionAdmin.list()
-assert.equal(inspectCalls, 1, 'second list() reuses the cached summary (revision unchanged)')
+assert.equal(readCalls, 1, 'second list() reuses the cached summary (revision unchanged)')
 assert.equal(first.sessions[0].title, '缓存标题', 'first list derives the title from events')
 assert.equal(second.sessions[0].title, '缓存标题', 'second list serves the cached title')
 // deleteSession must evict the cache entry: the next list() re-reads the
@@ -396,13 +457,13 @@ assert.equal(second.sessions[0].title, '缓存标题', 'second list serves the c
 // exists — and the cache never accumulates dead sessions.
 await cacheCtx.provided.sessionAdmin.deleteSession('session-cached')
 const third = await cacheCtx.provided.sessionAdmin.list()
-assert.equal(inspectCalls, 2, 'deleteSession evicts the cached summary (next list re-reads)')
+assert.equal(readCalls, 2, 'deleteSession evicts the cached summary (next list re-reads)')
 
 /* ---------- list() keeps per-session summary read failures visible ----------
  * A broken event log must not masquerade as an empty, healthy session; failed
  * reads also bypass the revision cache so a later refresh can recover.
  */
-let failedInspectCalls = 0
+let failedOpenCalls = 0
 const summaryFailureCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
@@ -418,35 +479,36 @@ const summaryFailureCtx = {
     setState: async () => {}, enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-unreadable', cwd: 'E:/nowhere', createdAt: 1 }],
-    listSnapshots: async () => [{ header: { id: 'session-unreadable' }, revision: 'rev-broken' }],
-    inspect: async () => { failedInspectCalls++; throw new Error('event log unreadable') },
-    locate: () => undefined,
+    list: async () => [{ header: { id: 'session-unreadable', cwd: 'E:/nowhere', createdAt: 1 }, revision: 'rev-broken' }],
+    stat: async () => undefined,
+    open: async () => { failedOpenCalls++; throw new Error('event log unreadable') },
   },
 }
 apply(summaryFailureCtx)
 const failedFirst = await summaryFailureCtx.provided.sessionAdmin.list()
 const failedSecond = await summaryFailureCtx.provided.sessionAdmin.list()
 assert.equal(failedFirst.sessions[0].summaryError, 'event log unreadable', 'list exposes the per-session summary error')
-assert.equal(failedInspectCalls, 2, 'summary failures are retried instead of cached by revision')
+assert.equal(failedOpenCalls, 2, 'summary failures are retried instead of cached by revision')
 assert.equal(failedSecond.sessions[0].summaryError, 'event log unreadable', 'retry failure remains visible')
 
 /* -------- deleteSession re-checks that a session did not become live --------
- * The initial check happens before awaiting persistence.list(). If the session
- * opens during that await, the final guard must preserve its log directory.
+ * The initial check happens before awaiting persistence.stat(). If the session
+ * opens during that await, the final guard (right before the rm) must preserve
+ * its log directory.
  */
-const becomingLiveDir = join(here, '../.host-check-tmp/session-became-live')
+const becomingLiveHeader = { id: 'session-became-live', cwd: 'E:/nowhere', createdAt: 1 }
+const becomingLiveDir = sessionLogDirFor(becomingLiveHeader)
 rmSync(becomingLiveDir, { recursive: true, force: true })
 mkdirSync(becomingLiveDir, { recursive: true })
 writeFileSync(join(becomingLiveDir, 'session.jsonl.zstd'), '{}\n')
-const liveAfterList = new Map()
+const liveAfterStat = new Map()
 const becomingLiveCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => name === 'sessions' ? { get: (id) => liveAfterList.get(id) } : undefined,
+  get: (name) => name === 'sessions' ? { get: (id) => liveAfterStat.get(id) } : undefined,
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -455,12 +517,12 @@ const becomingLiveCtx = {
     setState: async () => {}, enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => {
-      liveAfterList.set('session-became-live', { id: 'session-became-live' })
-      return [{ id: 'session-became-live', cwd: 'E:/nowhere', createdAt: 1 }]
+    list: async () => [],
+    stat: async () => {
+      liveAfterStat.set('session-became-live', { id: 'session-became-live' })
+      return { header: becomingLiveHeader, revision: 'r', sizeBytes: 3 }
     },
-    inspect: async () => ({ events: [] }),
-    locate: () => ({ kind: 'jsonl', path: join(becomingLiveDir, 'session.jsonl.zstd') }),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(becomingLiveCtx)
@@ -499,8 +561,8 @@ const mcpCtx = {
   },
   sessionPersistence: {
     list: async () => [],
-    inspect: async () => ({ events: [] }),
-    locate: () => undefined,
+    stat: async () => undefined,
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(mcpCtx)
@@ -636,6 +698,7 @@ const legacyCtx = {
     setState: async () => {},
     enqueueOperation: (op) => op(),
   },
+  sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
 }
 apply(legacyCtx)
 const legacySvc = legacyCtx.provided.mcpAdmin
@@ -679,7 +742,7 @@ const placeholderCtx = {
     setState: async () => {},
     enqueueOperation: (op) => op(),
   },
-  sessionPersistence: { list: async () => [], inspect: async () => ({ events: [] }), locate: () => undefined },
+  sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
 }
 apply(placeholderCtx)
 await placeholderCtx.provided.mcpAdmin.upsert({
@@ -857,7 +920,8 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
  * dispose() exactly once before the log directory is removed. A live session
  * whose handle was never captured must fail closed with a clear message.
  */
-const closeLogDir = join(here, '../.host-check-tmp/session-close')
+const onlineHeader = { id: 'session-online', cwd: 'E:/nowhere', createdAt: 1 }
+const closeLogDir = sessionLogDirFor(onlineHeader)
 rmSync(closeLogDir, { recursive: true, force: true })
 mkdirSync(closeLogDir, { recursive: true })
 writeFileSync(join(closeLogDir, 'session.jsonl.zstd'), '{}\n')
@@ -890,9 +954,9 @@ const closeCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-online', cwd: 'E:/nowhere', createdAt: 1 }],
-    inspect: async () => ({ events: [] }),
-    locate: () => ({ kind: 'jsonl', path: join(closeLogDir, 'session.jsonl.zstd') }),
+    list: async () => [{ header: onlineHeader, revision: 'r' }],
+    stat: async (id) => (id === 'session-online' ? { header: onlineHeader, revision: 'r', sizeBytes: 3 } : undefined),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(closeCtx)
@@ -906,7 +970,8 @@ assert.ok(!existsSync(closeLogDir), 'closeSession removes the log directory')
 assert.deepEqual(closeDetachCalls, ['session-online'], 'closeSession detaches the accounting workspace')
 
 // A live session without a captured handle fails closed (nothing deleted).
-const noHandleDir = join(here, '../.host-check-tmp/session-no-handle')
+const noHandleHeader = { id: 'session-no-handle', cwd: 'E:/nowhere', createdAt: 1 }
+const noHandleDir = sessionLogDirFor(noHandleHeader)
 rmSync(noHandleDir, { recursive: true, force: true })
 mkdirSync(noHandleDir, { recursive: true })
 writeFileSync(join(noHandleDir, 'session.jsonl.zstd'), '{}\n')
@@ -928,9 +993,9 @@ const noHandleCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-no-handle', cwd: 'E:/nowhere', createdAt: 1 }],
-    inspect: async () => ({ events: [] }),
-    locate: () => ({ kind: 'jsonl', path: join(noHandleDir, 'session.jsonl.zstd') }),
+    list: async () => [{ header: noHandleHeader, revision: 'r' }],
+    stat: async (id) => (id === 'session-no-handle' ? { header: noHandleHeader, revision: 'r', sizeBytes: 3 } : undefined),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(noHandleCtx)
@@ -942,7 +1007,8 @@ await assert.rejects(
 assert.ok(existsSync(noHandleDir), 'no-handle failure leaves the log directory intact')
 
 // closeSession on a non-live session behaves exactly like deleteSession.
-const closeNonLiveDir = join(here, '../.host-check-tmp/session-close-nonlive')
+const closeNonLiveHeader = { id: 'session-close-nonlive', cwd: 'E:/nowhere', createdAt: 1 }
+const closeNonLiveDir = sessionLogDirFor(closeNonLiveHeader)
 rmSync(closeNonLiveDir, { recursive: true, force: true })
 mkdirSync(closeNonLiveDir, { recursive: true })
 writeFileSync(join(closeNonLiveDir, 'session.jsonl.zstd'), '{}\n')
@@ -963,9 +1029,9 @@ const closeNonLiveCtx = {
     enqueueOperation: (op) => op(),
   },
   sessionPersistence: {
-    list: async () => [{ id: 'session-close-nonlive', cwd: 'E:/nowhere', createdAt: 1 }],
-    inspect: async () => ({ events: [] }),
-    locate: () => ({ kind: 'jsonl', path: join(closeNonLiveDir, 'session.jsonl.zstd') }),
+    list: async () => [{ header: closeNonLiveHeader, revision: 'r' }],
+    stat: async (id) => (id === 'session-close-nonlive' ? { header: closeNonLiveHeader, revision: 'r', sizeBytes: 3 } : undefined),
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(closeNonLiveCtx)
@@ -1054,8 +1120,8 @@ const updateCtx = {
   },
   sessionPersistence: {
     list: async () => [],
-    inspect: async () => ({ events: [] }),
-    locate: () => undefined,
+    stat: async () => undefined,
+    open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
 apply(updateCtx)
@@ -1142,4 +1208,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; log removal; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; shared-log-dir refusal; archive existence validation; list() summary-cache reuse + delete eviction; registry write-path mount probe; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided')
