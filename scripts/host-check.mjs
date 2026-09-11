@@ -619,6 +619,45 @@ await assert.rejects(() => mcp.upsert({ id: 'bad id!', config: { transport: 'std
 await assert.rejects(() => mcp.upsert({ id: 'ok', config: { transport: 'http', serverName: 'x' } }), /transport must be/, 'invalid transport rejected')
 await assert.rejects(() => mcp.upsert({ id: 'ok', config: { transport: 'stdio', serverName: 'x' } }), /require a command/, 'stdio without command rejected')
 await assert.rejects(() => mcp.upsert({ id: 'mcp-duplicate', config: { transport: 'stdio', serverName: 'github2', command: 'npx' } }), /already used/, 'duplicate serverName rejected')
+// Nested-config validation at the write boundary: any of these would
+// otherwise be serialized into cordis.patch.yml verbatim and only fail
+// dsh's load-time schema at the next profile boot.
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-args', config: { transport: 'stdio', serverName: 'badargs', command: 'npx', args: '-y flag' } }),
+  /args must be an array of strings/, 'string args rejected (would char-split into the YAML list)',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-envkey', config: { transport: 'stdio', serverName: 'badenvkey', command: 'npx', env: { 'MY VAR': 'x' } } }),
+  /env key 'MY VAR' is not a valid name/, 'env key with a space rejected (unquoted YAML key)',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-envval', config: { transport: 'stdio', serverName: 'badenvval', command: 'npx', env: { TOKEN: 42 } } }),
+  /env\['TOKEN'\] must be a string/, 'non-string env value rejected (z.dict(String))',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-timeout', config: { transport: 'stdio', serverName: 'badtimeout', command: 'npx', toolCallTimeoutMs: NaN } }),
+  /toolCallTimeoutMs must be a positive finite number/, 'NaN toolCallTimeoutMs rejected (would emit invalid YAML)',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-unknown', config: { transport: 'stdio', serverName: 'badunknown', command: 'npx', transportx: 1 } }),
+  /unknown fields for stdio/, 'unknown config field rejected',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-recon', config: { transport: 'stdio', serverName: 'badrecon', command: 'npx', reconnect: { initialDelayMs: 5000, maxDelayMs: 100 } } }),
+  /initialDelayMs must be less than or equal to/, 'reconnect delay inversion rejected (resolveReconnectPolicy parity)',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-reconkey', config: { transport: 'stdio', serverName: 'badreconkey', command: 'npx', reconnect: { backoff: true } } }),
+  /reconnect carries unknown fields/, 'unknown reconnect field rejected',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-header', config: { transport: 'streamable-http', serverName: 'badheader', url: 'http://x/mcp', headers: { 'bad header': 'v' } } }),
+  /headers key 'bad header' is not a valid name/, 'header key with a space rejected',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-args-http', config: { transport: 'streamable-http', serverName: 'badargshttp', url: 'http://x/mcp', args: ['x'] } }),
+  /unknown fields for streamable-http/, 'stdio-only field rejected on http transport',
+)
 // The final patch file stays a valid YAML list.
 const patchText = readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8')
 assert.ok(patchText.includes('mcp-github'), 'patch file retains the entry id')
