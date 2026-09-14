@@ -509,6 +509,28 @@ try {
     assert.equal(shell.calls.at(-1).command, 'aa.sh', 'allow-all executes without confirmation')
   })
 
+  await check('sessionPersistence without locate degrades transcript_path without throwing', async () => {
+    // The abstract sessionPersistence service has no path API; only the
+    // JSONL backend carries a runtime locate method (private on its impl).
+    // Any other backend (e.g. SQLite, or a future rename) must NOT take the
+    // listener down with a TypeError on every PreToolUse. Build a fresh ctx
+    // whose sessionPersistence lacks locate, drive the listener, and assert
+    // transcript_path degrades to '' and the hook still runs.
+    const shell = makeShell()
+    const noLocateCtx = makeStubCtx(shell, null)
+    noLocateCtx.get = (name) => (name === 'sessionPersistence'
+      ? { /* no locate */ }
+      : noLocateCtx.get(name))
+    applyProjectHooks(noLocateCtx, { settings: { projectHooksTrust: 'allow-all' } })
+    const nlAgent = makeAgent('s-no-locate', projectDir)
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'no-locate.sh' }] }] })
+    shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await noLocateCtx.listeners.get('tools/pre-execute')(execOf(nlAgent, 'Bash', {}), async () => ({ kind: 'allow' }))
+    const payload = JSON.parse(shell.calls.at(-1).stdin)
+    assert.equal(payload.transcript_path, '', 'transcript_path degrades to empty when locate is missing')
+    assert.equal(shell.calls.at(-1).command, 'no-locate.sh', 'hook still runs when locate is missing')
+  })
+
   await check('teardown aborts detached runs and clears the cache', () => {
     assert.equal(ctx.effects.length, 1)
     ctx.effects[0]()

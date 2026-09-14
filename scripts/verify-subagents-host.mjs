@@ -227,12 +227,15 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     writeFileSync(join(dir, 'cordis.patch.yml'), BASE_PATCH)
 
     const registered = { provided: null, warns: [], interruptions: [] }
+    // Session exposes NO public `.events` property — the synchronous
+    // snapshotEvents() reader (dsh-deprecated, still functional) is what the
+    // runtime panel reads; the stub models that shape.
     const liveChild = {
       id: 'child-running',
       status: 'running',
       session: {
         header: { origin: 'subagent', parentSession: 'parent-session', delegationDepth: 2 },
-        events: [{ type: 'subagent/descriptor', data: { label: '检查变更', provider: 'spawn', mode: 'continuable' } }],
+        snapshotEvents: () => [{ type: 'subagent/descriptor', data: { label: '检查变更', provider: 'spawn', mode: 'continuable' } }],
       },
     }
     const ctx = {
@@ -250,7 +253,7 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
         interrupt: (childId, reason) => registered.interruptions.push({ childId, reason }),
       },
       get: (key) => key === 'agents' ? {
-        list: () => [liveChild, { id: 'idle-child', status: 'idle', session: liveChild.session }, { id: 'root', status: 'running', session: { header: { origin: 'user' }, events: [] } }],
+        list: () => [liveChild, { id: 'idle-child', status: 'idle', session: liveChild.session }, { id: 'root', status: 'running', session: { header: { origin: 'user' } } }],
         get: (id) => id === liveChild.id ? liveChild : undefined,
       } : undefined,
     }
@@ -285,7 +288,6 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     assert.equal(initial.meta.providers[0].continuable, true)
 
     const runtime = await service.runtimeList()
-    void console.error('DEBUG runtime:', JSON.stringify(runtime.agents))
     assert.deepEqual(runtime.agents, [{
       id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
       eventCount: 1,
@@ -499,6 +501,15 @@ await check('createCliCommandProvider: {prompt} argv, completed/error/aborted ma
   assert.match(spawnSpecs[0].argv[0], /gemini/)
   assert.equal(spawnSpecs[0].argv[1], '-p')
   assert.equal(spawnSpecs[0].argv[2], '研究一下', '{prompt} replaced with prompt text')
+  // Core SubprocessOutputMode: collect is a bounded { maxBytes } object. A
+  // bare 'collect' string duck-types through spawn's isCollect check into
+  // OutputCollector(undefined), whose cap comparisons are all NaN-false —
+  // the stream would never trim.
+  assert.deepEqual(spawnSpecs[0].stdio, {
+    stdin: 'ignore',
+    stdout: { maxBytes: 2 * 1024 * 1024 },
+    stderr: { maxBytes: 64 * 1024 },
+  }, 'stdout/stderr ride bounded { maxBytes } collectors')
   assert.equal(result.stopReason, 'completed')
   assert.deepEqual(result.output, [{ type: 'text', text: 'hello stdout' }])
   await run.dispose()

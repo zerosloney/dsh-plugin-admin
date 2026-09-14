@@ -343,6 +343,27 @@ await checkAsync('runtimeInstall writes dependency + cordis patch row (stub pnpm
   assert.ok(patchText.includes('id: webhook-runtime'), 'patch row id present')
 })
 
+await checkAsync('list() awaits agentPresets.list() (it is async upstream)', async () => {
+  // The agentPresets service exposes `async list(): Promise<AgentPreset[]>`
+  // (see dsh preset-agent-presets). A sync spread of the Promise left the
+  // panel's preset dropdown empty. Inject an async list() and confirm it
+  // surfaces in `presets`.
+  const presetCallCount = { list: 0 }
+  const previousGet = ctx.get
+  ctx.get = (key) => {
+    if (key === 'agentPresets') {
+      return { list: async () => { presetCallCount.list++; return [{ id: 'p1', name: 'P1' }, { id: 'p2' }] } }
+    }
+    if (key === 'permissionPresets') return { names: ['workspace-write', 'danger-full-access', 'custom'] }
+    return previousGet(key)
+  }
+  const list = await ctx.provided.webhookAdmin.list()
+  assert.deepEqual(list.presets, [{ id: 'p1', name: 'P1' }, { id: 'p2', name: 'p2' }], 'presets surfaced via await (name defaults to id)')
+  assert.equal(presetCallCount.list, 1, 'agentPresets.list() was awaited once')
+  assert.deepEqual(list.permissionPresetNames, ['workspace-write', 'danger-full-access'], '"custom" filtered out')
+  ctx.get = previousGet
+})
+
 console.log(results.join('\n'))
 console.log(`verify-webhook-triggers OK: ${results.length} checks`)
 

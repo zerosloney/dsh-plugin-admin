@@ -412,6 +412,57 @@ const brokenPersistenceCtx = {
 assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing members \[stat\]/, 'mount fails loudly on a partial persistence API')
 
 
+/* ------------ mistyped config budgets fail loud at mount ------------
+ * Deployment-varying knobs are validated Config fields: a wrong type must
+ * reject the mount (dsh rule: misconfiguration fails loud), never silently
+ * degrade the budget it tunes.
+ */
+{
+  let threw = null
+  try {
+    // apply(ctx, config) — the config row is the SECOND argument.
+    await apply({ baseUrl: pathToFileURL(join(here, '..')).href }, { gitTimeoutMs: 'soon' })
+  } catch (error) {
+    threw = error
+  }
+  assert.ok(threw !== null && /config\.gitTimeoutMs/.test(threw.message), 'mistyped config budget fails loud at mount: ' + threw)
+}
+
+/* ------------ read() shape drift stays visible ------------
+ * The current core wraps reads as { eventState, events }; an unrecognized
+ * shape must surface as the row's summaryError, never fold into a healthy
+ * empty session.
+ */
+{
+  const driftHeader = { id: 'session-drift', cwd: 'E:/nowhere', createdAt: 1 }
+  const shapeDriftCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    get: () => undefined,
+    on: () => () => {},
+    typert: { register: () => () => {} },
+    workspaceRegistry: {
+      list: () => [],
+      archivedSessionIds: [],
+      requireState: () => ({ archivedSessionIds: [] }),
+      setState: async () => {},
+      enqueueOperation: (op) => op(),
+    },
+    sessionPersistence: {
+      list: async () => [{ header: driftHeader, revision: 'rev-1' }],
+      stat: async () => ({ header: driftHeader, revision: 'rev-1', sizeBytes: null }),
+      open: async () => ({ read: async () => ({ nope: true }), close: async () => {} }),
+    },
+  }
+  apply(shapeDriftCtx)
+  const drifted = await shapeDriftCtx.provided.sessionAdmin.list()
+  assert.match(drifted.sessions[0].summaryError, /unrecognized shape/, 'read shape drift surfaces as a per-session error row')
+}
+
+
 /* ------------ list() reuses the summary cache across calls ------------
  * With a stable revision the second list() must not re-read events; the
  * open-handle counter stays at the first-call count.
@@ -440,7 +491,10 @@ const cacheCtx = {
     open: async () => ({
       read: async () => {
         readCalls++
-        return [{ type: 'session/title', data: { title: '缓存标题' } }]
+        // Current core shape: SessionHandleReadResult ({ eventState, events }).
+        // The bare-array shape older builds returned must keep working too —
+        // covered by the array stubs throughout this file.
+        return { eventState: 'shared-frozen', events: [{ type: 'session/title', data: { title: '缓存标题' } }] }
       },
       close: async () => {},
     }),
@@ -1235,6 +1289,41 @@ rmSync(npmrcProfile, { recursive: true, force: true })
 const defaultRegistry = resolveRegistry(join(here, '..'))
 assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('https://'), 'registry resolution returns a usable URL: ' + defaultRegistry)
 
+// credential-admin: record keys (scope/id with '/') must NOT be surfaced as
+// writable refs — they are a disjoint namespace, fail assertCredentialRef,
+// and previously leaked into the panel as "describe 失败" rows. The
+// declared refs the panel offers stay intact.
+{
+  const declaredRefs = ['OPENAI_API_KEY']
+  let captured
+  const captureCtx = {
+    baseUrl: 'file:///nowhere',
+    logger: { info: () => {}, warn: () => {} },
+    get: (name) => name === 'credentials' ? {
+      listRecords: async () => [
+        { key: 'client-connection/browser-session' }, // record key — filtered
+        { key: 'dsh-tool-subagent/grants/foo' },     // record key — filtered
+      ],
+      describe: async (ref) => ({
+        configured: true,
+        source: 'env',
+        writable: true,
+        ref,
+      }),
+    } : undefined,
+    effect: (fn) => { fn(); return () => {} },
+    provide: (_k, v) => { captured = v },
+  }
+  const { applyCredentialAdmin } = await import(new URL('../lib/credential-admin.js', import.meta.url).href)
+  // Lazy provider form: credentialRefsFor is resolved per list(), so settings
+  // namespaces registered after this mount still surface.
+  const invocations = applyCredentialAdmin(captureCtx, () => declaredRefs)() // returns the invoker; callers invoke it
+  const list = await captured.list()
+  const refNames = list.refs.map((r) => r.ref).sort()
+  assert.deepEqual(refNames, ['OPENAI_API_KEY'], 'declared ref surfaces; record keys are filtered out')
+  assert.ok(Array.isArray(invocations) && invocations.length === 3, 'three credential invocations registered (list/set/unset)')
+}
+
 // Release every mounted command-hook fs.watch before removing the temp
 // home, and restore the developer's real DSH_HOME.
 for (const dispose of globalEffectDisposers) {
@@ -1247,4 +1336,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider)')

@@ -143,6 +143,7 @@ try {
       description: '按团队规范审查改动',
       prompt: '# 审查\n\n请审查 $ARGUMENTS',
       inputHint: '[<file-path>]',
+      images: true,
       enabled: true,
     })
     const entry = result.commands.find(c => c.name === 'review')
@@ -152,6 +153,9 @@ try {
     const registration = mounted.registered.find(r => r.name === 'review')
     assert.ok(registration, 'registered into ctx.commands')
     assert.equal(registration.input.hint, '[<file-path>]')
+    // Core CommandInputDescriptor field is `attachments` — an `images` key
+    // would be silently ignored and the command would refuse attachments.
+    assert.equal(registration.input.attachments, true, 'images toggle maps to the core attachments field')
     assert.equal(registration.description, '按团队规范审查改动')
   })
 
@@ -175,6 +179,10 @@ try {
     await assert.rejects(() => service.saveCommand({ name: 'ok', description: '', prompt: 'y' }), /描述不能为空/)
     await assert.rejects(() => service.saveCommand({ name: 'ok', description: 'x', prompt: '   ' }), /提示词不能为空/)
     await assert.rejects(() => service.deleteCommand('../escape'), /命令名称不合法/)
+    // Trust-boundary guard on the rename path: originalName travels into a
+    // filesystem rm, so a value outside the command-name grammar must fail
+    // loud — the same grammar check deleteCommand applies.
+    await assert.rejects(() => service.saveCommand({ name: 'review', originalName: '../escape', description: 'x', prompt: 'y' }), /原命令名称不合法/)
   })
 
   await check('commands: rename moves the file and re-registers', async () => {

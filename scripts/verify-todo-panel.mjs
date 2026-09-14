@@ -86,6 +86,18 @@ check('parseGitNumstat sums per path and normalizes rename spellings', () => {
   assert.deepEqual(parseGitNumstat(null), new Map())
 })
 
+check('parseGitNumstat passes unicode paths verbatim', () => {
+  // The host's computeFileStats runs git with `-c core.quotePath=false` so
+  // non-ASCII paths arrive raw — matching the raw form `status -z` uses —
+  // and the per-file join works for CJK filenames. The parser must NOT
+  // unquote or otherwise transform such bytes; a defensive sanity check.
+  const map = parseGitNumstat('3\t1\t中文.md\n5\t2\t日本語.txt\n')
+  assert.ok(map.has('中文.md'))
+  assert.ok(map.has('日本語.txt'))
+  assert.deepEqual(map.get('中文.md'), { added: 3, removed: 1 })
+  assert.deepEqual(map.get('日本語.txt'), { added: 5, removed: 2 })
+})
+
 check('gitFileStats joins status rows with numstat and fills untracked lines', () => {
   const statusOut = ' M a.txt\0?? c.txt\0'
   const numstatOut = '1\t2\ta.txt\n'
@@ -295,11 +307,16 @@ const exportCtx = {
   },
   sessionPersistence: {
     list: async () => [{ header: { id: 'exp-session', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r' }],
+    // SessionHeader carries NO title (the display title lives in the
+    // projection cache / session/title events) — the stub models that.
     stat: async (id) => (id === 'exp-session'
-      ? { header: { id: 'exp-session', title: '修复登录', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r', sizeBytes: null }
+      ? { header: { id: 'exp-session', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r', sizeBytes: null }
       : undefined),
     open: async (id) => ({
-      read: async () => (id === 'exp-session' ? EXPORT_EVENTS : []),
+      // Current core read shape: SessionHandleReadResult ({ eventState, events }).
+      read: async () => (id === 'exp-session'
+        ? { eventState: 'shared-frozen', events: EXPORT_EVENTS }
+        : { eventState: 'shared-frozen', events: [] }),
       close: async () => {},
     }),
   },
@@ -309,10 +326,13 @@ const exportAdmin = exportCtx.provided.sessionAdmin
 
 await checkAsync('exportSession renders the persisted log into markdown + filename', async () => {
   const out = await exportAdmin.exportSession('exp-session')
+  // The title folds from the log's session/title event — the header itself
+  // carries none (core SessionHeader has no title field).
   assert.ok(out.markdown.startsWith('# 修复登录'))
   assert.ok(out.markdown.includes('## 🤖 助手'), 'assistant section present')
   assert.equal(out.messages, 3)
   assert.ok(out.filename.startsWith('dsh-session-'), 'download filename shaped')
+  assert.ok(out.filename.includes('修复登录'), 'filename slug carries the log title')
   await assert.rejects(() => exportAdmin.exportSession('ghost'), /does not exist/, 'unknown session fails loud')
 })
 
@@ -323,6 +343,80 @@ await checkAsync('gitDiff returns the workspace diff and flags nothing when smal
   assert.equal(out.truncated, false)
   const none = await exportAdmin.gitDiff('ghost')
   assert.deepEqual(none, { diff: '', truncated: false }, 'unknown session → empty, not error')
+})
+
+/* searchSessions host half: stubs shaped per the CORE contract (session-query
+ * types.ts: request { query, limit }, page { items }, hit { header, live,
+ * persisted, bestMatch: { snippet } } — the header carries no title). */
+const searchCtx = {
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provide: (key, service) => { searchCtx.provided ??= {}; searchCtx.provided[key] = service },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
+  on: () => () => {},
+  logger: { info: () => {}, warn: () => {} },
+  commands: { register: () => () => {} },
+  typert: { register: () => () => {} },
+  get(key) {
+    if (key === 'sessionQuery') return searchCtx.sessionQuery
+    if (key === 'sessionProjectionCache') return searchCtx.projectionCache
+    return undefined
+  },
+  sessionQuery: {
+    searchSessions: async (request) => {
+      searchCtx.searchRequest = request
+      return {
+        items: [
+          {
+            header: { id: 'hit-1', cwd: 'E:/Demo/alpha', createdAt: 1, isSeeded: false, version: 3 },
+            live: false,
+            persisted: true,
+            bestMatch: { snippet: '… 请帮我将 dsh-session-admin 合并 …' },
+          },
+          {
+            header: { id: 'hit-2', cwd: 'E:/Demo/beta', createdAt: 2, isSeeded: false, version: 3 },
+            live: false,
+            persisted: true,
+            bestMatch: { snippet: 'second' },
+          },
+        ],
+      }
+    },
+  },
+  projectionCache: {
+    cachedSnapshot(header, offset) {
+      searchCtx.snapshotCalls.push([header, offset])
+      return header.id === 'hit-1' ? { values: { title: '分析与重构插件系统架构' } } : undefined
+    },
+  },
+  workspaceRegistry: {
+    list: () => [{ id: 'ws-1', title: 'Alpha', path: 'E:/Demo/alpha', sessionIds: ['hit-1'] }],
+    archivedSessionIds: [],
+    requireState: () => ({ archivedSessionIds: [] }),
+    setState: async () => {},
+    enqueueOperation: (op) => op(),
+  },
+  sessionPersistence: {
+    list: async () => [],
+    stat: async () => undefined,
+    open: async () => { throw new Error('not used by searchSessions') },
+  },
+}
+searchCtx.snapshotCalls = []
+await apply(searchCtx)
+
+await checkAsync('searchSessions maps the core SessionSearchHit contract', async () => {
+  const admin = searchCtx.provided.sessionAdmin
+  const out = await admin.searchSessions('  合并  ')
+  assert.deepEqual(searchCtx.searchRequest, { query: '合并', limit: 30 }, 'request rides the core { query, limit } shape')
+  assert.equal(searchCtx.snapshotCalls.length, 2, 'every hit consults the projection checkpoint')
+  assert.equal(searchCtx.snapshotCalls[0][1], 0, 'checkpoint queried with the persisted cut 0')
+  assert.equal(out.hits.length, 2)
+  assert.equal(out.hits[0].sessionId, 'hit-1')
+  assert.equal(out.hits[0].title, '分析与重构插件系统架构', 'projection-cache title wins')
+  assert.equal(out.hits[0].snippet, '… 请帮我将 dsh-session-admin 合并 …', 'snippet folds from bestMatch')
+  assert.equal(out.hits[0].workspaceTitle, 'Alpha')
+  assert.equal(out.hits[1].title, 'beta', 'title falls back to the cwd basename')
+  assert.equal(out.hits[1].workspaceTitle, null)
 })
 
 check('typert descriptor wires the two new session invocations', () => {
