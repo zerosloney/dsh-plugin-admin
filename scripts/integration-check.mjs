@@ -267,6 +267,34 @@ const PROBES = [
       ['toolCallTimeoutMs/failOnStartupError/reconnect config fields', t => has('toolCallTimeoutMs', 'failOnStartupError', 'reconnect')(t)],
     ],
   },
+  {
+    id: 'AgentHandle capture shape (installAgentHandleCapture keys)',
+    file: 'packages/core/agent/src/index.ts',
+    checks: [
+      // The handle-capture wrapper only captures objects with these members
+      // (closeSession dispose path); a rename here silently degrades online
+      // close to "restart to delete".
+      ['AgentHandle keeps agent + dispose(): Promise<void>', t => /export interface AgentHandle \{[\s\S]*?agent: Agent[\s\S]*?dispose\(\): Promise<void>/.test(t)],
+    ],
+  },
+  {
+    id: 'JSONL private locate (transcript_path hook payload)',
+    file: 'packages/session/session-persistence-jsonl/src/index.ts',
+    checks: [
+      // project-hooks transcriptPathFor duck-types this private method and
+      // degrades to '' when absent — the probe only warns about payload drift.
+      ['locate(meta: SessionHeader): SessionLocation still declared', t => /private locate\(meta: SessionHeader\): SessionLocation \{/.test(t)],
+    ],
+  },
+  {
+    id: 'Session.snapshotEvents (running subagent tail reader)',
+    file: 'packages/core/session/src/index.ts',
+    checks: [
+      // subagentAdmin.runtimeList rides this deprecated synchronous reader —
+      // its removal turns the 运行中 tab's eventCount/descriptor lookups empty.
+      ['snapshotEvents(fromSeq, toSeqExclusive) still declared', t => /snapshotEvents\(\s*fromSeq: SessionLogOffset = SessionLogOffset\(0\),\s*toSeqExclusive: SessionLogOffset = this\.seq,?\s*\)/.test(t)],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */
