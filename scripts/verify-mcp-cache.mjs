@@ -67,6 +67,7 @@ const defaultProbeAnswer = () => ({
   serverInfo: { name: 'demo-mcp', version: 'v1.0' },
   toolCount: 3,
   tools: ['fetch_url', 'fetch_urls', 'browser_install'],
+  toolRequired: { fetch_url: ['url'] },
 })
 const call = (method, args) => {
   if (method === 'mcpAdmin/list') return Promise.resolve({ ok: true, value: { entries: hostState.entries } })
@@ -146,6 +147,7 @@ assert.ok(document.body.textContent.includes('缓存于'), 'fresh result labelle
 const persisted = JSON.parse(window.localStorage.getItem(CACHE_KEY))
 assert.ok(persisted['mcp-demo'], 'probe persisted to localStorage')
 assert.equal(typeof persisted['mcp-demo'].at, 'number', 'probe time persisted')
+assert.deepEqual(persisted['mcp-demo'].result.toolRequired, { fetch_url: ['url'] }, 'required-param map persisted with the probe')
 s2.root.unmount()
 document.body.removeChild(host2)
 
