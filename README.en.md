@@ -57,8 +57,19 @@ Or from inside the dsh web UI: **Plugins → Extensions tab → type `dsh-plugin
 - Timeout process-tree kill (`taskkill /T /F`) on package and MCP-probe operations.
 - Webhook inbound: **timing-safe secret compare** (SHA-256 both sides), empty secret **rejects all** (at save *and* at request time), secret verified **before** the body is read, bounded 1MiB payloads.
 - Credential values **never cross to the browser** — presence/source/writability only.
+- The MCP stdio probe launches the server with the same **scrubbed environment** the real dsh-mcp-client transport uses (credential-shaped `KEY|PASSWORD|SECRET|TOKEN` names and `DSH_*` stripped before the entry's explicit `env` overlay) — probing an untrusted server leaks no more ambient secrets than a real launch.
 - Dangerous deletes require double confirmation; same-name session deletion is refused by design.
 - Host-side validation fails loud; the client pre-checks and explains (reserved names, duplicates, unknown tools, invalid regex).
+
+## dsh internal seams & version compatibility
+
+The plugin rides the live Cordis Context with zero dsh imports. Public surfaces (`ctx.commands` / `ctx.shell` / `ctx.agents` / `ctx.sessionPersistence` list-stat-open / `ctx.credentials`) are stable; three deeper couplings rely on dsh/cordis internals and are guarded by mount-time fail-loud shape probes or runtime degradation:
+
+1. **workspaceRegistry soft-private write path** — `requireState()` / `setState()` / `enqueueOperation()` (TypeScript `private` in `packages/workspace/workspace`); probed at mount with the missing members named.
+2. **Physical session-log layout** — the delete path derives the JSONL backend's log directory (`projectKey` / `encodeSegment`); a stat cross-check **refuses to delete** (loud error) on layout drift or a custom persistence backend.
+3. **Hooks-bridge hot restart** — `fiber.update(config, true)`, a cordis-internal API; on failure the panel reports "saved — restart dsh to apply".
+
+Verified baseline: **dsh 0.1.5-rc.2 line (2026-09 checkout, `@modelcontextprotocol/sdk` 1.29.0)**. After upgrading dsh/cordis, re-run `npm test` — `host-check` and the verify scripts assert these seams against real contracts.
 
 ## Development
 

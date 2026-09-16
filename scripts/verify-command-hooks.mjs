@@ -256,9 +256,9 @@ try {
     const active = JSON.parse(readFileSync(hooksPath, 'utf8'))
     assert.equal(active.hooks.PostToolUse, undefined, 'removed from the active file')
     assert.equal(result.hooks.find(h => h.command === 'notify.sh').enabled, false)
-    // The entry moved stores, so its id moved with it (active ids are
-    // event/group/hook, sidecar ids are disabled/index) — re-list before
-    // re-enabling, exactly like the panel does.
+    // The entry moved stores, so its id moved with it (ids are content
+    // hashes: active `event/<hash>`, sidecar `disabled/<hash>`) — re-list
+    // before re-enabling, exactly like the panel does.
     const relisted = await service.listHooks()
     const disabledHook = relisted.hooks.find(h => h.command === 'notify.sh')
     assert.equal(disabledHook.id.startsWith('disabled/'), true, 'sidecar id shape')
@@ -272,7 +272,7 @@ try {
     const hook = listed.hooks.find(h => h.command === 'notify.sh')
     const result = await service.deleteHook(hook.id)
     assert.equal(result.hooks.find(h => h.command === 'notify.sh'), undefined)
-    await assert.rejects(() => service.deleteHook('PreToolUse/99/0'), /钩子不存在/)
+    await assert.rejects(() => service.deleteHook('PreToolUse/00000000'), /钩子不存在/)
   })
 
   await check('hooks: bridge detection rides the registry; hot-restart through Fiber.update', async () => {

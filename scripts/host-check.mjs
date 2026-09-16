@@ -28,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -1173,6 +1173,42 @@ assert.equal(inBoxSkip.updateAvailable, false, 'in-box bundle is skipped')
 const deadRegistry = await checkUpdate('http://127.0.0.1:1', { name: 'dsh-remote-tool', version: '0.5.1', dependency: true, localPath: null })
 assert.equal(deadRegistry.updateAvailable, false, 'dead registry reports no update')
 assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
+
+// scrubbedProbeEnv: the MCP stdio probe must launch the server on the same
+// scrubbed base the real dsh-mcp-client transport uses — credential-shaped
+// (KEY|PASSWORD|SECRET|TOKEN) and DSH_* names stripped from the parent env,
+// the entry's explicit env layered back on top (explicit survives the scrub).
+{
+  const saved = {
+    HOST_SECRET_TOKEN: process.env.HOST_SECRET_TOKEN,
+    MY_API_KEY: process.env.MY_API_KEY,
+    DSH_HOME: process.env.DSH_HOME,
+    PATH: process.env.PATH,
+    HOST_PLAIN: process.env.HOST_PLAIN,
+  }
+  process.env.HOST_SECRET_TOKEN = 's3cret'
+  process.env.MY_API_KEY = 'sk-123'
+  process.env.DSH_HOME = 'E:/dsh-home'
+  process.env.HOST_PLAIN = 'plain-value'
+  try {
+    const scrubbed = scrubbedProbeEnv()
+    assert.equal(scrubbed.HOST_SECRET_TOKEN, undefined, 'credential-shaped name is stripped')
+    assert.equal(scrubbed.MY_API_KEY, undefined, 'KEY-shaped name is stripped')
+    assert.equal(scrubbed.DSH_HOME, undefined, 'DSH_-prefixed name is stripped')
+    assert.equal(scrubbed.HOST_PLAIN, 'plain-value', 'ordinary name survives')
+    assert.equal(scrubbed.PATH, process.env.PATH, 'PATH survives')
+    // The probe path (and only the probe path) may layer the entry's own env:
+    // an explicit MCP_GITHUB_TOKEN the user configured must survive the scrub.
+    const overlaid = scrubbedProbeEnv({ MCP_GITHUB_TOKEN: 'cfg-token', HOST_PLAIN: 'overridden' })
+    assert.equal(overlaid.MCP_GITHUB_TOKEN, 'cfg-token', 'explicit entry env survives the scrub')
+    assert.equal(overlaid.HOST_PLAIN, 'overridden', 'explicit env overrides the base')
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
 
 // Cache-hit regression: the 5-minute in-memory cache used to store only
 // { name, latest }, so a panel re-open inside the TTL read the cached entry as

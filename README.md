@@ -151,6 +151,18 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 
 ---
 
+## dsh 内部接缝与版本兼容性
+
+本插件刻意零 dsh 导入，全部骑在运行时的 Cordis Context 上——其中一部分是 dsh 的公开服务面（`ctx.commands` / `ctx.shell` / `ctx.agents` / `ctx.sessionPersistence` 的 list/stat/open、`ctx.credentials` 等），另有一部分依赖 **dsh/cordis 的内部实现细节**。这些接缝在依赖的 dsh 版本上都有挂载期 fail-loud 形状探测或运行时降级，不会静默坏掉，但升级 dsh 时应关注以下三处最深耦合：
+
+1. **workspaceRegistry 的 soft-private 写路径**：归档/删除会话使用 `requireState()` / `setState()` / `enqueueOperation()`（`packages/workspace/workspace` 中为 TypeScript `private` 成员）。挂载时探测，缺失即抛错并指明成员名。
+2. **会话日志的物理布局**：`sessionAdmin` 的删除路径按 `dsh-session-persistence-jsonl` 的内部目录布局（`projectKey` / `encodeSegment`）推导日志目录并递归删除。存在 stat 交叉校验：布局漂移或自定义持久化后端时**拒绝删除并报错**，绝不误删。
+3. **钩子桥热重启走 cordis fiber 内部**：`hooks.json` 保存后通过 `fiber.update(config, true)` 重启已挂载的桥插件（cordis 内部 API）。失败时降级为「已保存，需重启 dsh 生效」。
+
+已验证基线：**dsh 0.1.5-rc.2 线（2026-09 checkout，`@modelcontextprotocol/sdk` 1.29.0）**。升级 dsh / cordis 后请重跑 `npm test`（其 `host-check` / 各 verify 脚本会对上述接缝做真实契约断言）。
+
+---
+
 ## 信任边界说明
 
 该插件允许浏览器端触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥（`@deepseek-ai/dsh-hooks-claude-code`）的一键安装与挂载（桥会在宿主本地执行钩子命令）以及会话日志物理删除，与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。提示词命令只是把文本 steer 进会话（与手打消息同级）；本插件管理 hooks 配置文件、不改变桥自身的信任级别——能改配置的人本来就能在宿主上执行命令。暴露到非本机前请务必评估权限范围。
