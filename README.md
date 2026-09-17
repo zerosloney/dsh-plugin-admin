@@ -15,7 +15,7 @@ dsh web UI 插件：把管理能力拆进设置界面的既有结构——在官
 - **🔑 凭据管理（v1.6.0，设置栏独立页）**：宿主 `ctx.credentials` 提供 set/unset/describe 却无任何 web 管理面——本页补上：列出运行中 composition 声明的全部凭据引用（发现自 settings schema 的 credential-ref 角色 + record 枚举），每行显示 引用名 + 「已配置 / 未配置」徽标 + 来源（环境变量 / `$DSH_HOME/.credentials.yaml` / 凭据记录）+ 只读提示；支持 `✎ 设置/更新`（密文输入，**绝不回显密钥值**）与 `清除`。host 侧 `credentialAdmin` RPC（list/set/unset）——`credentialRow` / `assertCredentialRef` 纯函数可测，POSIX 名白名单防注入。
 - **🩺 会话体检报告（v1.7.0，历史会话卡片内嵌）**：每张会话卡片新增「🩺 体检」——host 经 `sessionAdmin/healthReport` 折叠该会话日志：`tool/call`+`tool/result` 按 **callId 配对**精确归因每工具的调用次数与失败数（错误码逐类统计）、`turn/end.reason` 分类（完成/中断/出错/max-tokens）、`assistant/attempt` 计重试、压缩事件计数；报告卡展示一行摘要（「2 个 turn · 1 完成 · 1 中断 · 1 次重试」）+ 工具统计行（名称 ×次数 ❌错误码）+ 主要错误列表。折叠核心 `foldHealthReport` / `healthSummaryLine` 为导出纯函数（verify-todo-panel 覆盖 callId 配对归因）。
 - **🔎 会话全文检索（v1.6.0，历史会话页内嵌）**：历史会话页新增「全文搜索」切换——host 经 `ctx.sessionQuery.searchSessions` 跨全部会话按消息内容检索（cursor 分页的官方索引服务），命中的会话以卡片展示（标题 + 摘要片段），点击可跳转。host 侧 `sessionAdmin/searchSessions` RPC 把命中整形为既有 session header 形状，直接复用面板渲染。
-- **🪝 Webhook 触发（v1.5.0，设置栏独立页）**：入站 Webhook → Agent 动作的完整链路——每条规则暴露 `POST /webhook-triggers/<规则ID>` 端点（`x-webhook-secret` 共享密钥 timing-safe 校验、`x-webhook-event` 事件过滤、`x-webhook-delivery` 幂等 ID、1MiB 体积上限），命中后按动作模式**推送到既有在线会话**（steer 插队 / followup 排队，Prompt 模板支持 $RULE/$DELIVERY/$EVENT/$PAYLOAD 变量）或**新建会话**（需一键安装并挂载 `@deepseek-ai/dsh-webhook` 官方运行时）。规则存储于 `$DSH_HOME/webhook-triggers.json`（原子写 + fs.watch 防抖监听外部编辑），面板支持规则 CRUD、**🧪 触发测试**（注入测试消息并记录交付历史）、运行时三态横幅（未安装 → 一键安装；已装未挂载 → 提示重启）；secret 编辑留空 = 保持不变。注意：Webhook 入站端点绕过 browser-trust fence 是刻意设计（供外部服务回调），secret 是唯一防线，请务必配置。
+- **🪝 Webhook 触发（v1.5.0，设置栏独立页）**：入站 Webhook → Agent 动作的完整链路——每条规则暴露 `POST /webhook-triggers/<规则ID>` 端点（`x-webhook-secret` 共享密钥 timing-safe 校验、`x-webhook-event` 事件过滤、`x-webhook-delivery` 幂等去重——同一 `(规则, delivery id)` 重放会被 202 确认但不重复执行动作，去重表有界存放于内存、进程生命周期即失效、1MiB 体积上限），命中后按动作模式**推送到既有在线会话**（steer 插队 / followup 排队，Prompt 模板支持 $RULE/$DELIVERY/$EVENT/$PAYLOAD 变量）或**新建会话**（需一键安装并挂载 `@deepseek-ai/dsh-webhook` 官方运行时）。规则存储于 `$DSH_HOME/webhook-triggers.json`（原子写 + fs.watch 防抖监听外部编辑），面板支持规则 CRUD、**🧪 触发测试**（注入测试消息并记录交付历史）、运行时三态横幅（未安装 → 一键安装；已装未挂载 → 提示重启）；secret 编辑留空 = 保持不变。认证失败（规则不存在 / 已停用 / secret 不匹配）一律返回**同一响应体**，未认证调用方无法借 404 枚举有效规则 id。注意：Webhook 入站端点绕过 browser-trust fence 是刻意设计（供外部服务回调），secret 是唯一防线，请务必配置。
 - **📌 会话置顶与 🔢 token 用量（v1.1.0）**：卡片新增「📌 置顶」——本地收藏白名单（localStorage 持久化，宿主注册表不掺和 UI 偏好），置顶卡片带徽标，筛选胶囊新增「📌 已置顶 (N)」一键直达；每张卡片渲染**模型上报的 token 用量标签**（`↑输入 ↓输出 · 缓存读`，host 侧从会话日志 `assistant/message` 的 usage 事件折叠，ccusage 姿态），面板顶部有全页汇总条（Σ 会话数 · 输入/输出/缓存读总量）。
 - **💬 历史会话**（设置栏独立页）：
   - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
@@ -113,6 +113,9 @@ node scripts/verify-subagents-client.mjs
 node scripts/verify-command-hooks.mjs
 node scripts/verify-todo-panel.mjs
 node scripts/verify-schedule-dock.mjs
+# 诊断工具（不在 npm test 内）：复现会话删除路径的全部失败模式，
+# 用于把面板上看到的报错对号入座（在线未捕获 / 布局漂移 / 并发竞态等）
+node scripts/repro-delete-session.mjs
 ```
 
 自检套件覆盖：
@@ -131,7 +134,7 @@ node scripts/verify-schedule-dock.mjs
 13. `verify-subagents-client.mjs`：子智能体浏览器端——统一 bundle 内五个 slot 注册、「运行中」页签列出运行中子智能体并经二次确认中断、子智能体列表/空态渲染、新建表单四类字段保存载荷、客户端预检拦截保留名、编辑预填、两击删除、高级设置折叠与切换后端的能力收敛、变更记录页、LLM 目录下拉、CLI 后端检测卡片 / 挂载 / 两击卸载 / 通用后端挂载卸载 / 安装依赖包流；
 14. `verify-command-hooks.mjs`：命令与钩子 host 契约——统一描述符的九个 invocation（namespace/service/id 形状）、命令文件 CRUD + `ctx.commands` 实时注册（`$ARGUMENTS` 处理器 steer 断言、改名、停用不注册、删除、输入校验 fail loud）、hooks.json 双格式读写（裸事件表与 `{hooks:…}` 包裹各自保持、外来键字节不动）、停用旁车文件进出（条目 id 随存储切换）、匹配器/超时校验矩阵、经 `fiber.update(config, true)` 的桥热重启断言、桥包生命周期（stub pnpm：安装写入挂载行且 `configPath` 指向面板 hooks.json、`[]` 占位符替换、幂等不重复装、既有 MCP 行保留、卸载移除行与依赖、未安装时卸载为 no-op）、全 stub 幂等 teardown；
 15. `verify-todo-panel.mjs`：待办清单 host + 浏览器端——git 解析纯函数（porcelain `-z` 记录与重命名旧路径跳过、`## ` 分支头记录、numstat 加减行与二进制零行、花括号/箭头两种重命名路径归一化、untracked 行数回调、`parseGitBranch` 的 tracking/ahead/detached 三态）、`sessionAdmin/fileStats` 对**真实临时 git 仓库**的折叠（修改 / 删除 / 未跟踪三态、每文件明细 + 定位锚点、分支名、3 秒 TTL 缓存、无 git 工作区全零、参数守卫）、客户端 `conversation.input.dock` 注册（id/order/inject face）、面板渲染（三态行、删除线、旋转环、顶缘进度条（部分蓝/满格绿）、进行中项实时计时器、git 文件行（状态字母 / 目录-文件名分色 / +/- / **点击触发 `fsAdmin/reveal`**，删除文件定位目录）、分支徽标、已完成折叠行与 localStorage 偏好持久化、「第 X / Y 步 · N 个文件已改 +A -B」、`body.dsh-admin-todo-live` 抑制类的挂载/清空/卸载三态、页脚点击折叠与 `aria-expanded`）。
-16. `verify-webhook-triggers.mjs`：Webhook 触发 host + HTTP 层——`secretMatches` / `renderPromptTemplate`（默认模板与 $VARS 替换）/ `validateRuleEntry` 合法与非法矩阵（steer/create 形状、id 语法与重名、绝对路径、长度上限）、`saveRule` 往返与**空 secret 保持已存值**语义、`deleteRule` 未知 id 拒绝、HTTP handler 全路径（405/415/404/401/400/413/503/202 steer 成功并真实注入 fake agents）、`runtimeInstall` 写依赖 + cordis 补丁行（stub pnpm）。
+16. `verify-webhook-triggers.mjs`：Webhook 触发 host + HTTP 层——`secretMatches` / `renderPromptTemplate`（默认模板与 $VARS 替换）/ `validateRuleEntry` 合法与非法矩阵（steer/create 形状、id 语法与重名、绝对路径、长度上限）、`saveRule` 往返与**空 secret 保持已存值**语义、`deleteRule` 未知 id 拒绝、HTTP handler 全路径（405/415/404/401/400/413/503/202 steer 成功并真实注入 fake agents；未知规则/已停用/错误 secret 三者**响应体一致**的防枚举断言；`x-webhook-delivery` **重放去重**：同 id 二投 202+`duplicate:true` 不再执行、换 id 照常执行）、`runtimeInstall` 写依赖 + cordis 补丁行（stub pnpm）。
 17. `verify-schedule-dock.mjs`：日程 dock + 日程铃浏览器端——统一 bundle 内 `conversation.input.dock`（schedule-admin, order 6）与 **`conversation.input.right`**（schedule-bell-admin, order 0，空 slot 收割）注册（name/id/order/inject face）、日程 dock 渲染（due-first 排序：逾期在将来之前、kind 徽标 延时/定时/循环、相对时间 前/后、计数、逾期行 `data-overdue`、样式注入）、空投影不渲染整卡、头部折叠/展开与 `aria-expanded`、日程铃（计数徽标、最近一条逾期时 `data-overdue`、点击开合迷你列表、空投影不渲染）。
 
 「命令与钩子」浏览器端（并入 self-check.mjs）：五个 slot 注册断言（order 27）、命令/钩子两页签切换与列表渲染（活动/停用徽标、存储路径）、桥三态横幅（未安装 → 一键安装按钮、已安装未挂载 → 重启提示）、安装后提示文案不被 reload 报告覆盖、卸载两击确认（首击只布防、二击才发 RPC）。
@@ -160,6 +163,8 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 3. **钩子桥热重启走 cordis fiber 内部**：`hooks.json` 保存后通过 `fiber.update(config, true)` 重启已挂载的桥插件（cordis 内部 API）。失败时降级为「已保存，需重启 dsh 生效」。
 
 已验证基线：**dsh 0.1.5-rc.2 线（2026-09 checkout，`@modelcontextprotocol/sdk` 1.29.0）**。升级 dsh / cordis 后请重跑 `npm test`（其 `host-check` / 各 verify 脚本会对上述接缝做真实契约断言）。
+
+另有两处**有意的约定偏离**：其一，dsh 内置函数插件惯例 named-export `name` / `inject` / `Config` / `apply`——本插件只导出 `inject` / `apply`（插件名由 patch 行的 `name:` 提供），且不声明 `Config` schema（零 dsh import 原则下不引入 zod；配置行的 tunables 在挂载时逐一 fail-loud 校验，见 `apply()` 顶部的 positiveNumber/positiveInteger 探测）。其二，Web 面板文案硬编码简体中文（见开头语言说明）。
 
 ---
 

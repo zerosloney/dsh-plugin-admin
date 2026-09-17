@@ -21,15 +21,16 @@ const req = createRequire(import.meta.url)
 
 // Resolve the browser platform (React 18, jsdom) from the harness checkout
 // (primary, same instances the dsh shell renders with) or from devDependencies.
-const harnessRoot = process.env.DSH_HARNESS_ROOT || 'E:/Demo/cli-tools/deepseek-harness'
-const harnessPkg = join(harnessRoot, 'package.json')
-const harnessWeb = join(harnessRoot, 'packages/client/web/node_modules')
+const harnessRoot = process.env.DSH_HARNESS_ROOT
+const harnessWeb = harnessRoot === undefined ? '' : join(harnessRoot, 'packages/client/web/node_modules')
 let harnessReq = null
-try {
-  harnessReq = createRequire(harnessPkg)
-  harnessReq('jsdom')
-} catch {
-  harnessReq = null
+if (harnessRoot !== undefined) {
+  try {
+    harnessReq = createRequire(join(harnessRoot, 'package.json'))
+    harnessReq('jsdom')
+  } catch {
+    harnessReq = null
+  }
 }
 const { JSDOM } = harnessReq ? harnessReq('jsdom') : req('jsdom')
 const React = harnessReq ? req(`${harnessWeb}/react`) : req('react')

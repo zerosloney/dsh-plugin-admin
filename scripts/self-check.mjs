@@ -21,22 +21,19 @@ const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
 
 // Resolve the browser platform (React 18, jsdom) either from the harness
-// checkout (local dev, DSH_HARNESS_ROOT override) or from this repo's own
-// devDependencies (CI / npm test). The harness path is the primary source
-// when it exists so local runs always exercise the exact platform the dsh
-// shell renders with; CI installs the same versions as devDependencies and
-// falls back automatically.
+// checkout ($DSH_HARNESS_ROOT, so local runs exercise the exact platform the
+// dsh shell renders with) or from this repo's own devDependencies (CI /
+// npm test), which installs the same versions and is the automatic fallback.
 const harnessRoot = process.env.DSH_HARNESS_ROOT
-  || 'E:/Demo/cli-tools/deepseek-harness'
-const harnessPkg = join(harnessRoot, 'package.json')
-const harnessWeb = join(harnessRoot, 'packages/client/web/node_modules')
+const harnessWeb = harnessRoot === undefined ? '' : join(harnessRoot, 'packages/client/web/node_modules')
 let harnessReq = null
-try {
-  harnessReq = createRequire(harnessPkg)
-  // Prove the harness checkout actually carries jsdom before trusting it.
-  harnessReq('jsdom')
-} catch {
-  harnessReq = null
+if (harnessRoot !== undefined) {
+  try {
+    harnessReq = createRequire(join(harnessRoot, 'package.json'))
+    harnessReq('jsdom')
+  } catch {
+    harnessReq = null
+  }
 }
 const { JSDOM } = harnessReq ? harnessReq('jsdom') : req('jsdom')
 const React = harnessReq ? req(`${harnessWeb}/react`) : req('react')

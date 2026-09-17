@@ -14,8 +14,9 @@
  * - typert invocation descriptors present
  *
  * HTTP handler (via a captured webServer.register):
- * - 405 wrong method, 415 wrong content-type, 404 missing/unknown rule id
- * - 401 wrong secret, 400 invalid JSON, 413 oversized body
+ * - 405 wrong method, 415 wrong content-type, 404 missing rule id;
+ *   unknown/disabled rule and wrong secret share ONE uniform 401 (no enumeration)
+ * - 400 invalid JSON, 413 oversized body, redelivered x-webhook-delivery deduped
  * - 202 steer delivery (direct path), history ring grows
  * - 503 create-mode without the webhook runtime
  *
@@ -241,10 +242,15 @@ function mockReq({ method = 'POST', url = '/webhook-triggers/ci-fail', headers =
   }
 }
 
-const jsonRequest = ({ ruleId = 'ci-fail', body = '{"hello":"world"}', secret = 'topsecret', event = 'push', url } = {}) =>
+const jsonRequest = ({ ruleId = 'ci-fail', body = '{"hello":"world"}', secret = 'topsecret', event = 'push', url, delivery } = {}) =>
   mockReq({
     url: url || `/webhook-triggers/${ruleId}`,
-    headers: { 'content-type': 'application/json', ...(secret !== undefined ? { 'x-webhook-secret': secret } : {}), 'x-webhook-event': event },
+    headers: {
+      'content-type': 'application/json',
+      ...(secret !== undefined ? { 'x-webhook-secret': secret } : {}),
+      'x-webhook-event': event,
+      ...(delivery !== undefined ? { 'x-webhook-delivery': delivery } : {}),
+    },
     chunks: [body],
   })
 
@@ -268,21 +274,50 @@ await checkAsync('HTTP handler: 405 wrong method, 415 wrong content-type', async
   assert.equal(res.statusCode, 415)
 })
 
-await checkAsync('HTTP handler: 404 for missing rule id and unknown rule', async () => {
+await checkAsync('HTTP handler: 404 for missing rule id; unknown rule reads as uniform 401', async () => {
   let res = mockRes()
   await handler(jsonRequest({ url: '/webhook-triggers/' }), res)
   assert.equal(res.statusCode, 404, 'missing rule id')
   res = mockRes()
   await handler(jsonRequest({ ruleId: 'nope' }), res)
-  assert.equal(res.statusCode, 404, 'unknown rule id')
+  assert.equal(res.statusCode, 401, 'unknown rule id is NOT distinguishable from a bad secret')
 })
 
-await checkAsync('HTTP handler: 401 on wrong secret without steering', async () => {
+await checkAsync('HTTP handler: 401 body is identical for unknown rule and wrong secret (no enumeration)', async () => {
+  const unknownRes = mockRes()
+  await handler(jsonRequest({ ruleId: 'nope' }), unknownRes)
+  const wrongSecretRes = mockRes()
+  await handler(jsonRequest({ secret: 'wrong' }), wrongSecretRes)
+  const disabledRes = mockRes()
+  await ctx.provided.webhookAdmin.saveRule({
+    id: 'off-rule', secret: 'topsecret', enabled: false, action: { mode: 'steer', sessionId: 'session-live', steer: true },
+  })
+  await handler(jsonRequest({ ruleId: 'off-rule' }), disabledRes)
+  assert.equal(unknownRes.statusCode, 401)
+  assert.equal(wrongSecretRes.statusCode, 401)
+  assert.equal(disabledRes.statusCode, 401)
+  assert.equal(unknownRes.body, wrongSecretRes.body, 'unknown rule and wrong secret are indistinguishable')
+  assert.equal(unknownRes.body, disabledRes.body, 'disabled rule is indistinguishable too')
+})
+
+await checkAsync('HTTP handler: redelivered x-webhook-delivery id is deduped (acknowledged, not re-executed)', async () => {
   const before = steered.length
-  const res = mockRes()
-  await handler(jsonRequest({ secret: 'wrong' }), res)
-  assert.equal(res.statusCode, 401)
-  assert.equal(steered.length, before, 'no steer on bad secret')
+  const first = mockRes()
+  await handler(jsonRequest({ delivery: 'retry-same-id' }), first)
+  assert.equal(first.statusCode, 202)
+  assert.ok(!first.body.includes('duplicate'), 'first delivery executes')
+  assert.equal(steered.length, before + 1, 'first delivery steers')
+  const replay = mockRes()
+  await handler(jsonRequest({ delivery: 'retry-same-id' }), replay)
+  assert.equal(replay.statusCode, 202, 'redelivery acknowledged')
+  assert.ok(replay.body.includes('duplicate'), 'redelivery flagged duplicate:true')
+  assert.equal(steered.length, before + 1, 'redelivery does NOT steer again')
+  // A DIFFERENT delivery id on the same rule must still execute.
+  const fresh = mockRes()
+  await handler(jsonRequest({ delivery: 'retry-other-id' }), fresh)
+  assert.equal(fresh.statusCode, 202)
+  assert.ok(!fresh.body.includes('duplicate'), 'different id executes')
+  assert.equal(steered.length, before + 2, 'different id steers')
 })
 
 await checkAsync('HTTP handler: 400 invalid JSON and 413 oversized body', async () => {
