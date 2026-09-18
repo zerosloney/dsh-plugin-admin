@@ -238,6 +238,14 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
         snapshotEvents: () => [{ type: 'subagent/descriptor', data: { label: '检查变更', provider: 'spawn', mode: 'continuable' } }],
       },
     }
+    const oneShotChild = {
+      id: 'child-oneshot',
+      status: 'running',
+      session: {
+        header: { origin: 'subagent', parentSession: 'parent-session', delegationDepth: 1 },
+        snapshotEvents: () => [{ type: 'subagent/descriptor', data: { label: '一次性任务', provider: 'fork', mode: 'one-shot' } }],
+      },
+    }
     const ctx = {
       baseUrl: dir,
       logger: { warn: (message) => registered.warns.push(message) },
@@ -251,10 +259,15 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
         list: () => ['spawn', 'fork'],
         getProvider: (name) => PROVIDERS.get(name),
         interrupt: (childId, reason) => registered.interruptions.push({ childId, reason }),
+        prompt: (request, signal) => {
+          registered.prompts ??= []
+          registered.prompts.push({ request, hasSignal: signal !== undefined && signal !== null })
+          return Promise.resolve({ messageId: 'msg-1' })
+        },
       },
       get: (key) => key === 'agents' ? {
-        list: () => [liveChild, { id: 'idle-child', status: 'idle', session: liveChild.session }, { id: 'root', status: 'running', session: { header: { origin: 'user' } } }],
-        get: (id) => id === liveChild.id ? liveChild : undefined,
+        list: () => [liveChild, oneShotChild, { id: 'idle-child', status: 'idle', session: liveChild.session }, { id: 'root', status: 'running', session: { header: { origin: 'user' } } }],
+        get: (id) => (id === liveChild.id ? liveChild : (id === oneShotChild.id ? oneShotChild : undefined)),
       } : undefined,
     }
     // The mount no longer registers its own typert descriptor (the typert
@@ -274,6 +287,7 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
       'dsh-plugin-admin/subagent/remove',
       'dsh-plugin-admin/subagent/runtimeInterrupt',
       'dsh-plugin-admin/subagent/runtimeList',
+      'dsh-plugin-admin/subagent/runtimePrompt',
       'dsh-plugin-admin/subagent/upsert',
     ])
     assert.ok(invocations.every(item => item.service === 'subagentAdmin' && item.namespace === 'subagentAdmin'))
@@ -291,10 +305,50 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     assert.deepEqual(runtime.agents, [{
       id: 'child-running', parentSessionId: 'parent-session', provider: 'spawn', mode: 'continuable', label: '检查变更', depth: 2,
       eventCount: 1,
+    }, {
+      id: 'child-oneshot', parentSessionId: 'parent-session', provider: 'fork', mode: 'one-shot', label: '一次性任务', depth: 1,
+      eventCount: 1,
     }], 'only running subagents are exposed (with activity count)')
     await service.runtimeInterrupt('child-running', 'parent-session')
     assert.deepEqual(registered.interruptions, [{ childId: 'child-running', reason: { kind: 'user', parentSessionId: 'parent-session' } }])
     await assert.rejects(() => service.runtimeInterrupt('child-running', 'other-parent'), /不属于指定父会话/)
+
+    // runtimePrompt: delivers a human follow-up to a live continuable child
+    // through the subagent runtime's browser prompt remote — client-minted
+    // request id, continuable mode, text content parts, caller's delivery.
+    const promptOk = await service.runtimePrompt({
+      childId: 'child-running', parentSessionId: 'parent-session', text: ' 继续排查 ', delivery: 'steer',
+    })
+    assert.equal(promptOk.ok, true)
+    assert.equal(promptOk.messageId, 'msg-1')
+    assert.equal(promptOk.delivery, 'steer')
+    assert.equal(registered.prompts.length, 1)
+    const promptRequest = registered.prompts[0].request
+    assert.equal(typeof promptRequest.requestId, 'string')
+    assert.ok(/^[0-9a-f-]{36}$/.test(promptRequest.requestId), 'request id is a client-minted uuid')
+    assert.deepEqual({
+      parentSessionId: promptRequest.parentSessionId,
+      childSessionId: promptRequest.childSessionId,
+      mode: promptRequest.mode,
+      delivery: promptRequest.delivery,
+      content: promptRequest.content,
+    }, {
+      parentSessionId: 'parent-session',
+      childSessionId: 'child-running',
+      mode: 'continuable',
+      delivery: 'steer',
+      content: [{ type: 'text', text: '继续排查' }],
+    }, 'prompt request matches the browser control contract (trimmed text)')
+    assert.equal(registered.prompts[0].hasSignal, true, 'the call owns a signal')
+    // Default delivery is queue; timeZone rides through when supplied.
+    await service.runtimePrompt({ childId: 'child-running', parentSessionId: 'parent-session', text: 'x', clientTimeZone: 'Asia/Shanghai' })
+    assert.equal(registered.prompts[1].request.delivery, 'queue', 'delivery defaults to queue')
+    assert.equal(registered.prompts[1].request.clientTimeZone, 'Asia/Shanghai', 'time zone forwarded')
+    await assert.rejects(() => service.runtimePrompt({ childId: 'child-running', parentSessionId: 'parent-session', text: '' }), /不能为空/)
+    await assert.rejects(() => service.runtimePrompt({ childId: 'child-running', parentSessionId: 'parent-session', text: 'x'.repeat(33_000) }), /过长/)
+    await assert.rejects(() => service.runtimePrompt({ childId: 'child-running', parentSessionId: 'other-parent', text: 'x' }), /不属于指定父会话/)
+    await assert.rejects(() => service.runtimePrompt({ childId: 'child-oneshot', parentSessionId: 'parent-session', text: 'x' }), /不支持续接/)
+    await assert.rejects(() => service.runtimePrompt({ childId: 'child-running' }), /缺少运行中子智能体的会话标识/)
 
     const created = await service.upsert({ entry: { id: 'auditor', config: { provider: 'spawn', toolName: 'live_tool', persona: 'Audit everything.', toolFilter: { deny: ['bash'] } } } })
     assert.equal(created.ok, true)

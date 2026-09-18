@@ -28,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -125,16 +125,21 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all nine namespaces ride a single
+// One unified descriptor per package: all ten namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin', 'webhookAdmin'],
-  'unified descriptor carries all nine namespaces',
+  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin', 'webhookAdmin'],
+  'unified descriptor carries all ten namespaces',
 )
+// The overlay enablement invocations must all be present.
+const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
+for (const tail of ['overlay/status', 'overlay/searchEnable', 'overlay/scheduleEnable']) {
+  assert.ok(overlayIds.includes(`dsh-plugin-admin/${tail}`), `unified descriptor carries ${tail}`)
+}
 // The merged command-hook invocations must all be present (commands + hooks
 // + the solidified bridge lifecycle).
 const chaIds = typertRegistrations[0].invocations.map((i) => i.id)
@@ -1306,6 +1311,87 @@ const settledCheck = await ua.checkUpdates()
 const settledHit = settledCheck.updates.find((u) => u.name === 'dsh-remote-tool')
 assert.equal(settledHit.updateAvailable, false, 'upgrade to the refreshed latest clears the reminder')
 
+/* ------------------- pluginAdmin.setEnabled (disable toggle) -------------------
+ * The toggle authors/removes profile-layer `disabled: true` rows for the rows
+ * a bundle's own patch composes — no pnpm, reversible, restart-gated.
+ */
+// Pure layer: composing-row discovery skips id-override rows without `name:`.
+const togglePatchText = [
+  '# bundle patch',
+  '- insert:',
+  '    - id: toggle-tool',
+  '      name: dsh-toggle-tool',
+  '    - id: toggle-tool-extra',
+  '      name: dsh-toggle-tool-extra',
+  '- id: ui-something',
+  '  disabled: true',
+].join('\n')
+assert.deepEqual(bundleComposingRowIds(togglePatchText), ['toggle-tool', 'toggle-tool-extra'],
+  'composing rows collected, id-only override rows skipped')
+// Pure layer: upsert → strip round trip, preserving foreign rows and user config.
+{
+  const foreign = ['- id: mcp-keep', "  name: '@deepseek-ai/dsh-mcp-client'", '  config:', '    transport: stdio']
+  const userOverride = ['- id: toggle-tool', '  config:', '    keep: yes']
+  const lines = [...foreign, ...userOverride]
+  const up = upsertDisableRows(lines, ['toggle-tool', 'toggle-tool-extra'])
+  assert.equal(up.changed, true)
+  const text = up.lines.join('\n')
+  assert.ok(text.includes('  disabled: true'), 'disable line authored')
+  assert.ok(text.includes('keep: yes'), 'user override config preserved')
+  assert.ok(text.includes('transport: stdio'), 'foreign rows preserved')
+  const upAgain = upsertDisableRows(up.lines, ['toggle-tool'])
+  assert.equal(upAgain.changed, false, 'already-disabled rows are skipped')
+  assert.deepEqual(upAgain.skipped, ['toggle-tool'])
+  const down = removeDisableRows(up.lines, ['toggle-tool', 'toggle-tool-extra'])
+  assert.equal(down.changed, true)
+  assert.ok(!down.lines.join('\n').includes('disabled: true'), 'disable lines removed')
+  assert.ok(down.lines.join('\n').includes('keep: yes'), 'user override survives enable')
+}
+// Service layer: fixture bundle with two composing rows in the live profile.
+const toggleProfile = join(here, '../.host-check-tmp/updates/profile')
+const togglePkg = join(toggleProfile, 'node_modules/dsh-toggle-tool')
+mkdirSync(togglePkg, { recursive: true })
+writeFileSync(join(togglePkg, 'package.json'), JSON.stringify({
+  name: 'dsh-toggle-tool', version: '1.0.0',
+  dsh: { bundle: { patch: 'cordis.patch.yml' } },
+}, null, 2), 'utf8')
+writeFileSync(join(togglePkg, 'cordis.patch.yml'), togglePatchText, 'utf8')
+{
+  const manifestPath = join(toggleProfile, 'package.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  manifest.dependencies['dsh-toggle-tool'] = '^1.0.0'
+  manifest.dsh.profile.bundles.push('dsh-toggle-tool')
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+}
+const toggleListBefore = await ua.list()
+const toggleEntryBefore = toggleListBefore.plugins.find((p) => p.name === 'dsh-toggle-tool')
+assert.equal(toggleEntryBefore.disablable, true, 'fixture bundle reports disablable')
+assert.equal(toggleEntryBefore.disabled, false, 'fixture bundle starts enabled')
+const toggleApplied = await ua.setEnabled('dsh-toggle-tool', true)
+assert.equal(toggleApplied.state, 'applied', 'disable authored')
+assert.deepEqual(toggleApplied.rows, ['toggle-tool', 'toggle-tool-extra'])
+const togglePatchPath = join(updateProfile, 'cordis.patch.yml')
+const togglePatchAfter = readFileSync(togglePatchPath, 'utf8')
+assert.ok(togglePatchAfter.includes('- id: toggle-tool\n  disabled: true'), 'disable row authored')
+assert.ok(togglePatchAfter.includes('- id: toggle-tool-extra\n  disabled: true'), 'second row disabled')
+const toggleListAfter = await ua.list()
+assert.equal(toggleListAfter.plugins.find((p) => p.name === 'dsh-toggle-tool').disabled, true, 'list reports disabled')
+// Idempotent: a second disable is a present no-op (file untouched).
+const beforeReapply = readFileSync(togglePatchPath, 'utf8')
+const toggleReapply = await ua.setEnabled('dsh-toggle-tool', true)
+assert.equal(toggleReapply.state, 'present', 'second disable is a no-op')
+assert.equal(readFileSync(togglePatchPath, 'utf8'), beforeReapply, 'no rewrite on the present path')
+// checkUpdates skips disabled plugins entirely.
+const whileDisabledCheck = await ua.checkUpdates()
+assert.equal(whileDisabledCheck.updates.find((u) => u.name === 'dsh-toggle-tool'), undefined, 'disabled plugin skipped from update checks')
+// Re-enable removes the disable rows.
+const toggleEnabled = await ua.setEnabled('dsh-toggle-tool', false)
+assert.equal(toggleEnabled.state, 'applied', 'enable authored')
+assert.equal(readFileSync(togglePatchPath, 'utf8').includes('disabled: true'), false, 'disable rows removed')
+assert.equal((await ua.list()).plugins.find((p) => p.name === 'dsh-toggle-tool').disabled, false, 'list reports re-enabled')
+// In-box bundles (no resolvable manifest) refuse the toggle loudly.
+await assert.rejects(() => ua.setEnabled('dsh-base', true), /未声明 bundle patch/, 'in-box bundle refuses disable')
+
 rmSync(join(here, '../.host-check-tmp/updates'), { recursive: true, force: true })
 registryServer.close()
 
@@ -1360,6 +1446,72 @@ assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('htt
   assert.ok(Array.isArray(invocations) && invocations.length === 3, 'three credential invocations registered (list/set/unset)')
 }
 
+// ---------------------------------------------------------------------------
+// Regression vectors for the review-fix pure helpers: semver prerelease
+// ordering, YAML inline-comment stripping, the frontmatter closing delimiter,
+// and the probe env's proxy overlay trigger.
+// ---------------------------------------------------------------------------
+
+// compareSemver: prerelease segments compare numerically (rc.10 > rc.9),
+// numeric sorts below alphanumeric, releases outrank prereleases, and build
+// metadata is ignored.
+assert.ok(compareSemver('1.0.0-rc.10', '1.0.0-rc.9') > 0, 'prerelease numeric segments compare numerically')
+assert.ok(compareSemver('1.0.0-rc.9', '1.0.0-rc.10') < 0, 'prerelease ordering is antisymmetric')
+assert.ok(compareSemver('1.0.0-rc.1', '1.0.0-alpha') > 0, 'numeric prerelease segment sorts below alphanumeric')
+assert.ok(compareSemver('1.0.0', '1.0.0-rc.1') > 0, 'release outranks its prerelease')
+assert.equal(compareSemver('1.0.0-rc.1+sha.abc', '1.0.0-rc.1'), 0, 'build metadata is ignored')
+assert.ok(compareSemver('1.0.0-rc', '1.0.0-rc.1') < 0, 'fewer prerelease identifiers sort lower')
+assert.ok(compareSemver('1.2.3', '1.2.4') < 0 && compareSemver('2.0.0', '1.9.9') > 0, 'core triple ordering unchanged')
+
+// yamlScalar: a ` #` outside a quoted run starts a comment; `#` glued to text
+// stays literal; the parse paths (number / boolean / quoted) are untouched.
+const { yamlScalar } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
+assert.equal(yamlScalar('pkg # hand note'), 'pkg', 'trailing YAML comment is stripped')
+assert.equal(yamlScalar('https://example.com/x#frag'), 'https://example.com/x#frag', '# without leading whitespace stays literal')
+assert.equal(yamlScalar('"a # b" # note'), 'a # b', 'comment after a quoted scalar is stripped, quoted # kept')
+assert.equal(yamlScalar('42'), 42, 'number path unchanged')
+assert.equal(yamlScalar('true'), true, 'boolean path unchanged')
+assert.equal(yamlScalar("'unterminated"), "'unterminated", 'unterminated quote returns the raw text')
+
+// parseCommandFrontmatter: the closing delimiter must be EXACTLY `---` — a
+// `----` line inside the frontmatter must not truncate it early.
+const { parseCommandFrontmatter } = await import(new URL('../lib/project-agents.js', import.meta.url).href)
+const tricky = '---\nname: x\ndescription: d\n----\nstill: frontmatter\n---\n\nbody text'
+const parsedTricky = parseCommandFrontmatter(tricky)
+assert.ok(parsedTricky !== undefined, 'frontmatter with an inner ---- line still parses')
+assert.equal(parsedTricky.data.name, 'x', 'frontmatter fields survive the inner ---- line')
+assert.equal(parsedTricky.data.still, 'frontmatter', 'the real closing delimiter is the exact --- line')
+assert.equal(parsedTricky.body, 'body text', 'body starts after the exact --- delimiter')
+const parsedPlain = parseCommandFrontmatter('---\ndescription: hello\n---\n\nprompt body')
+assert.equal(parsedPlain.data.description, 'hello', 'plain frontmatter unchanged')
+assert.equal(parsedPlain.body, 'prompt body', 'plain body unchanged')
+assert.equal(parseCommandFrontmatter('---\nname: x\n'), undefined, 'missing closing delimiter is still rejected')
+
+// scrubbedProbeEnv: a user-exported proxy activates NODE_USE_ENV_PROXY=1 the
+// way dsh's proxyEnvironmentForChild overlay does; without one it stays off.
+const PROXY_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+const savedProxyEnv = PROXY_KEYS.map((key) => [key, process.env[key]])
+const savedNodeUseEnvProxy = process.env.NODE_USE_ENV_PROXY
+try {
+  for (const key of PROXY_KEYS) delete process.env[key]
+  delete process.env.NODE_USE_ENV_PROXY
+  assert.equal(scrubbedProbeEnv(undefined).NODE_USE_ENV_PROXY, undefined, 'no proxy exported → no overlay')
+  process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+  assert.equal(scrubbedProbeEnv(undefined).NODE_USE_ENV_PROXY, '1', 'proxy exported → NODE_USE_ENV_PROXY=1')
+  delete process.env.HTTP_PROXY
+  process.env.all_proxy = 'socks5://127.0.0.1:1080'
+  assert.equal(scrubbedProbeEnv(undefined).NODE_USE_ENV_PROXY, '1', 'lower-case ALL_PROXY triggers the overlay too')
+  delete process.env.all_proxy
+  assert.equal(scrubbedProbeEnv({ HTTPS_PROXY: 'http://p' }).HTTPS_PROXY, 'http://p', 'entry-level env survives the scrub')
+} finally {
+  for (const [key, value] of savedProxyEnv) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  if (savedNodeUseEnvProxy === undefined) delete process.env.NODE_USE_ENV_PROXY
+  else process.env.NODE_USE_ENV_PROXY = savedNodeUseEnvProxy
+}
+
 // Release every mounted command-hook fs.watch before removing the temp
 // home, and restore the developer's real DSH_HOME.
 for (const dispose of globalEffectDisposers) {
@@ -1372,4 +1524,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider)')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider); semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
