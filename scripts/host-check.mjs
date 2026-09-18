@@ -1201,7 +1201,10 @@ assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
     assert.equal(scrubbed.MY_API_KEY, undefined, 'KEY-shaped name is stripped')
     assert.equal(scrubbed.DSH_HOME, undefined, 'DSH_-prefixed name is stripped')
     assert.equal(scrubbed.HOST_PLAIN, 'plain-value', 'ordinary name survives')
-    assert.equal(scrubbed.PATH, process.env.PATH, 'PATH survives')
+    // Windows env names are case-insensitive: the GitHub runner exports
+    // `Path`, a dev shell exports `PATH` — resolve by folded name.
+    const pathKey = Object.keys(scrubbed).find((key) => key.toUpperCase() === 'PATH')
+    assert.equal(pathKey === undefined ? undefined : scrubbed[pathKey], process.env.PATH, 'PATH survives')
     // The probe path (and only the probe path) may layer the entry's own env:
     // an explicit MCP_GITHUB_TOKEN the user configured must survive the scrub.
     const overlaid = scrubbedProbeEnv({ MCP_GITHUB_TOKEN: 'cfg-token', HOST_PLAIN: 'overridden' })
