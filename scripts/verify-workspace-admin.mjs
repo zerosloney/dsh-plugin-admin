@@ -475,8 +475,6 @@ const pathInput3 = [...document.querySelectorAll('input.input')]
 assert.ok(pathInput3, 'path input visible before picker click')
 await act(async () => { pickBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
-console.log('DEBUG calls after picker:', calls.map((c) => c.method).join(','))
-console.log('DEBUG input value:', pathInput3.value)
 assert.equal(pathInput3.value, '/Users/demo/picker-target',
   'picker result flows into the create form')
 // Save — the registry should now contain picker-target.

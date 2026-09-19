@@ -509,10 +509,7 @@ await act(async () => {
   bulkBtn[Object.keys(bulkBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
   await new Promise((resolve) => setTimeout(resolve, 60))
 })
-console.error('DEBUG bulk installCalls:', JSON.stringify(ctx.installCalls ?? null))
-console.error('DEBUG bulk note:', document.body.textContent.includes('批量更新完成'), document.body.textContent.includes('更新中'))
 assert.ok((ctx.installCalls ?? []).includes('dsh-remote-tool@0.9.0'), 'batch upgrade installs the pinned latest spec')
-console.error('DEBUG note:', JSON.stringify((document.body.textContent.match(/批量更新[^\n]{0,40}/) || [null])[0]), 'installs:', JSON.stringify(ctx.installCalls))
 assert.ok(document.body.textContent.includes('✅ 批量更新完成：1 个已更新'), 'batch summary note rendered')
 
 // 5c. Fuzzy plugin search: type "custom" → only the local custom plugin card

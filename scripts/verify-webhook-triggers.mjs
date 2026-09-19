@@ -258,7 +258,6 @@ await checkAsync('HTTP handler: happy-path steer delivery returns 202 and steers
   const req = jsonRequest()
   const res = mockRes()
   await handler(req, res)
-  console.error('DEBUG handler status:', res.statusCode, 'body:', res.body, 'steered:', steered.length)
   assert.equal(res.statusCode, 202)
   assert.ok(res.body.includes('steer'), 'response names the steer mode')
   assert.equal(steered.length, 1, 'message steered into the live session')
