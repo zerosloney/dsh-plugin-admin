@@ -322,7 +322,7 @@ const ctx = {
 
 exports.apply(ctx)
 // Seventeen slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone 工作区 / 技能 / Web 搜索 / 存储 / Agent 预设 / 钩子桥
+// section, the standalone 工作区 / 技能 / Web 搜索 / 存储 / 预设编辑 / 钩子桥
 // / MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
 // settings sections, the 待办清单 dock, the 日程 dock, and the 日程 bell in the
 // harvested conversation.input.right seat.
@@ -908,21 +908,30 @@ const mkNavRow = (label) => {
   return row
 }
 const mcpNavRow = mkNavRow('MCP服务器')
-mkNavRow('子智能体')
-mkNavRow('命令与钩子')
-mkNavRow('历史会话')
-const officialNavRow = mkNavRow('Agent 预设')
+// Every plugin settings.section gets a nav row (the fixture derives the labels
+// from the registrations above, so a new page without an icon fails here), plus
+// the shell's own rows — including 'Agent 预设', the label this plugin must NOT
+// reuse (the official ui-agent-preset page owns it, and the icon injector can
+// only key off the label text).
+const pluginSectionLabels = registeredSections
+  .filter((entry) => entry.options.name === 'settings.section')
+  .map((entry) => entry.options.label)
+for (const label of pluginSectionLabels) if (label !== 'MCP服务器') mkNavRow(label)
+const officialRows = ['Agent 预设', '模型', '内置插件', '已归档会话'].map((label) => mkNavRow(label))
 settingsDialog.appendChild(settingsNav)
 document.body.appendChild(settingsDialog)
 await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
-assert.equal(repainted.length, 4, 'exactly the four plugin nav rows repainted')
+assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
+assert.ok(pluginSectionLabels.length === 13, `thirteen settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
-assert.equal(officialNavRow.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
+for (const row of officialRows) {
+  assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
+}
 await new Promise((resolve) => setTimeout(resolve, 60))
-assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, 4, 'repaint is idempotent across observer fires')
+assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, pluginSectionLabels.length, 'repaint is idempotent across observer fires')
 settingsDialog.remove()
 
 // 12. MCP editor: edit an existing server, fill it via the React onChange
