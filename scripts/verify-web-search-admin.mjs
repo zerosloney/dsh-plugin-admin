@@ -305,12 +305,14 @@ writeFileSync(patchPath, [
   '# test patch',
   '- id: web',
   "  name: '@deepseek-ai/dsh-web'",
-  "  config: { searchProvider: 'deepseek-official', fetchProvider: 'http', timeoutMs: 30000 }",
+  "  config: { searchProvider: 'deepseek-official', fetchProvider: 'http', timeoutMs: 30000, endpoint: 'https://api.example.com/v1' }",
   '',
 ].join('\n'), 'utf8')
 await service.setActive('perplexity')
 const after10 = readFileSync(patchPath, 'utf8')
 assert.ok(/^ {4}timeoutMs: 30000$/m.test(after10), 'sibling config key survives the inline→block rewrite')
+assert.ok(/^ {4}endpoint: 'https:\/\/api\.example\.com\/v1'$/m.test(after10),
+  'a sibling whose value contains a colon is not dropped by the split')
 assert.ok(/^ {4}fetchProvider: 'http'$/m.test(after10), 'the existing fetchProvider value survives')
 assert.ok(/^ {4}searchProvider: perplexity$/m.test(after10), 'searchProvider carries the new value')
 console.log('scenario 10 OK: the inline config rewrite preserves sibling keys')

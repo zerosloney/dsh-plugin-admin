@@ -284,6 +284,21 @@ assert.ok(/^\s+default: my-team\s*$/m.test(preserved), 'new default key written'
 // a literal-line check rather than reconstructing the split-by-dash.
 assert.ok(preserved.split(/\r?\n/).some((line) => /^- id: agent-presets\s*$/.test(line)), 'agent-presets row present after second setDefault')
 
+// 5e: an inline `config: {...}` row is rewritten as a block WITHOUT dropping
+// the user's sibling keys — a patch replaces the target's whole `config`, so
+// re-emitting only `default:` would silently delete them on the next click.
+writeFileSync(join(tmpRoot, 'cordis.patch.yml'),
+  '# header comment\n' +
+  '- id: agent-presets\n' +
+  "  name: '@deepseek-ai/dsh-agent-presets'\n" +
+  "  config: { default: 'cordis', order: 5 }\n",
+  'utf8')
+await service.setDefault('inline-team')
+const inlineOut = readFileSync(join(tmpRoot, 'cordis.patch.yml'), 'utf8')
+assert.ok(/^\s+config:\s*$/m.test(inlineOut), 'the inline map became a block')
+assert.ok(/^\s+default: inline-team\s*$/m.test(inlineOut), 'the new default landed')
+assert.ok(/^\s+order: 5\s*$/m.test(inlineOut), 'sibling config key survives the inline→block rewrite')
+
 // ---------- Scenario 6: settings-first default -----------------------------
 // dsh-agent-presets resolves `settings.default ?? config.default`, so a
 // patch-only write is invisible wherever the settings layer already holds a

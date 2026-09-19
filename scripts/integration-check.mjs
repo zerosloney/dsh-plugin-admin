@@ -230,7 +230,7 @@ const PROBES = [
     id: 'workspaceRegistry seam',
     file: 'packages/workspace/workspace/src/index.ts',
     checks: [
-      ['service key workspaceRegistry + archived-set members', t => has("super(ctx, 'workspaceRegistry')", 'archivedSessionIds', 'archiveSession(', 'requireState(', 'enqueueOperation(')(t)],
+      ['service key workspaceRegistry + archived-set members', t => has("super(ctx, 'workspaceRegistry')", 'archivedSessionIds', 'archiveSession(', 'unarchiveSession(', 'requireState(', 'enqueueOperation(')(t)],
     ],
   },
   {
