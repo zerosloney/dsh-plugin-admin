@@ -128,16 +128,15 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-assert.ok(fakeCtx.provided?.agentPresetsAdmin, 'agentPresetsAdmin service provided (v1.16.0)')
-// One unified descriptor per package: all sixteen namespaces ride a single
+// One unified descriptor per package: all fifteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['agentPresetsAdmin', 'commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'storageAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all sixteen namespaces',
+  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'storageAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all fifteen namespaces',
 )
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
@@ -438,7 +437,6 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
   assert.ok(cliCtx.provided?.sessionAdmin, 'CLI mount still provides sessionAdmin')
   assert.ok(cliCtx.provided?.pluginAdmin, 'CLI mount still provides pluginAdmin')
   assert.ok(cliCtx.provided?.commandHookAdmin, 'CLI mount still provides commandHookAdmin')
-  assert.ok(cliCtx.provided?.agentPresetsAdmin, 'CLI mount still provides agentPresetsAdmin')
   // sessionAdmin.list() degrades to the ungrouped bucket instead of throwing.
   const cliList = await cliCtx.provided.sessionAdmin.list()
   assert.equal(cliList.sessions.length, 1, 'CLI list() still returns the sessions')

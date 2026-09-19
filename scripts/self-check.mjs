@@ -137,6 +137,11 @@ const mockHookPayload = {
   bridgeMounted: false,
   bridgeInstalled: false,
   bridgeRowPresent: false,
+  codexHooksPath: 'C:/Users/demo/.dsh/hooks.codex.json',
+  codexBridgePackage: '@deepseek-ai/dsh-hooks-codex',
+  codexBridgeMounted: false,
+  codexBridgeInstalled: false,
+  codexBridgeRowPresent: false,
   hooks: [
     { id: 'PreToolUse/0/0', event: 'PreToolUse', matcher: 'write|edit', command: 'node guard.js', timeoutSec: 30, enabled: true },
     { id: 'disabled/0', event: 'Stop', matcher: '', command: 'stop.sh', timeoutSec: null, enabled: false },
@@ -145,6 +150,13 @@ const mockHookPayload = {
 
 const injectedSections = []
 const registeredSections = []
+// The mock host state behind commandHookAdmin/listHooks: the bridge verbs
+// mutate it so the panel's post-action re-read sees the new lifecycle flags
+// (the Codex install path re-reads on purpose — see runCodexBridge).
+const setHookState = (patch) => {
+  ctx.hookList = { ...(ctx.hookList ?? mockHookPayload), ...patch }
+  return ctx.hookList
+}
 const ctx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   inject: undefined, // webhook admin tolerates a missing inject face
@@ -197,6 +209,16 @@ const ctx = {
             { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true },
             { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true },
           ] } }
+        }
+        if (method === 'storageAdmin/list') {
+          return { ok: true, value: {
+            backends: [
+              { id: 'json', label: 'JSON 文件', packageName: '@deepseek-ai/dsh-storage-json', description: '一文件一单元 JSON', bundled: true, installed: true },
+              { id: 'sqlite', label: 'SQLite', packageName: '@deepseek-ai/dsh-storage-sqlite', description: '单 .db 文件', bundled: false, installed: false },
+            ],
+            active: 'json',
+            format: { installedVersion: 3, autoMigrateChain: [1, 2, 3] },
+          } }
         }
         if (method === 'sessionAdmin/healthReport') {
           return { ok: true, value: { report: {
@@ -272,16 +294,26 @@ const ctx = {
         if (method === 'commandHookAdmin/bridgeInstall') {
           ctx.bridgeInstalls = ctx.bridgeInstalls ?? []
           ctx.bridgeInstalls.push(true)
-          return { ok: true, value: {
-            ...mockHookPayload,
-            bridgeInstalled: true,
-            bridgeRowPresent: true,
-          } }
+          return { ok: true, value: setHookState({ bridgeInstalled: true, bridgeRowPresent: true }) }
         }
         if (method === 'commandHookAdmin/bridgeRemove') {
           ctx.bridgeRemoves = ctx.bridgeRemoves ?? []
           ctx.bridgeRemoves.push(true)
-          return { ok: true, value: { ...mockHookPayload } }
+          return { ok: true, value: setHookState({ bridgeInstalled: false, bridgeRowPresent: false }) }
+        }
+        if (method === 'commandHookAdmin/codexBridgeInstall') {
+          ctx.codexBridgeInstalls = ctx.codexBridgeInstalls ?? []
+          ctx.codexBridgeInstalls.push(true)
+          setHookState({ codexBridgeInstalled: true, codexBridgeRowPresent: true })
+          // Sparse on purpose (the host verb does not spread listHooks()): the
+          // panel must re-read through listHooks instead of treating this as state.
+          return { ok: true, value: { ok: true, action: 'install', row: '- insert: hooks-codex', codexHooksPath: 'C:/Users/demo/.dsh/hooks.codex.json' } }
+        }
+        if (method === 'commandHookAdmin/codexBridgeRemove') {
+          ctx.codexBridgeRemoves = ctx.codexBridgeRemoves ?? []
+          ctx.codexBridgeRemoves.push(true)
+          setHookState({ codexBridgeInstalled: false, codexBridgeRowPresent: false })
+          return { ok: true, value: { ok: true, action: 'remove' } }
         }
         if (method === 'mcpAdmin/test') {
           ctx.mcpTests = ctx.mcpTests ?? []
@@ -321,22 +353,25 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Seventeen slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone 工作区 / 技能 / Web 搜索 / 存储 / 预设编辑 / 钩子桥
+// Fourteen slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone 工作区 / 技能 / Web 搜索 / 存储与凭据
 // / MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
 // settings sections, the 待办清单 dock, the 日程 dock, and the 日程 bell in the
-// harvested conversation.input.right seat.
-assert.equal(injectedSections.length, 17, 'seventeen slot contributions injected')
+// harvested conversation.input.right seat. Neither the Codex bridge (a banner
+// inside the 命令与钩子 钩子 tab) nor the credential block (merged into
+// 存储与凭据) nor the Agent preset editor (the shell's own ui-agent-preset
+// section owns that roster) gets a section of its own.
+assert.equal(injectedSections.length, 14, 'fourteen slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×13), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
+  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×10), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 17, 'seventeen registrations: extensions tab + workspaces + skills + web search + storage + agent presets + hooks codex bridge + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
+assert.equal(registeredSections.length, 14, 'fourteen registrations: extensions tab + workspaces + skills + web search + storage-credentials + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'] && byId['agent-presets-admin'] && byId['hooks-codex-bridge'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -924,7 +959,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 13, `thirteen settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
+assert.ok(pluginSectionLabels.length === 10, `ten settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
 for (const row of officialRows) {
@@ -1202,14 +1237,18 @@ assert.ok(text.includes('POST'), 'endpoint hint rendered')
 assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner rendered')
 webhookRoot.remove?.()
 
-// 15z-cred. The 凭据管理 page: mounts, lists refs with presence badges.
-const credRoot = await mountSection(byId['credential-admin'])
+// 15z-storage-cred. The 存储与凭据 page: ONE mount renders both blocks — the
+// storage-backend picker (+ session format card) and the credential refs
+// with presence badges. They were two nav entries until they were merged.
+const storageCredRoot = await mountSection(byId['storage-admin'])
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = document.body.textContent
+assert.ok(text.includes('存储后端') && text.includes('会话格式版本'), 'storage block rendered in the merged page')
+assert.ok(text.includes('@deepseek-ai/dsh-storage-sqlite'), 'both storage backends listed')
 assert.ok(text.includes('DEEPSEEK_API_KEY'), 'credential ref rendered')
 assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence badges rendered')
 assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
-credRoot.remove?.()
+storageCredRoot.remove?.()
 
 // 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
 // Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.
@@ -1319,7 +1358,41 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 assert.equal((ctx.bridgeRemoves ?? []).length, 1, 'second click fires bridgeRemove')
 assert.ok(document.body.textContent.includes('hooks 桥已卸载'), 'remove note rendered')
 
-// 15d. The 项目 tab: an initial sessionAdmin/list failure must surface in
+// 15d. The Codex bridge rides the same tab (no settings page of its own): its
+// banner reads the same listHooks payload, and its install path must re-read
+// through listHooks — the verb answers with a sparse payload that would blank
+// the hook list and both banners if it were rendered as the whole state.
+assert.ok(document.body.textContent.includes('当前未安装 Codex 钩子桥'), 'codex bridge banner rendered inside the 钩子 tab')
+const codexInstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('安装 Codex 钩子桥'))
+assert.ok(codexInstallBtn, 'codex bridge install affordance rendered while missing')
+await act(async () => {
+  codexInstallBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 80))
+assert.equal((ctx.codexBridgeInstalls ?? []).length, 1, 'codexBridgeInstall RPC fired')
+assert.ok(document.body.textContent.includes('Codex 钩子桥已安装并写入 profile（钩子文件'), 'codex install note rendered')
+assert.ok(document.body.textContent.includes('node guard.js'), 'hook rows survived the sparse-payload re-read')
+const codexUninstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('卸载 Codex 桥'))
+assert.ok(codexUninstallBtn, 'codex uninstall affordance rendered once installed')
+
+// 15e. Codex uninstall is a two-click confirm too, with its own sentinel
+// (the hook rows share the same `confirming` state).
+await act(async () => {
+  codexUninstallBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.equal((ctx.codexBridgeRemoves ?? []).length, 0, 'first click only arms the codex confirm')
+const codexConfirm = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认卸载'))
+assert.ok(codexConfirm, 'codex confirm button rendered after the first click')
+await act(async () => {
+  codexConfirm.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 80))
+assert.equal((ctx.codexBridgeRemoves ?? []).length, 1, 'second click fires codexBridgeRemove')
+assert.ok(document.body.textContent.includes('Codex 钩子桥已卸载'), 'codex remove note rendered')
+assert.ok(document.body.textContent.includes('当前未安装 Codex 钩子桥'), 'codex banner back to the missing state')
+
+// 15f. The 项目 tab: an initial sessionAdmin/list failure must surface in
 // the tab. The mount-time list call used to swallow every error with an
 // empty .catch, leaving the session dropdown silently unpopulated.
 ctx.sessionListFail = '注入：列表服务不可用'
