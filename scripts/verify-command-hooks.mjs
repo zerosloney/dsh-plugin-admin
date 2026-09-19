@@ -120,7 +120,7 @@ try {
     const invocations = applyCommandHookAdmin(stub.ctx, {})
     mounted = stub
     assert.ok(stub.provided.has('commandHookAdmin'), 'service provided under commandHookAdmin')
-    assert.ok(Array.isArray(invocations) && invocations.length === 9, 'nine invocation descriptors')
+    assert.ok(Array.isArray(invocations) && invocations.length === 11, 'eleven invocation descriptors')
     for (const descriptor of invocations) {
       assert.equal(descriptor.service, 'commandHookAdmin')
       assert.equal(descriptor.namespace, 'commandHookAdmin')
@@ -128,7 +128,7 @@ try {
       assert.equal(descriptor.result.mode, 'src-json')
     }
     const ids = invocations.map(d => d.id)
-    for (const method of ['commands/listCommands', 'commands/saveCommand', 'commands/deleteCommand', 'hooks/listHooks', 'hooks/saveHook', 'hooks/deleteHook', 'hooks/setHookEnabled', 'hooks/bridgeInstall', 'hooks/bridgeRemove']) {
+    for (const method of ['commands/listCommands', 'commands/saveCommand', 'commands/deleteCommand', 'hooks/listHooks', 'hooks/saveHook', 'hooks/deleteHook', 'hooks/setHookEnabled', 'hooks/bridgeInstall', 'hooks/bridgeRemove', 'hooks/codexBridgeInstall', 'hooks/codexBridgeRemove']) {
       assert.ok(ids.includes(`dsh-plugin-admin/${method}`), `descriptor present: ${method}`)
     }
     assert.equal(mounted.effects.length >= 1, true, 'teardown effect registered')

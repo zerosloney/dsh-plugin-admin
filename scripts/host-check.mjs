@@ -91,11 +91,13 @@ const fakeCtx = {
     const dispose = fn()
     if (typeof dispose === 'function') globalEffectDisposers.push(dispose)
   },
-  get: (name) => (name === 'sessions' ? undefined : undefined),
-  // project-agents listens on agent lifecycle events; the host-check only
-  // needs the registration to be observable, the listeners never fire.
+  // Real shape: services resolve through ctx.get(). `workspaceRegistry` is
+  // optional (web-app only) — this deployment has one.
+  get: (name) => (name === 'workspaceRegistry' ? fakeCtx.workspaceRegistry : undefined),
+  // project-agents / project-hooks listen on agent lifecycle events; the
+  // host-check only needs the registration to be observable, the listeners
+  // never fire.
   on: (name, fn) => () => {},
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
   commands: {
     // The merged command-hook admin live-registers file-backed slash
     // commands; the host-check only needs the mount to be observable.
@@ -105,9 +107,10 @@ const fakeCtx = {
   workspaceRegistry: {
     list: () => [workspaceA, workspaceB],
     archivedSessionIds: [TARGET, 'session-stays'],
-    requireState: () => ({ archivedSessionIds: [TARGET, 'session-stays'] }),
-    setState: async (state) => { nextState = state },
-    enqueueOperation: (operation) => operation(),
+    // Real surface: the registry's own serialized unarchive verb.
+    unarchiveSession: async (id) => {
+      nextState = { archivedSessionIds: [TARGET, 'session-stays'].filter((x) => x !== id) }
+    },
   },
   sessionPersistence: {
     // Real contract shape: list() returns { header, revision } snapshots,
@@ -125,15 +128,16 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all ten namespaces ride a single
+assert.ok(fakeCtx.provided?.agentPresetsAdmin, 'agentPresetsAdmin service provided (v1.16.0)')
+// One unified descriptor per package: all sixteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'subagentAdmin', 'webhookAdmin'],
-  'unified descriptor carries all ten namespaces',
+  ['agentPresetsAdmin', 'commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'storageAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all sixteen namespaces',
 )
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
@@ -177,15 +181,13 @@ const listCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'sessions' ? undefined : undefined),
+  get: (name) => (name === 'workspaceRegistry' ? listCtx.workspaceRegistry : undefined),
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => workspaces,
     archivedSessionIds: [orphanId],
-    requireState: () => ({ archivedSessionIds: [orphanId] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [
@@ -301,9 +303,7 @@ const missingDirCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],
@@ -334,16 +334,14 @@ const archiveCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  get: (name) => (name === 'workspaceRegistry' ? archiveCtx.workspaceRegistry : undefined),
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
     archiveSession: async () => { throw new Error('should not be reached') },
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: { id: 'session-real', cwd: 'E:/nowhere', createdAt: 1 }, revision: 'r' }],
@@ -358,9 +356,9 @@ await assert.rejects(
   'archiving an unknown session is refused',
 )
 
-/* ----------- apply() probes the registry write path at mount -----------
- * A dsh version that drops requireState/setState/enqueueOperation must
- * fail the plugin mount loudly, not break archive state on first use.
+/* ----------- apply() probes the registry unarchive verb at mount -----------
+ * A dsh version that drops WorkspaceRegistry.unarchiveSession must fail the
+ * plugin mount loudly, not break archive state on first use.
  */
 const brokenCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -368,15 +366,13 @@ const brokenCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  get: (name) => (name === 'workspaceRegistry' ? brokenCtx.workspaceRegistry : undefined),
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    // setState deliberately missing
-    enqueueOperation: (op) => op(),
+    // unarchiveSession deliberately missing
   },
   sessionPersistence: {
     list: async () => [],
@@ -384,7 +380,7 @@ const brokenCtx = {
     open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
-assert.throws(() => apply(brokenCtx), /missing archived-set write path members \[setState\]/, 'mount fails loudly on a partial registry API')
+assert.throws(() => apply(brokenCtx), /lacks unarchiveSession\(\)/, 'mount fails loudly on a partial registry API')
 
 
 /* --------- apply() probes the persistence seam at mount ---------
@@ -404,9 +400,7 @@ const brokenPersistenceCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],
@@ -415,6 +409,49 @@ const brokenPersistenceCtx = {
   },
 }
 assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing members \[stat\]/, 'mount fails loudly on a partial persistence API')
+
+/* -------- CLI / headless: no workspaceRegistry, plugin still mounts --------
+ * `@deepseek-ai/dsh-workspace` is a web-app-only row, so a hard inject would
+ * keep this whole plugin (including the project `.agents` command/hook
+ * bridges, which never need the registry) from mounting in CLI / headless /
+ * sdk profiles. The registry is optional: the plugin must mount and report
+ * the registry-backed surfaces as unavailable instead of failing.
+ */
+{
+  const cliCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    // No workspaceRegistry service at all (the CLI/headless shape).
+    get: () => undefined,
+    on: (name, fn) => () => {},
+    typert: { register: () => () => {} },
+    sessionPersistence: {
+      list: async () => [{ header: { id: 'cli-session', cwd: 'E:/nowhere', createdAt: 1 }, revision: 'r' }],
+      stat: async () => undefined,
+      open: async () => ({ read: async () => [], close: async () => {} }),
+    },
+  }
+  apply(cliCtx)
+  assert.ok(cliCtx.provided?.sessionAdmin, 'CLI mount still provides sessionAdmin')
+  assert.ok(cliCtx.provided?.pluginAdmin, 'CLI mount still provides pluginAdmin')
+  assert.ok(cliCtx.provided?.commandHookAdmin, 'CLI mount still provides commandHookAdmin')
+  assert.ok(cliCtx.provided?.agentPresetsAdmin, 'CLI mount still provides agentPresetsAdmin')
+  // sessionAdmin.list() degrades to the ungrouped bucket instead of throwing.
+  const cliList = await cliCtx.provided.sessionAdmin.list()
+  assert.equal(cliList.sessions.length, 1, 'CLI list() still returns the sessions')
+  assert.equal(cliList.sessions[0].workspaceId, null, 'no registry → sessions are ungrouped')
+  assert.deepEqual(cliList.workspaces, [], 'no registry → no workspace groups')
+  // archive/unarchive report the missing registry instead of a TypeError.
+  await assert.rejects(
+    () => cliCtx.provided.sessionAdmin.archive('cli-session'),
+    /未挂载 dsh-workspace/,
+    'archive reports the missing registry',
+  )
+  await cliCtx.provided.sessionAdmin.unarchive('cli-session')
+}
 
 
 /* ------------ mistyped config budgets fail loud at mount ------------
@@ -452,9 +489,7 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
     workspaceRegistry: {
       list: () => [],
       archivedSessionIds: [],
-      requireState: () => ({ archivedSessionIds: [] }),
-      setState: async () => {},
-      enqueueOperation: (op) => op(),
+      unarchiveSession: async () => {},
     },
     sessionPersistence: {
       list: async () => [{ header: driftHeader, revision: 'rev-1' }],
@@ -486,9 +521,7 @@ const cacheCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: cacheHeader, revision: 'rev-1' }],
@@ -534,8 +567,7 @@ const summaryFailureCtx = {
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [], archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {}, enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: { id: 'session-unreadable', cwd: 'E:/nowhere', createdAt: 1 }, revision: 'rev-broken' }],
@@ -572,8 +604,7 @@ const becomingLiveCtx = {
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [], archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {}, enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],
@@ -614,9 +645,7 @@ const mcpCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],
@@ -792,9 +821,7 @@ const legacyCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
 }
@@ -836,9 +863,7 @@ const placeholderCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
 }
@@ -1041,15 +1066,19 @@ const closeCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'sessions' ? { get: (id) => liveSessions.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  get: (name) => (name === 'sessions'
+    ? { get: (id) => liveSessions.get(id) }
+    : name === 'agents'
+      ? fakeAgents
+      : name === 'workspaceRegistry'
+        ? closeCtx.workspaceRegistry
+        : undefined),
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [{ id: 'w-close', sessionIds: ['session-online'], detachSession: async (id) => { closeDetachCalls.push(id) } }],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: onlineHeader, revision: 'r' }],
@@ -1080,15 +1109,19 @@ const noHandleCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'sessions' ? { get: (id) => liveNoHandle.get(id) } : name === 'agents' ? fakeAgents : undefined),
+  get: (name) => (name === 'sessions'
+    ? { get: (id) => liveNoHandle.get(id) }
+    : name === 'agents'
+      ? fakeAgents
+      : name === 'workspaceRegistry'
+        ? noHandleCtx.workspaceRegistry
+        : undefined),
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: noHandleHeader, revision: 'r' }],
@@ -1122,9 +1155,7 @@ const closeNonLiveCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: closeNonLiveHeader, revision: 'r' }],
@@ -1251,9 +1282,7 @@ const updateCtx = {
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],
@@ -1527,4 +1556,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (9 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider); semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider); semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')

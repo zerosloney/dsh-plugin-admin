@@ -438,6 +438,8 @@ try {
     const approval = makeApproval(['allowed-once'])
     const ssCtx = makeStubCtx(shell, approval)
     applyProjectHooks(ssCtx, {})
+    assert.ok(typeof ssCtx.listeners.get('agent/created') === 'function',
+      'agent/created listener registered (the 0.1.6 rename of agent/session-start)')
     const ssAgent = makeAgent('gate-ss', projectDir)
     writeHooks({
       PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'first.sh' }] }],

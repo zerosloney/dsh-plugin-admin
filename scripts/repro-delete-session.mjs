@@ -43,7 +43,13 @@ function mount({ header = BASE_HEADER, sizeBytes = 3, sessionsGet = () => undefi
     // plugin wraps the service IN PLACE via ctx.get('agents'), and in-process
     // consumers (the web session controller) call the wrapped methods through
     // the very same instance.
-    get: (name) => (name === 'sessions' ? { get: sessionsGet } : name === 'agents' ? agents : undefined),
+    get: (name) => (name === 'sessions'
+      ? { get: sessionsGet }
+      : name === 'agents'
+        ? agents
+        : name === 'workspaceRegistry'
+          ? ctx.workspaceRegistry
+          : undefined),
     on: () => () => {},
     commands: { register: () => () => {} },
     typert: { register: () => () => {} },

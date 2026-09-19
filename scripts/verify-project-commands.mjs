@@ -199,7 +199,20 @@ try {
     assert.equal(agent.mounts.length, 1, 'no new mount when the scan has no valid entries')
   })
 
-  await check('agent/disposed drops the mount; later edits do not remount it', async () => {
+  await check('agent/created mounts exactly once per agent (0.1.6 edge + de-dup)', () => {
+  // The previous check left build.md invalid on purpose; restore a valid one.
+  writeCommand('build.md', '---\ndescription: created edge\n---\n\nCreated body')
+  const agent = makeStubAgent('s6', projectDir)
+  assert.ok(typeof ctx.listeners.get('agent/created') === 'function',
+    'agent/created listener registered (the 0.1.6 rename of agent/session-start)')
+  ctx.listeners.get('agent/created')({ agent, source: 'startup' })
+  assert.equal(agent.mounts.length, 1, 'agent/created mounts the scoped fiber')
+  // A build that emitted both edges for the same agent must not mount twice.
+  ctx.listeners.get('agent/session-start')({ agent })
+  assert.equal(agent.mounts.length, 1, 'the second edge for the same agent is a no-op')
+})
+
+await check('agent/disposed drops the mount; later edits do not remount it', async () => {
     writeCommand('build.md', '---\ndescription: back again\n---\n\nBody')
     const agent = makeStubAgent('s5', projectDir)
     ctx.listeners.get('agent/session-start')({ agent })

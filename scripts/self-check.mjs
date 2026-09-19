@@ -321,21 +321,22 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
+// Seventeen slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone 工作区 / 技能 / Web 搜索 / 存储 / Agent 预设 / 钩子桥
+// / MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
 // settings sections, the 待办清单 dock, the 日程 dock, and the 日程 bell in the
 // harvested conversation.input.right seat.
-assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
+assert.equal(injectedSections.length, 17, 'seventeen slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×7), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
+  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×13), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
+assert.equal(registeredSections.length, 17, 'seventeen registrations: extensions tab + workspaces + skills + web search + storage + agent presets + hooks codex bridge + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'] && byId['agent-presets-admin'] && byId['hooks-codex-bridge'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')

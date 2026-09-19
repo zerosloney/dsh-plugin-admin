@@ -169,7 +169,9 @@ const fileCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { fileCtx.provided ??= {}; fileCtx.provided[key] = service },
   effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
-  get: () => undefined,
+  // Services resolve through ctx.get(); the workspace registry is optional
+  // (web-app only) and this deployment has one.
+  get: (name) => (name === 'workspaceRegistry' ? fileCtx.workspaceRegistry : undefined),
   on: () => () => {},
   logger: { info: () => {}, warn: () => {} },
   commands: { register: () => () => {} },
@@ -177,9 +179,7 @@ const fileCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     // Real handle-based contract: list() → { header, revision } snapshots,
@@ -293,7 +293,7 @@ const exportCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { exportCtx.provided ??= {}; exportCtx.provided[key] = service },
   effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
-  get: () => undefined,
+  get: (name) => (name === 'workspaceRegistry' ? exportCtx.workspaceRegistry : undefined),
   on: () => () => {},
   logger: { info: () => {}, warn: () => {} },
   commands: { register: () => () => {} },
@@ -301,9 +301,7 @@ const exportCtx = {
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [{ header: { id: 'exp-session', cwd: repoDir, createdAt: Date.parse('2026-09-04T10:00:00Z') }, revision: 'r' }],
@@ -359,6 +357,9 @@ const searchCtx = {
   get(key) {
     if (key === 'sessionQuery') return searchCtx.sessionQuery
     if (key === 'sessionProjectionCache') return searchCtx.projectionCache
+    // Services resolve through ctx.get(); the workspace registry is optional
+    // (web-app only) and this deployment has one.
+    if (key === 'workspaceRegistry') return searchCtx.workspaceRegistry
     return undefined
   },
   sessionQuery: {
@@ -391,9 +392,7 @@ const searchCtx = {
   workspaceRegistry: {
     list: () => [{ id: 'ws-1', title: 'Alpha', path: 'E:/Demo/alpha', sessionIds: ['hit-1'] }],
     archivedSessionIds: [],
-    requireState: () => ({ archivedSessionIds: [] }),
-    setState: async () => {},
-    enqueueOperation: (op) => op(),
+    unarchiveSession: async () => {},
   },
   sessionPersistence: {
     list: async () => [],

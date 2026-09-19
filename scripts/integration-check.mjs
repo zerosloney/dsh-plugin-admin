@@ -105,7 +105,16 @@ const PROBES = [
       ['steer/inject/followup take a UserMessage', t => has('steer(message: UserMessage)', 'inject(message: UserMessage)', 'followup(message: UserMessage)')(t)],
       ['Agent exposes its scoped ctx', t => t.includes('readonly ctx: Context')],
       ["AgentStatus is 'idle' | 'running'", t => /AgentStatus = 'idle' \| 'running'/.test(t)],
-      ["waterfall/emit events: pre-step, session-start, disposed, turn-stopping", t => has("'agent/pre-step'", "'agent/session-start'", "'agent/disposed'", "'agent/turn-stopping'")(t)],
+      ["waterfall/emit events: pre-step, session-start/created, disposed, turn-stopping", t => {
+        // dsh 0.1.6-alpha.2 absorbed `agent/session-start` into `agent/created`
+        // (the same announce step, payload plus a `source: SessionStartSource`
+        // discriminator); older builds used the separate `'agent/session-start'`
+        // event. The plugin subscribes to BOTH edges, de-duplicated per agent
+        // (project-agents.js / project-hooks.js), so accepting either here stays
+        // honest instead of masking a dropped subscription.
+        const hasSessionStart = t.includes("'agent/session-start'") || t.includes("'agent/created'")
+        return has("'agent/pre-step'", "'agent/disposed'", "'agent/turn-stopping'")(t) && hasSessionStart
+      }],
       ['PreStepDecision keeps reject/enter', t => has("kind: 'reject'", "kind: 'enter'")(blockOf(t, 'export type PreStepDecision'))],
     ],
   },
@@ -113,7 +122,15 @@ const PROBES = [
     id: 'tool decision unions',
     file: 'packages/core/tools/src/index.ts',
     checks: [
-      ['PreToolDecision deny/ask', t => has("{ kind: 'deny'; reason: string }", "{ kind: 'ask'; reason?: string }")(blockOf(t, 'export type PreToolDecision'))],
+      ['PreToolDecision deny/ask', t => {
+        // dsh 0.1.6-alpha.2 added an optional `info?: ToolErrorInfo` after the
+        // deny branch's `reason: string`, and added a new `'cancel'` variant.
+        // Match the discriminators plus the `reason` field project-hooks
+        // actually emits, instead of the full branch literal.
+        const block = blockOf(t, 'export type PreToolDecision')
+        if (block === null) return false
+        return /kind: 'deny'/.test(block) && /kind: 'ask'/.test(block) && /reason: string/.test(block)
+      }],
       ['PostToolDecision block carries feedback + additionalContexts', t => has("kind: 'block'; feedback: ContentBlock[]; additionalContexts?: UserMessage[]")(blockOf(t, 'export type PostToolDecision'))],
       ['ToolExecutionInput exposes name/arguments', t => has('readonly name: string', 'readonly arguments: unknown')(blockOf(t, 'export interface ToolExecutionInput'))],
     ],
