@@ -285,6 +285,32 @@ const ctx = {
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
         }
+        if (method === 'mcpAdmin/remove') {
+          ctx.mcpRemoves = ctx.mcpRemoves ?? []
+          ctx.mcpRemoves.push(payload.args.id)
+          ctx.mcpEntries = (ctx.mcpEntries ?? mockMcpEntries).filter((entry) => entry.id !== payload.args.id)
+          return { ok: true, value: { ok: true, id: payload.args.id, entries: ctx.mcpEntries } }
+        }
+        if (method === 'storageAdmin/swap') {
+          ctx.storageSwaps = ctx.storageSwaps ?? []
+          ctx.storageSwaps.push(payload.args.backendId)
+          return { ok: true, value: { backend: payload.args.backendId } }
+        }
+        if (method === 'webSearchAdmin/list') {
+          return { ok: true, value: {
+            active: { searchProvider: 'deepseek-official', fetchProvider: 'http' },
+            providers: [
+              { id: 'deepseek-official', packageName: '@deepseek-ai/dsh-web-search-deepseek', label: 'DeepSeek 官方搜索', homepage: '', envVar: 'DEEPSEEK_API_KEY', bundled: true, installed: true, active: true },
+              { id: 'exa', packageName: '@deepseek-ai/dsh-web-search-exa', label: 'Exa', homepage: '', envVar: 'EXA_API_KEY', bundled: false, installed: false, active: false },
+              { id: 'perplexity', packageName: '@deepseek-ai/dsh-web-search-perplexity', label: 'Perplexity', homepage: '', envVar: 'PERPLEXITY_API_KEY', bundled: false, installed: false, active: false },
+            ],
+          } }
+        }
+        if (method === 'webSearchAdmin/install') {
+          ctx.webSearchInstalls = ctx.webSearchInstalls ?? []
+          ctx.webSearchInstalls.push(payload.args.providerId)
+          return { ok: true, value: { installed: true, state: 'installed', output: '' } }
+        }
         if (method === 'commandHookAdmin/listCommands') {
           return { ok: true, value: { commandsDir: 'C:/Users/demo/.dsh/commands', commands: ctx.commandList ?? mockCommands } }
         }
@@ -1014,6 +1040,27 @@ assert.ok(document.body.textContent.includes('mock-mcp'), 'server name from prob
 assert.ok(document.body.textContent.includes('3 个工具'), 'tool count from probe rendered')
 assert.ok(document.body.textContent.includes('fetch') && document.body.textContent.includes('search') && document.body.textContent.includes('browse'), 'tool names from probe rendered')
 
+// 12c. MCP removal is two-step: 移除 opens a confirm bar and only its 确认移除
+// fires the RPC — a single misclick used to drop the whole server block
+// (secret-bearing headers included) from cordis.patch.yml.
+const mcpRemoveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent === '移除')
+assert.ok(mcpRemoveBtn !== undefined, 'MCP 移除 button exists')
+await act(async () => {
+  mcpRemoveBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.equal((ctx.mcpRemoves ?? []).length, 0, 'the first click deletes nothing')
+assert.ok(document.body.textContent.includes('确定从 cordis.patch.yml 移除该 MCP 服务器配置'), 'the confirm bar renders')
+const confirmBar = document.querySelector('.confirm-bar')
+assert.ok(confirmBar !== null, 'confirm bar element present')
+const mcpCancelBtn = [...confirmBar.querySelectorAll('button')].find((b) => b.textContent === '取消')
+assert.ok(mcpCancelBtn !== undefined, 'cancel button rendered inside the bar')
+await act(async () => {
+  mcpCancelBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.equal((ctx.mcpRemoves ?? []).length, 0, 'cancel leaves the entry alone')
+
 // 13. Test MCP headers editing for streamable-http transport: add a new entry
 // with headers, save, and verify the upsert carries the headers.
 await act(async () => {
@@ -1249,6 +1296,33 @@ assert.ok(text.includes('DEEPSEEK_API_KEY'), 'credential ref rendered')
 assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence badges rendered')
 assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
 storageCredRoot.remove?.()
+
+// 15z-storage-loop. Each backend radio must act on the backend it belongs to:
+// the pre-fix `for (var ...)` loop shared one binding, so every handler — and
+// in particular the JSON radio — targeted the LAST backend.
+const storageLoopRoot = await mountSection(byId['storage-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+const storageRadios = [...host.querySelectorAll('input[name="storage-backend"]')]
+assert.equal(storageRadios.length, 2, 'two backend radios rendered')
+await act(async () => {
+  propsOf(storageRadios[0]).onChange()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+assert.deepEqual(ctx.storageSwaps ?? [], ['json'], 'the FIRST radio swaps to the first backend, not the last')
+storageLoopRoot.remove?.()
+
+// 15z-websearch-loop. Same closure hazard in the provider list: click the FIRST
+// opt-in provider's install button and assert ITS id travels over the RPC.
+const webSearchRoot = await mountSection(byId['web-search-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+const wsInstallBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('📥 安装'))
+assert.ok(wsInstallBtn !== undefined, 'an opt-in provider install button renders')
+await act(async () => {
+  propsOf(wsInstallBtn).onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+assert.deepEqual(ctx.webSearchInstalls ?? [], ['exa'], 'the FIRST install button installs the provider it belongs to')
+webSearchRoot.remove?.()
 
 // 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
 // Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.

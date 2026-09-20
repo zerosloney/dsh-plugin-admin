@@ -396,6 +396,56 @@ try {
     }
   })
 
+  await check('hookSpecificOutput without hookEventName is discarded (codec parity)', async () => {
+    // dsh's codec drops the event-scoped block when the discriminator is
+    // missing or different; the project bridge must not let a malformed
+    // payload decide while the global bridge ignores the same bytes.
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'n.sh' }] }] })
+    ctx.shell.queue({ exitCode: 0, stdout: { text: '{"hookSpecificOutput":{"permissionDecision":"deny"}}' }, stderr: { text: '' } })
+    const undecided = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.deepEqual(undecided, { kind: 'allow' }, 'a missing discriminator decides nothing')
+    ctx.shell.queue({ exitCode: 0, stdout: { text: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"why"}}' }, stderr: { text: '' } })
+    const denied = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.equal(denied.kind, 'deny', 'the matching discriminator still denies')
+  })
+
+  await check('a repo config over the size cap is refused, and recovers on shrink', async () => {
+    // The config file is repo-controlled input and the parse is synchronous:
+    // a multi-megabyte file must not block the host loop at session start.
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'big.sh' }] }], _pad: 'x'.repeat(1024 * 1024 + 64) })
+    const callsBefore = ctx.shell.calls.length
+    const decision = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.deepEqual(decision, { kind: 'allow' }, 'an oversized config executes nothing')
+    assert.equal(ctx.shell.calls.length, callsBefore, 'no shell call for a refused config')
+    assert.ok(ctx.warns.some(message => message.includes('refusing to parse')), 'the refusal is warned')
+    // Shrinking back under the cap (new mtime) restores parsing.
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'big.sh' }] }] })
+    ctx.shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.ok(ctx.shell.calls.length > callsBefore, 'hooks run again once the config is small')
+  })
+
+  await check('SubagentStart/SubagentStop are reported, not silently dropped', async () => {
+    writeHooks({
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'ok.sh' }] }],
+      SubagentStart: [{ hooks: [{ command: 'nope.sh' }] }],
+      SubagentStop: [{ hooks: [{ command: 'nope2.sh' }] }],
+    })
+    const before = ctx.warns.length
+    ctx.shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    const fresh = ctx.warns.slice(before).filter(message => message.includes('not supported'))
+    assert.equal(fresh.length, 2, 'both unsupported events warn once each')
+    assert.ok(fresh.some(message => message.includes('SubagentStart')) && fresh.some(message => message.includes('SubagentStop')), 'the warnings name the events')
+    // The panel's read-only view surfaces them alongside the executable rows.
+    const adminCtx = makeStubCtx(makeShell())
+    applyProjectAdmin(adminCtx)
+    const view = await adminCtx.provided.projectAdmin.list(projectDir)
+    const flagged = view.hooks.filter(row => row.error !== undefined)
+    assert.equal(flagged.length, 2, 'projectAdmin/list surfaces the unsupported events')
+    assert.ok(flagged.every(row => row.error.includes('不支持该事件')), 'the reason is the unsupported-event one')
+  })
+
   await check('trust gate: unconfirmed hooks ask first; denial binds the session; new sessions re-ask', async () => {
     const shell = makeShell()
     const approval = makeApproval(['rejected', 'allowed-once'])

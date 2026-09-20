@@ -81,7 +81,7 @@ check('renderPromptTemplate substitutes $VARS and keeps unknown tokens', () => {
 })
 
 check('validateRuleEntry accepts well-formed steer and create rules', () => {
-  const steer = validateRuleEntry({ id: 'ci-fail', enabled: true, secret: 's', event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: '$PAYLOAD' }, [])
+  const steer = validateRuleEntry({ id: 'ci-fail', enabled: true, secret: 'x'.repeat(16), event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: '$PAYLOAD' }, [])
   assert.deepEqual(steer.action, { mode: 'steer', sessionId: 'session-1', steer: true })
   assert.equal(steer.promptTemplate, '$PAYLOAD')
   const create = validateRuleEntry({
@@ -103,6 +103,17 @@ check('validateRuleEntry rejects malformed entries', () => {
   assert.throws(bad({ id: 'ok4', action: { mode: 'create', workspacePath: 'relative/path', agentPreset: 'p', permissionPreset: 'w' } }), /绝对路径/, 'create needs absolute path')
   assert.throws(bad({ id: 'ok5', action: { mode: 'create', workspacePath: WORKSPACE } }), /create 模式需要 agentPreset/, 'create needs preset')
   assert.throws(bad({ id: 'ok6', secret: 'x'.repeat(257), action: { mode: 'steer', sessionId: 's' } }), /secret 长度/, 'secret bound enforced')
+})
+
+check('validateRuleEntry enforces the secret floor', () => {
+  const bad = (entry) => () => validateRuleEntry(entry, [])
+  // The endpoint verifies by header only and has no rate limit — a short
+  // secret is brute-forceable, so the write boundary owns a floor.
+  assert.throws(bad({ id: 'short', secret: 'short', action: { mode: 'steer', sessionId: 's' } }), /至少 16/, 'short secret rejected')
+  assert.equal(validateRuleEntry({ id: 'ok', secret: 'x'.repeat(16), action: { mode: 'steer', sessionId: 's' } }, []).secret, 'x'.repeat(16), 'a 16-char secret passes')
+  // Empty stays legal at THIS layer — saveRule is the one that rejects it
+  // (and the create-mode fixture above relies on that split).
+  assert.equal(validateRuleEntry({ id: 'ok-empty', secret: '', action: { mode: 'steer', sessionId: 's' } }, []).secret, '', 'empty secret is not this layer\'s to reject')
 })
 
 /* ============================ Service level ============================ */
@@ -161,7 +172,7 @@ const storagePath = join(webhookHome, 'webhook-triggers.json')
 
 await checkAsync('saveRule + list round-trips a steer rule', async () => {
   const service = ctx.provided.webhookAdmin
-  const saved = await service.saveRule({ id: 'ci-fail', enabled: true, secret: 'topsecret', event: 'push', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'CI 失败：$PAYLOAD' })
+  const saved = await service.saveRule({ id: 'ci-fail', enabled: true, secret: 'topsecret-key-16chars', event: 'push', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'CI 失败：$PAYLOAD' })
   assert.equal(saved.ok, true)
   assert.equal(saved.rules.length, 1)
   assert.ok(!('secret' in saved.rules[0]), 'list payload must never carry the plaintext secret')
@@ -171,7 +182,7 @@ await checkAsync('saveRule + list round-trips a steer rule', async () => {
 await checkAsync('saveRule + list round-trip preserves model.maxTokens (create rule)', async () => {
   const service = ctx.provided.webhookAdmin
   const saved = await service.saveRule({
-    id: 'nightly-md', enabled: true, secret: 'topsecret', event: '',
+    id: 'nightly-md', enabled: true, secret: 'topsecret-key-16chars', event: '',
     action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
   })
   assert.equal(saved.ok, true)
@@ -187,7 +198,7 @@ await checkAsync('saveRule with an empty secret keeps the stored secret on edit'
   // where the value actually lives — the persisted rules file.
   const stored = JSON.parse(readFileSync(storagePath, 'utf8'))
   const kept = stored.rules.find(entry => entry.id === 'ci-fail')
-  assert.equal(kept.secret, 'topsecret', 'empty secret inherits the stored one')
+  assert.equal(kept.secret, 'topsecret-key-16chars', 'empty secret inherits the stored one')
 })
 
 await checkAsync('saveRule rejects an empty secret for a new rule', async () => {
@@ -203,7 +214,7 @@ await checkAsync('saveRule rejects an empty secret for a new rule', async () => 
 
 await checkAsync('deleteRule removes and rejects unknown ids', async () => {
   const service = ctx.provided.webhookAdmin
-  await service.saveRule({ id: 'temp', secret: 'topsecret', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+  await service.saveRule({ id: 'temp', secret: 'topsecret-key-16chars', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
   const removed = await service.deleteRule('temp')
   assert.equal(removed.deleted, 'temp')
   // deleteRule throws for unknown ids — assert.rejects rejects with the thrown
@@ -242,7 +253,7 @@ function mockReq({ method = 'POST', url = '/webhook-triggers/ci-fail', headers =
   }
 }
 
-const jsonRequest = ({ ruleId = 'ci-fail', body = '{"hello":"world"}', secret = 'topsecret', event = 'push', url, delivery } = {}) =>
+const jsonRequest = ({ ruleId = 'ci-fail', body = '{"hello":"world"}', secret = 'topsecret-key-16chars', event = 'push', url, delivery } = {}) =>
   mockReq({
     url: url || `/webhook-triggers/${ruleId}`,
     headers: {
@@ -289,7 +300,7 @@ await checkAsync('HTTP handler: 401 body is identical for unknown rule and wrong
   await handler(jsonRequest({ secret: 'wrong' }), wrongSecretRes)
   const disabledRes = mockRes()
   await ctx.provided.webhookAdmin.saveRule({
-    id: 'off-rule', secret: 'topsecret', enabled: false, action: { mode: 'steer', sessionId: 'session-live', steer: true },
+    id: 'off-rule', secret: 'topsecret-key-16chars', enabled: false, action: { mode: 'steer', sessionId: 'session-live', steer: true },
   })
   await handler(jsonRequest({ ruleId: 'off-rule' }), disabledRes)
   assert.equal(unknownRes.statusCode, 401)
@@ -324,13 +335,13 @@ await checkAsync('HTTP handler: 400 invalid JSON and 413 oversized body', async 
   await handler(jsonRequest({ body: '{nope' }), res)
   assert.equal(res.statusCode, 400, 'invalid JSON')
   res = mockRes()
-  await handler(jsonRequest({ body: 'x'.repeat(1050000), secret: 'topsecret' }), res)
+  await handler(jsonRequest({ body: 'x'.repeat(1050000), secret: 'topsecret-key-16chars' }), res)
   assert.equal(res.statusCode, 413, 'oversized body rejected')
 })
 
 await checkAsync('HTTP handler: create-mode without runtime fails 503', async () => {
   await ctx.provided.webhookAdmin.saveRule({
-    id: 'nightly', secret: 'topsecret', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+    id: 'nightly', secret: 'topsecret-key-16chars', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
   })
   const res = mockRes()
   await handler(jsonRequest({ ruleId: 'nightly' }), res)
@@ -396,6 +407,32 @@ await checkAsync('list() awaits agentPresets.list() (it is async upstream)', asy
   assert.equal(presetCallCount.list, 1, 'agentPresets.list() was awaited once')
   assert.deepEqual(list.permissionPresetNames, ['workspace-write', 'danger-full-access'], '"custom" filtered out')
   ctx.get = previousGet
+})
+
+// ---------- Inherited legacy secrets get the floor too ---------------------
+// A rule stored before the floor existed keeps delivering (normalizeRule does
+// not enforce it), but an edit riding the "empty secret keeps the stored one"
+// path must not silently re-persist the short value.
+await checkAsync('saveRule refuses an inherited short secret on edit', async () => {
+  const legacyPath = join(webhookHome, 'webhook-triggers.json')
+  writeFileSync(legacyPath, JSON.stringify({
+    version: 1,
+    rules: [{ id: 'legacy', enabled: true, secret: 'short', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: '' }],
+  }, null, 2) + '\n', 'utf8')
+  // Fresh mount on the same home: the rules mirror loads from disk at apply
+  // time, so the seeded legacy rule is authoritative without waiting on the
+  // debounced fs.watch reload.
+  applyWebhookAdmin(ctx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: {} })
+  const fresh = ctx.provided.webhookAdmin
+  let rejected = null
+  try {
+    await fresh.saveRule({ id: 'legacy', secret: '', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+  } catch (error) {
+    rejected = error
+  }
+  assert.ok(rejected !== null && /至少 16/.test(rejected.message), 'the inherited short secret is refused with the floor message')
+  const onDisk = JSON.parse(readFileSync(legacyPath, 'utf8'))
+  assert.equal(onDisk.rules.find((r) => r.id === 'legacy').secret, 'short', 'the refused save left the stored rule untouched')
 })
 
 console.log(results.join('\n'))

@@ -330,5 +330,28 @@ await service.uninstall('exa')
 assert.equal(queuedOps.length, before11 + 3, 'uninstall rides the injected queue')
 console.log('scenario 11 OK: setActive / install / uninstall ride the injected serial queue')
 
+// ---------- Scenario 12: an inline config row is READ, not just rewritten --
+// The former parser skipped the `config: {...}` line itself (it scanned the
+// FOLLOWING lines for braces), so an inline row read as "no active provider":
+// list()/active() lost the id AND uninstall's dangling-id repair never fired.
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  "  config: { searchProvider: exa, fetchProvider: http }",
+  '',
+].join('\n'), 'utf8')
+const active12 = await service.active()
+assert.equal(active12.searchProvider, 'exa', 'inline config: searchProvider is read')
+assert.equal(active12.fetchProvider, 'http', 'inline config: fetchProvider is read')
+assert.equal((await service.list()).providers.find((p) => p.id === 'exa').active, true,
+  'inline config: list() flags the active provider')
+await service.install('exa')
+await service.uninstall('exa')
+const after12 = readFileSync(patchPath, 'utf8')
+assert.ok(/searchProvider: deepseek-official/.test(after12),
+  'inline config: uninstalling the active provider still repairs the dangling id')
+console.log('scenario 12 OK: an inline config row is read and repaired')
+
 rmSync(tmpRoot, { recursive: true, force: true })
 console.log('verify-web-search-admin OK: all Web Search administration scenarios passed')

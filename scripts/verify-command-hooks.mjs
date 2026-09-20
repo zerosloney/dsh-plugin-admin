@@ -583,6 +583,93 @@ try {
     }
   })
 
+  await check('bridge: a row pointing at another file reports a mismatch, install repairs it', async () => {
+    // The reported production hazard: a hand-mounted row whose configPath is
+    // some OTHER hooks.json makes every panel save a no-op while the UI stays
+    // green — the bridge reloads with the old path and reads the old file.
+    const foreignHooks = join(tempRoot, 'foreign-hooks.json')
+    writeFileSync(patchPath, [
+      '- insert:',
+      '    - id: hooks-claude-code',
+      "      name: '@deepseek-ai/dsh-hooks-claude-code'",
+      '      config:',
+      `        configPath: ${JSON.stringify(foreignHooks)}`,
+      '',
+    ].join('\n'), 'utf8')
+    const stub = makeStubCtx(profileDir)
+    applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) })
+    const svc = stub.provided.get('commandHookAdmin')
+    const before = svc.listHooks()
+    assert.equal(before.bridgeRowPresent, true, 'compliant row present')
+    assert.equal(before.bridgeConfigPath, foreignHooks, 'the declared path is reported')
+    assert.equal(before.configPathMatches, false, 'the declared path differs from the panel hooks file')
+    const repaired = await svc.bridgeInstall()
+    assert.equal(repaired.row, 'config-path-repaired', 'install repairs the path instead of reporting present')
+    assert.equal(repaired.configPathMatches, true, 'the repair flips the mismatch')
+    const patch = readFileSync(patchPath, 'utf8')
+    assert.ok(patch.includes(JSON.stringify(hooksPath)), 'configPath rewritten to the panel hooks file')
+    assert.ok(!patch.includes(JSON.stringify(foreignHooks)), 'the foreign path is gone')
+    assert.ok(patch.includes('    - id: hooks-claude-code'), 'the row keeps its shape')
+    const again = await svc.bridgeInstall()
+    assert.equal(again.row, 'present', 'a matching row is a plain present no-op')
+  })
+
+  await check('bridge: a row without configPath is reported as a mismatch (the key is required)', async () => {
+    writeFileSync(patchPath, [
+      '- insert:',
+      '    - id: hooks-claude-code',
+      "      name: '@deepseek-ai/dsh-hooks-claude-code'",
+      '',
+    ].join('\n'), 'utf8')
+    const stub = makeStubCtx(profileDir)
+    applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) })
+    const svc = stub.provided.get('commandHookAdmin')
+    const listed = svc.listHooks()
+    assert.equal(listed.bridgeRowPresent, true, 'row present')
+    assert.equal(listed.bridgeConfigPath, null, 'no declared path')
+    assert.equal(listed.configPathMatches, false, 'a configPath-less row is a mismatch, never a green lie')
+    const repaired = await svc.bridgeInstall()
+    assert.equal(repaired.row, 'config-path-repaired', 'install authors the missing key')
+    assert.ok(readFileSync(patchPath, 'utf8').includes(JSON.stringify(hooksPath)), 'configPath authored')
+  })
+
+  await check('hooks: matcher set matches the bridge runtime (`*`, dash goes down the regex path)', async () => {
+    // dsh's runtime literal set is CLAUDE_LITERAL = [A-Za-z0-9_|]; `*` is the
+    // match-all sentinel. A matcher carrying `-` is a NON-anchored regex at
+    // runtime, so the panel must validate it as one (not as a literal list).
+    const isolated = {
+      commandsDir: join(tempRoot, 'matcher-commands'),
+      hooksPath: join(tempRoot, 'matcher-hooks.json'),
+      disabledPath: join(tempRoot, 'matcher-disabled.json'),
+    }
+    const stub = makeStubCtx(profileDir)
+    applyCommandHookAdmin(stub.ctx, { settings: isolated })
+    const svc = stub.provided.get('commandHookAdmin')
+    await svc.saveHook({ event: 'PreToolUse', matcher: '*', command: 'node guard.js', enabled: true })
+    await svc.saveHook({ event: 'PreToolUse', matcher: 'read-file', command: 'node guard.js', enabled: true })
+    await assert.rejects(() => svc.saveHook({ event: 'PreToolUse', matcher: '(bad', command: 'x' }), /匹配器/)
+  })
+
+  await check('commands: a hand-written empty prompt is not registered and shows a fileError', async () => {
+    const commandsDir = join(tempRoot, 'empty-prompt-commands')
+    mkdirSync(commandsDir, { recursive: true })
+    writeFileSync(join(commandsDir, 'blank.json'), JSON.stringify({ name: 'blank', prompt: '', enabled: true, description: '' }), 'utf8')
+    const stub = makeStubCtx(profileDir)
+    applyCommandHookAdmin(stub.ctx, {
+      settings: {
+        commandsDir,
+        hooksPath: join(tempRoot, 'ep-hooks.json'),
+        disabledPath: join(tempRoot, 'ep-disabled.json'),
+      },
+    })
+    const svc = stub.provided.get('commandHookAdmin')
+    const blank = svc.listCommands().commands.find(c => c.name === 'blank')
+    assert.ok(blank !== undefined, 'file listed')
+    assert.equal(blank.fileError, '提示词为空', 'empty prompt surfaces as a fileError')
+    assert.equal(blank.active, false, 'not registered live')
+    assert.ok(!stub.registered.some(r => r.name === 'blank'), 'no live registration for the blank command')
+  })
+
   await check('teardown: disposers release the live registrations', () => {
     assert.ok(mounted.registered.length >= 1, 'registrations captured')
     // Every stub mount (the bridge checks mount extra instances) must release

@@ -665,5 +665,115 @@ await check('probePathCommand: presence/version separation on bare names and abs
   assert.deepEqual(absentAbsolute, { ok: false, version: null }, 'absent absolute path misses')
 })
 
+/* 16 ── the 2026-09-20 review fixes: providerName guards, queue coverage,
+ * modelSelectionSettings capability gate. */
+await check('validateEntryInput: modelSelectionSettings without the Host service fails loud', () => {
+  const entry = entryOf('ms-1', { provider: 'spawn', toolName: 'custom_tool_x', modelSelectionSettings: true })
+  assert.throws(
+    () => validateEntryInput(entry, envFor()),
+    /model-selection-settings/,
+    'an env without the capability refuses the switch',
+  )
+  const ok = validateEntryInput(entry, { ...envFor(), modelSelectionAvailable: true })
+  assert.ok(ok !== undefined, 'the capability flag lets the switch through')
+})
+
+await check('apply(): builtin rows refuse a providerName another backend or a base provider owns', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-builtin-name-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
+    // Seed BOTH builtin rows as already mounted, so the upsert skips the
+    // package-resolution probe and goes straight to the name checks.
+    const codex = CLI_BACKENDS.find(item => item.id === 'subagent-codex')
+    const claude = CLI_BACKENDS.find(item => item.id === 'subagent-claude-code')
+    let lines = upsertCliIntoLines(BASE_PATCH.split(/\r?\n/), codex, codex.defaultConfig)
+    lines = upsertCliIntoLines(lines, claude, claude.defaultConfig)
+    writeFileSync(join(dir, 'cordis.patch.yml'), lines.join('\n'))
+    const registered = { provided: null, warns: [] }
+    const ctx = {
+      baseUrl: dir,
+      logger: { warn: (message) => registered.warns.push(message) },
+      provide: (key, service) => { registered.provided = { key, service } },
+      effect: (fn) => { fn() },
+      tools: { schemas: () => [], get: () => undefined },
+      subagents: { list: () => ['spawn', 'fork'], getProvider: (name) => PROVIDERS.get(name) },
+    }
+    applySubagentAdmin(ctx)
+    const service = registered.provided.service
+    const before = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
+    await assert.rejects(
+      () => service.cliUpsert({ backendId: 'subagent-codex', config: { providerName: 'claude-code' } }),
+      /已被其他后端占用/,
+      'taking the sibling row\'s providerName is refused',
+    )
+    await assert.rejects(
+      () => service.cliUpsert({ backendId: 'subagent-codex', config: { providerName: 'fork' } }),
+      /保留名/,
+      'taking a base-bundle provider name is refused',
+    )
+    assert.equal(readFileSync(join(dir, 'cordis.patch.yml'), 'utf8'), before, 'the refused saves left the patch untouched')
+    const kept = await service.cliUpsert({ backendId: 'subagent-codex', config: { providerName: 'codex' } })
+    assert.equal(kept.ok, true, 'the row\'s own default name still saves')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('apply(): generic upserts serialize (derived-id collision + one contested providerName)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-gen-race-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
+    const registered = { provided: null, providers: [] }
+    const fakeSubprocess = {
+      spawn: () => ({
+        collected: {
+          stdout: { readFrom: () => ({ text: 'ok' }) },
+          stderr: { readFrom: () => ({ text: '' }) },
+        },
+        done: Promise.resolve({ exitCode: 0 }),
+        terminate: async () => {},
+      }),
+    }
+    const ctx = {
+      baseUrl: dir,
+      get: (key) => (key === 'subprocess' ? fakeSubprocess : undefined),
+      logger: { warn: () => {} },
+      provide: (key, service) => { registered.provided = { key, service } },
+      effect: (fn) => { fn() },
+      tools: { schemas: () => [], get: () => undefined },
+      subagents: {
+        list: () => ['spawn', 'fork', ...registered.providers.map(item => item.name)],
+        getProvider: (name) => PROVIDERS.get(name),
+        registerProvider: (provider) => { registered.providers.push(provider); return () => {} },
+      },
+    }
+    applySubagentAdmin(ctx)
+    const service = registered.provided.service
+
+    // Same executable NAME in two directories derives one id: without an
+    // explicit backendId the second save must refuse instead of silently
+    // replacing the first.
+    await service.cliUpsert({ payload: { kind: 'generic', config: { command: join(dir, 'a', 'aider.exe') } } })
+    await assert.rejects(
+      () => service.cliUpsert({ payload: { kind: 'generic', config: { command: join(dir, 'b', 'aider.exe') } } }),
+      /同一可执行名会派生出相同 id/,
+    )
+    const both = await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-aider-b', config: { command: join(dir, 'b', 'aider.exe'), providerName: 'cli-aider-b' } } })
+    assert.equal(both.backends.filter(item => item.kind === 'generic').length, 2, 'an explicit backendId coexists')
+
+    // Two concurrent saves claiming one providerName: the queue serializes
+    // them, so exactly one row lands and the loser rejects.
+    const settled = await Promise.allSettled([
+      service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-race-1', config: { command: 'gemini', providerName: 'cli-race' } } }),
+      service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-race-2', config: { command: 'qwen', providerName: 'cli-race' } } }),
+    ])
+    const persisted = JSON.parse(readFileSync(join(dir, 'subagent-admin.cli.json'), 'utf8'))
+    assert.equal(persisted.backends.filter(item => item.providerName === 'cli-race').length, 1, 'exactly one row carries the contested name')
+    assert.equal(settled.filter(item => item.status === 'rejected').length, 1, 'the loser rejects instead of double-writing')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 console.log(results.join('\n'))
 console.log(`\nhost-check: ${results.length} checks passed`)

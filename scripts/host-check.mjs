@@ -58,6 +58,16 @@ const logDir = sessionLogDirFor(targetHeader)
 rmSync(logDir, { recursive: true, force: true })
 mkdirSync(logDir, { recursive: true })
 writeFileSync(join(logDir, 'session.jsonl.zstd'), '{}\n')
+// A cwd-less header lands under the backend's `_no-cwd` project directory
+// (format.ts projectDir: cwd === undefined → '_no-cwd') instead of
+// undefined — otherwise deleting such a session falls into the misleading
+// "durable bytes but no log directory" fail-loud branch.
+assert.equal(
+  sessionLogDirFor({ id: 'no-cwd-session', cwd: undefined }),
+  join(chaHome, 'sessions', '_no-cwd', 'no-cwd-session'),
+  'cwd-less header derives the _no-cwd layout',
+)
+assert.equal(sessionLogDirFor({ id: '', cwd: undefined }), undefined, 'header without an id stays undefined')
 // Typert registry emulation: the real registry (harness packages/typert/
 // registry service.ts) allows ONE registration per package name and rejects
 // duplicate invocation ids / endpoints — rules the permissive stub below used
@@ -1419,8 +1429,21 @@ const toggleEnabled = await ua.setEnabled('dsh-toggle-tool', false)
 assert.equal(toggleEnabled.state, 'applied', 'enable authored')
 assert.equal(readFileSync(togglePatchPath, 'utf8').includes('disabled: true'), false, 'disable rows removed')
 assert.equal((await ua.list()).plugins.find((p) => p.name === 'dsh-toggle-tool').disabled, false, 'list reports re-enabled')
-// In-box bundles (no resolvable manifest) refuse the toggle loudly.
-await assert.rejects(() => ua.setEnabled('dsh-base', true), /未声明 bundle patch/, 'in-box bundle refuses disable')
+// In-box bundles are not profile dependencies — the host refuses to author
+// disable rows for them (a core bundle's every composing row would go dark).
+await assert.rejects(() => ua.setEnabled('dsh-base', true), /内置组合层（非 profile 依赖）/, 'in-box bundle refuses disable')
+// A dependency-managed package whose manifest declares no bundle patch is
+// the second refusal path (the declared/rowIds checks still stand).
+const plainPkg = join(updateProfile, 'node_modules/dsh-plain-tool')
+mkdirSync(plainPkg, { recursive: true })
+writeFileSync(join(plainPkg, 'package.json'), JSON.stringify({ name: 'dsh-plain-tool', version: '1.0.0' }, null, 2), 'utf8')
+{
+  const manifestPath = join(updateProfile, 'package.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  manifest.dependencies['dsh-plain-tool'] = '^1.0.0'
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+}
+await assert.rejects(() => ua.setEnabled('dsh-plain-tool', true), /未声明 bundle patch/, 'dependency without a bundle patch refuses disable')
 
 rmSync(join(here, '../.host-check-tmp/updates'), { recursive: true, force: true })
 registryServer.close()
@@ -1502,6 +1525,17 @@ assert.equal(yamlScalar('"a # b" # note'), 'a # b', 'comment after a quoted scal
 assert.equal(yamlScalar('42'), 42, 'number path unchanged')
 assert.equal(yamlScalar('true'), true, 'boolean path unchanged')
 assert.equal(yamlScalar("'unterminated"), "'unterminated", 'unterminated quote returns the raw text')
+// Escaped quotes inside a double-quoted run: the plugin writes strings via
+// JSON.stringify, so `\"` is the common shape — the scanner must not treat
+// it as the closing quote (a ` #` between the misjudged boundaries used to
+// truncate the value on read-back, and a panel edit then persisted it).
+assert.equal(
+  yamlScalar('"Use \\"cmd --flag # comment\\" syntax"'),
+  'Use "cmd --flag # comment" syntax',
+  'escaped quotes inside a double-quoted scalar survive, the inner # is not a comment',
+)
+assert.equal(yamlScalar('"a \\"b"'), 'a "b', 'escaped quote unescapes through the JSON path')
+assert.equal(yamlScalar("'C:\\tools\\x' # note"), 'C:\\tools\\x', 'single-quoted backslashes stay literal, trailing comment stripped')
 
 // parseCommandFrontmatter: the closing delimiter must be EXACTLY `---` — a
 // `----` line inside the frontmatter must not truncate it early.
