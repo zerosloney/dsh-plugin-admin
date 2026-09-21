@@ -4,7 +4,7 @@ dsh web UI 插件：把管理能力拆进设置界面的既有结构——在官
 
 > 语言说明：本插件的 Web 面板文案目前为简体中文硬编码（宿主主仓库的 locale 字典体系不覆盖外部插件）；英文环境用户会看到中文管理界面，后续版本计划接入 locale 字典。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.3 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.4 · MIT
 
 - **🔌 扩展插件**（插件设置页第三个页签，位于「插件配置」「插件列表」之后）：
   - 顶部输入框支持 npm 包名（如 `dsh-xxx`）或本地绝对路径安装插件（回车或点击提交）；
