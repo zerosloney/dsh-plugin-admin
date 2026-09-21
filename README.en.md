@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — 11 management panels inside dsh's built-in settings UI: extensions, session history, workspaces, skills, MCP servers, subagents, commands & hooks, webhook triggers, web search, usage dashboard, and a todo dock. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — nine standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** and **workspace** management panels injected into dsh's own **已归档会话 (Archived Sessions)** page instead of occupying two more sidebar rows. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
@@ -12,8 +12,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 | Panel | Focus |
 |---|---|
 | 🔌 Extensions | install / uninstall / update / disable-enable profile plugins (pnpm orchestration + bundles sync), Loader runtime snapshot |
-| 💬 Session History | list / search / archive / pin / Markdown export / health reports / full-text search; online sessions delete without restart |
-| 📁 Workspaces | workspace CRUD + ordering + archive set (dsh has no official management surface) |
+| 🗂️ Archived Sessions | **dsh's own page**; the plugin injects its session-history + workspace panels into it (below) |
 | 📚 Skills | full skill roster (global layer + per-session scope merge), strictly read-only |
 | 🔌 MCP Servers | row-level CRUD + real handshake probes + try-call console |
 | 🛰️ Subagents | managed subagent rows CRUD + running monitor / follow-up + CLI backends |
@@ -38,22 +37,14 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 6. Search/filter: the search box fuzzy-matches name/version/path, plus the All / Extensions / Built-in pills.
 7. Loader snapshot: the read-only sub-panel at the bottom — expand for per-entry fiber phase and Agent presets.
 
-### 💬 Session History
-1. Open: Settings → Session History.
-2. Search/filter: the search box matches title/summary/cwd/session ID at once; the status pills are All / Online / Archived / Ended.
-3. Pin: the card's **📌** (localStorage-persisted); the **📌 Pinned** pill jumps straight there.
-4. Archive/unarchive: card buttons; the sidebar updates immediately.
-5. Delete: the card's **Delete** → double confirm; an online session shows **Close & delete** (dispose first, then remove the log — no restart).
-6. Export: the card's **⬇ Export** → downloads a Markdown transcript.
-7. Health report: the card's **🩺 Health** → folded tool call/failure/retry report.
-8. Full-text search: toggle **Full-text search** and type a query; if the deployment ships it off (`openAt: never`), click **⚡ One-click enable** → restart dsh.
+### 🗂️ Archived Sessions (dsh's own page + plugin injection)
+**已归档会话** is dsh's OWN settings page (the archived-session list with per-row unarchive). The plugin no longer registers 历史会话 / 工作区 rows of its own — it injects both panels **into that page**: the official archived list, then the plugin's session-history panel and workspace panel below it.
 
-### 📁 Workspaces
-1. Open: Settings → Workspaces.
-2. Create: the toolbar's **➕ New workspace** → pick a directory natively or type an absolute path (optional title) → submit; an existing path returns that workspace.
-3. Rename/order/status: inline **✎** to rename, **⬆/⬇** to reorder, **🔎 Check status** (surfaces `missing-dir`).
-4. Delete: 🗑 double confirm — registry only; the directory and its sessions stay.
-5. Unarchive all: **📦 Unarchive all (N)** at the top when the archive set is non-empty.
+1. Open: Settings → 已归档会话.
+2. Official area (top): archived sessions (title · owning workspace · time), a search box filtering by title/workspace, one **Unarchive** per row.
+3. Plugin area · session history: the search box matches title/summary/cwd/session ID at once; status pills All / Online / Archived / Ended; the card's **📌 Pin** (localStorage-persisted); **Delete** with a double confirm (an online session shows **Close & delete** — dispose first, then remove the log, no restart); **⬇ Export** downloads a Markdown transcript; **🩺 Health** folds tool call/failure/retry reports; **Full-text search** queries every session's content (one-click enable when the deployment ships it off → restart dsh).
+4. Plugin area · workspaces: **➕ New workspace** (native directory picker or a typed absolute path, optional title); inline **✎** rename, **⬆/⬇** reorder, **🔎 Check status** (surfaces `missing-dir`); **🗑 Delete** with a double confirm (registry only — the directory and its sessions stay); **📦 Unarchive all (N)** when the archive set is non-empty.
+5. How it merges: a MutationObserver detects whether that official section is the active one, then mounts the two panels into the section's own scroll container — the same container the shell mounts plugin sections into, so scoped CSS and internal scrolling are unchanged. Switching away or closing the dialog unmounts them.
 
 ### 📚 Skills
 1. Open: Settings → Skills.
@@ -110,6 +101,7 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 | v1.17.5 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (includes `unarchiveSession`) |
 
 - **Newest dsh release: 0.1.6-alpha.2** (alpha pre-release; the `latest` tag is still 0.1.5-rc.2). Upgrade: `npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`.
+- **The official 已归档会话 page needs dsh ≥ 0.1.6-alpha.2** (it arrived with `dsh-client-ui-settings-unarchive-sessions`): 0.1.5-rc.2 and earlier ship no such page, so the plugin detects that and falls back — registering 历史会话 / 工作区 as their own sidebar sections again, keeping both panels reachable.
 - **dsh-workspace in 0.1.5-rc.2 lacks `unarchiveSession`** (added in 0.1.6-alpha.2): the plugin still mounts (mount-time warning), deleting an archived session skips the archived-set cleanup, and the explicit unarchive gesture reports a clear error; upgrading to 0.1.6-alpha.2 restores full behavior.
 - Version-sensitive seams (re-run `npm test` after upgrading dsh/cordis — the verify scripts assert these against real contracts):
   1. **workspaceRegistry verb surface** — `archiveSession` / `unarchiveSession` / `archivedSessionIds` (public verbs only, never the TS-private `requireState` / `setState`);
