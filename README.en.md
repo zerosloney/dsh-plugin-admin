@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.1 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.2 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 
 ## Why
