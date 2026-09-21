@@ -205,6 +205,13 @@ const ctx = {
           return { ok: true, value: { deleted: payload.args.sessionId } }
         }
         if (method === 'credentialAdmin/list') {
+          if (ctx.credentialRefsOverride !== undefined || ctx.credentialScanOverride !== undefined) {
+            return { ok: true, value: {
+              available: true,
+              refs: ctx.credentialRefsOverride ?? [],
+              scan: ctx.credentialScanOverride ?? null,
+            } }
+          }
           return { ok: true, value: { available: true, refs: [
             { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true },
             { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true },
@@ -1297,6 +1304,34 @@ assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence ba
 assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
 storageCredRoot.remove?.()
 
+// 15z-storage-cred-empty. An empty ref roster must SAY so: refs come from the
+// mounted providers' schemas, so "no refs" is a fact about this composition,
+// not a failed load — a silently blank block reads as broken. Assertions scope
+// to this mount's host (panels mounted before it are not always unmounted).
+ctx.credentialRefsOverride = []
+const emptyCredRoot = await mountSection(byId['storage-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = host.textContent
+assert.ok(text.includes('未声明任何凭据引用'), 'empty credential roster renders an explanatory empty state')
+assert.ok(!text.includes('当前 dsh 未提供 credentials 服务'), 'an empty roster is not misreported as an absent service')
+delete ctx.credentialRefsOverride
+await act(async () => { emptyCredRoot.unmount() })
+host.remove()
+
+// 15z-storage-cred-scanfault. A failed ref scan renders zero rows just like an
+// empty roster, but the two mean opposite things: the fault must be reported
+// instead of reading as a confidently empty page.
+ctx.credentialScanOverride = { reason: 'scan-failed', message: 'toJSON 爆栈' }
+const scanFaultRoot = await mountSection(byId['storage-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = host.textContent
+assert.ok(text.includes('凭据引用扫描失败'), 'a failed ref scan is surfaced as a fault')
+assert.ok(text.includes('toJSON 爆栈'), 'the scan failure message is rendered')
+assert.ok(!text.includes('未声明任何凭据引用'), 'a failed scan is not misreported as an empty roster')
+delete ctx.credentialScanOverride
+await act(async () => { scanFaultRoot.unmount() })
+host.remove()
+
 // 15z-storage-loop. Each backend radio must act on the backend it belongs to:
 // the pre-fix `for (var ...)` loop shared one binding, so every handler — and
 // in particular the JSON radio — targeted the LAST backend.
@@ -1477,4 +1512,4 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 assert.ok(document.body.textContent.includes('注入：列表服务不可用'), 'project tab surfaces the session-list load error')
 ctx.sessionListFail = undefined
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, credential roster empty state + scan-fault reporting')
