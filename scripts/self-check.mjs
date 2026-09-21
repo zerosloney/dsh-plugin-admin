@@ -204,28 +204,61 @@ const ctx = {
           ctx.deletes.push(payload.args.sessionId)
           return { ok: true, value: { deleted: payload.args.sessionId } }
         }
-        if (method === 'credentialAdmin/list') {
-          if (ctx.credentialRefsOverride !== undefined || ctx.credentialScanOverride !== undefined) {
-            return { ok: true, value: {
-              available: true,
-              refs: ctx.credentialRefsOverride ?? [],
-              scan: ctx.credentialScanOverride ?? null,
-            } }
-          }
-          return { ok: true, value: { available: true, refs: [
-            { ref: 'DEEPSEEK_API_KEY', configured: true, source: 'file', writable: true },
-            { ref: 'CLIPROXY_API_KEY', configured: false, source: null, writable: true },
-          ] } }
-        }
-        if (method === 'storageAdmin/list') {
+        // The 技能 roster read: the panel asks sessionAdmin/list first, then
+        // hands every session id to the host in one request.
+        if (method === 'skillsAdmin/list') {
+          ctx.skillsRequests = ctx.skillsRequests ?? []
+          ctx.skillsRequests.push(Array.isArray(payload.args.sessionIds) ? payload.args.sessionIds.slice() : [])
           return { ok: true, value: {
-            backends: [
-              { id: 'json', label: 'JSON 文件', packageName: '@deepseek-ai/dsh-storage-json', description: '一文件一单元 JSON', bundled: true, installed: true },
-              { id: 'sqlite', label: 'SQLite', packageName: '@deepseek-ai/dsh-storage-sqlite', description: '单 .db 文件', bundled: false, installed: false },
+            available: true,
+            registry: true,
+            complete: ctx.skillsIncomplete !== true,
+            skills: [
+              { name: 'alpha-only', description: '只在这个工作区可见', whenToUse: '改 alpha 的时候', source: 'project-agents', sources: ['project-agents'], provider: 'filesystem', path: '/proj/.agents/skills/alpha-only/SKILL.md', url: null, resource: 'directory', modelInvocable: true, userInvocable: true, scopes: ['alpha @ build'] },
+              { name: 'global-skill', description: '插件内置技能', whenToUse: null, source: 'bundled', sources: ['bundled'], provider: 'runtime', path: null, url: null, resource: 'opaque', modelInvocable: true, userInvocable: false, scopes: ['全局'] },
+              { name: 'human-only', description: '仅人类可调用', whenToUse: null, source: 'user-agents', sources: ['user-agents'], provider: 'filesystem', path: '/home/.agents/skills/human-only/SKILL.md', url: null, resource: 'directory', modelInvocable: false, userInvocable: true, scopes: ['alpha @ build'] },
             ],
-            active: 'json',
-            format: { installedVersion: 3, autoMigrateChain: [1, 2, 3] },
+            scopes: [
+              { label: '全局', kind: 'global', cwd: null, preset: null, sessionIds: [], count: 1, error: null },
+              { label: 'alpha @ build', kind: 'session', cwd: 'E:/Demo/alpha', preset: 'build', sessionIds: ['s2'], count: 2, error: null },
+            ],
+            sessions: [
+              { sessionId: 's2', ok: true, cwd: 'E:/Demo/alpha', preset: 'build', message: '' },
+              { sessionId: 's1', ok: false, cwd: null, preset: null, message: '会话没有项目 cwd' },
+            ],
+            warnings: [],
           } }
+        }
+        // The Web 搜索 provider config editor: one read, then one save.
+        if (method === 'webSearchAdmin/config') {
+          ctx.webSearchConfigReads = ctx.webSearchConfigReads ?? []
+          ctx.webSearchConfigReads.push(payload.args.providerId)
+          return { ok: true, value: {
+            providerId: 'deepseek-official',
+            label: 'DeepSeek 官方搜索',
+            namespace: 'web-search-deepseek',
+            source: 'settings',
+            revision: 7,
+            applies: 'live',
+            restartRequired: false,
+            fields: [
+              { key: 'apiKey', label: 'API Key（字面值）', kind: 'secret', choices: [], min: null, default: null, hint: '', value: '', set: true },
+              { key: 'apiKeyEnv', label: 'API Key 凭据名', kind: 'string', choices: [], min: null, default: 'DEEPSEEK_API_KEY', hint: '', value: 'DEEPSEEK_API_KEY', set: false },
+              { key: 'baseURL', label: 'Endpoint', kind: 'string', choices: [], min: null, default: 'https://api.deepseek.com/anthropic/v1', hint: '', value: 'https://search.proxy/v1', set: true },
+              { key: 'model', label: '模型', kind: 'string', choices: [], min: null, default: 'deepseek-v4-flash', hint: '', value: 'deepseek-v4-flash', set: false },
+            ],
+            note: '读取和保存走 dsh settings 命名空间。',
+          } }
+        }
+        if (method === 'webSearchAdmin/saveConfig') {
+          ctx.webSearchSaves = ctx.webSearchSaves ?? []
+          ctx.webSearchSaves.push({
+            providerId: payload.args.providerId,
+            values: payload.args.values,
+            unset: payload.args.unset,
+            expectedRevision: payload.args.expectedRevision,
+          })
+          return { ok: true, value: { ok: true, source: 'settings', changed: ['baseURL'], restartRequired: false } }
         }
         if (method === 'sessionAdmin/healthReport') {
           return { ok: true, value: { report: {
@@ -297,11 +330,6 @@ const ctx = {
           ctx.mcpRemoves.push(payload.args.id)
           ctx.mcpEntries = (ctx.mcpEntries ?? mockMcpEntries).filter((entry) => entry.id !== payload.args.id)
           return { ok: true, value: { ok: true, id: payload.args.id, entries: ctx.mcpEntries } }
-        }
-        if (method === 'storageAdmin/swap') {
-          ctx.storageSwaps = ctx.storageSwaps ?? []
-          ctx.storageSwaps.push(payload.args.backendId)
-          return { ok: true, value: { backend: payload.args.backendId } }
         }
         if (method === 'webSearchAdmin/list') {
           return { ok: true, value: {
@@ -386,25 +414,23 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Fourteen slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone 工作区 / 技能 / Web 搜索 / 存储与凭据
-// / MCP服务器 / 子智能体 / 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发
-// settings sections, the 待办清单 dock, the 日程 dock, and the 日程 bell in the
-// harvested conversation.input.right seat. Neither the Codex bridge (a banner
-// inside the 命令与钩子 钩子 tab) nor the credential block (merged into
-// 存储与凭据) nor the Agent preset editor (the shell's own ui-agent-preset
-// section owns that roster) gets a section of its own.
-assert.equal(injectedSections.length, 14, 'fourteen slot contributions injected')
+// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone 工作区 / 技能 / Web 搜索 / MCP服务器 / 子智能体 /
+// 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发 settings sections, and the
+// 待办清单 dock above the composer. Neither the Codex bridge (a banner inside
+// the 命令与钩子 钩子 tab) nor the Agent preset editor (the shell's own
+// ui-agent-preset section owns that roster) gets a section of its own.
+assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'conversation.input.dock', 'conversation.input.right', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×10), settings.plugins.tab, conversation.input.dock (×2), and conversation.input.right',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×9), settings.plugins.tab, and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 14, 'fourteen registrations: extensions tab + workspaces + skills + web search + storage-credentials + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock + schedule dock + schedule bell')
+assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + workspaces + skills + web search + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['schedule-admin'] && byId['schedule-bell-admin'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'], 'expected registration ids present')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -443,16 +469,6 @@ const todoDock = byId['todo-admin']
 assert.equal(todoDock.options.name, 'conversation.input.dock', 'todo dock mounts above the composer')
 assert.equal(todoDock.options.order, 5, 'todo dock sorts just after the shell todo strip (order 0)')
 assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock inject face carries the RPC call')
-
-const scheduleDock = byId['schedule-admin']
-assert.equal(scheduleDock.options.name, 'conversation.input.dock', 'schedule dock mounts above the composer')
-assert.equal(scheduleDock.options.order, 6, 'schedule dock stacks under the todo dock (order 5)')
-assert.equal(typeof scheduleDock.options.inject().call, 'function', 'schedule dock inject face carries the RPC call')
-
-const scheduleBell = byId['schedule-bell-admin']
-assert.equal(scheduleBell.options.name, 'conversation.input.right', 'schedule bell harvests the empty composer trailing slot')
-assert.equal(scheduleBell.options.order, 0, 'schedule bell is the first (only) occupant of conversation.input.right')
-assert.equal(typeof scheduleBell.options.inject().call, 'function', 'schedule bell inject face carries the RPC call')
 
 const usageSection = byId['usage-dashboard']
 assert.equal(usageSection.options.name, 'settings.section', 'usage dashboard is a standalone settings page')
@@ -1001,7 +1017,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 10, `ten settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
+assert.ok(pluginSectionLabels.length === 9, `nine settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
 for (const row of officialRows) {
@@ -1308,62 +1324,6 @@ assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner re
 await act(async () => { webhookRoot.unmount() })
 host.remove()
 
-// 15z-storage-cred. The 存储与凭据 page: ONE mount renders both blocks — the
-// storage-backend picker (+ session format card) and the credential refs
-// with presence badges. They were two nav entries until they were merged.
-const storageCredRoot = await mountSection(byId['storage-admin'])
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = document.body.textContent
-assert.ok(text.includes('存储后端') && text.includes('会话格式版本'), 'storage block rendered in the merged page')
-assert.ok(text.includes('@deepseek-ai/dsh-storage-sqlite'), 'both storage backends listed')
-assert.ok(text.includes('DEEPSEEK_API_KEY'), 'credential ref rendered')
-assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence badges rendered')
-assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
-await act(async () => { storageCredRoot.unmount() })
-host.remove()
-
-// 15z-storage-cred-empty. An empty ref roster must SAY so: refs come from the
-// mounted providers' schemas, so "no refs" is a fact about this composition,
-// not a failed load — a silently blank block reads as broken. Assertions scope
-// to this mount's host (panels mounted before it are not always unmounted).
-ctx.credentialRefsOverride = []
-const emptyCredRoot = await mountSection(byId['storage-admin'])
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = host.textContent
-assert.ok(text.includes('未声明任何凭据引用'), 'empty credential roster renders an explanatory empty state')
-assert.ok(!text.includes('当前 dsh 未提供 credentials 服务'), 'an empty roster is not misreported as an absent service')
-delete ctx.credentialRefsOverride
-await act(async () => { emptyCredRoot.unmount() })
-host.remove()
-
-// 15z-storage-cred-scanfault. A failed ref scan renders zero rows just like an
-// empty roster, but the two mean opposite things: the fault must be reported
-// instead of reading as a confidently empty page.
-ctx.credentialScanOverride = { reason: 'scan-failed', message: 'toJSON 爆栈' }
-const scanFaultRoot = await mountSection(byId['storage-admin'])
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = host.textContent
-assert.ok(text.includes('凭据引用扫描失败'), 'a failed ref scan is surfaced as a fault')
-assert.ok(text.includes('toJSON 爆栈'), 'the scan failure message is rendered')
-assert.ok(!text.includes('未声明任何凭据引用'), 'a failed scan is not misreported as an empty roster')
-delete ctx.credentialScanOverride
-await act(async () => { scanFaultRoot.unmount() })
-host.remove()
-
-// 15z-storage-loop. Each backend radio must act on the backend it belongs to:
-// the pre-fix `for (var ...)` loop shared one binding, so every handler — and
-// in particular the JSON radio — targeted the LAST backend.
-const storageLoopRoot = await mountSection(byId['storage-admin'])
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-const storageRadios = [...host.querySelectorAll('input[name="storage-backend"]')]
-assert.equal(storageRadios.length, 2, 'two backend radios rendered')
-await act(async () => {
-  propsOf(storageRadios[0]).onChange()
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-assert.deepEqual(ctx.storageSwaps ?? [], ['json'], 'the FIRST radio swaps to the first backend, not the last')
-await act(async () => { storageLoopRoot.unmount() })
-host.remove()
 
 // 15z-websearch-loop. Same closure hazard in the provider list: click the FIRST
 // opt-in provider's install button and assert ITS id travels over the RPC.
@@ -1376,7 +1336,89 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 20))
 })
 assert.deepEqual(ctx.webSearchInstalls ?? [], ['exa'], 'the FIRST install button installs the provider it belongs to')
+
+// 15z-websearch-config. The ⚙ 配置 editor is what makes an installed provider
+// usable at all (Exa / Perplexity register no dsh settings card), so the panel
+// must read the provider's field descriptors and write back only what the user
+// staged. Inherited defaults stay in the placeholder; a save carries the value
+// plus the revision the panel read.
+const wsConfigBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('⚙ 配置'))
+assert.ok(wsConfigBtn !== undefined, 'a provider config button renders')
+await act(async () => {
+  propsOf(wsConfigBtn).onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+assert.deepEqual(ctx.webSearchConfigReads ?? [], ['deepseek-official'], 'the FIRST config button reads the provider it belongs to')
+assert.ok(host.textContent.includes('dsh settings 命名空间'), 'a settings-backed provider renders its live-storage note')
+const wsInput = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === 'Endpoint')
+assert.ok(wsInput !== undefined, 'the Endpoint field renders from the host descriptors')
+assert.equal(wsInput.value, 'https://search.proxy/v1', 'an explicitly set field is staged into its input')
+const wsModel = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === '模型')
+assert.equal(wsModel.value, '', 'a field still at the provider default stages EMPTY')
+assert.ok(wsModel.placeholder.includes('deepseek-v4-flash'), 'the inherited default rides the placeholder')
+const wsSecret = [...host.querySelectorAll('input')].find((i) => i.type === 'password')
+assert.equal(wsSecret.value, '', 'a secret field never carries a value')
+assert.ok(wsSecret.placeholder.includes('已配置'), 'a set secret is reported as configured')
+await act(async () => {
+  propsOf(wsInput).onChange({ target: { value: 'https://other.proxy/v1' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+const wsSave = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('💾 保存配置'))
+assert.ok(wsSave !== undefined, 'save button renders')
+await act(async () => {
+  propsOf(wsSave).onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+assert.deepEqual(ctx.webSearchSaves, [{
+  providerId: 'deepseek-official',
+  values: { baseURL: 'https://other.proxy/v1' },
+  unset: [],
+  expectedRevision: 7,
+}], 'save sends only the staged field plus the revision the panel read')
+assert.ok(host.textContent.includes('已保存'), 'a successful save reports back inside the editor')
 await act(async () => { webSearchRoot.unmount() })
+host.remove()
+
+// 15z-skills-roster. The 技能 page renders the WHOLE roster from
+// skillsAdmin/list (the host merges the global layer with one read per
+// session scope) and filters it locally — the previous revision could only
+// ever show ONE session's user-invocable subset.
+const skillsRoot = await mountSection(byId['skills-admin'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = host.textContent
+assert.equal(ctx.skillsRequests.length, 1, 'the panel asks the host once for the whole roster')
+assert.deepEqual(ctx.skillsRequests[0], ['s2', 's3', 's1'], 'every session id travels, non-archived first')
+assert.ok(text.includes('/alpha-only'), 'a project-scoped skill renders')
+assert.ok(text.includes('/global-skill'), 'a global (bundled) skill renders')
+assert.ok(text.includes('🤖 模型可调用'), 'the model-invocable badge renders')
+assert.ok(text.includes('👤 人类可调用'), 'the user-invocable badge renders')
+assert.ok(text.includes('插件内置'), 'a bundled skill carries its source label')
+assert.ok(text.includes('/proj/.agents/skills/alpha-only/SKILL.md'), 'the SKILL.md path renders')
+assert.ok(text.includes('可见于：'), 'the per-skill scope list renders')
+assert.ok(text.includes('会话 s1 的作用域未能解析'), 'an unresolved session scope is surfaced')
+// Text filter: a needle matching one skill must hide the others.
+const skillsNeedle = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === '过滤技能')
+assert.ok(skillsNeedle !== undefined, 'the roster filter input renders')
+await act(async () => {
+  propsOf(skillsNeedle).onChange({ target: { value: 'alpha' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+assert.ok(host.textContent.includes('/alpha-only'), 'the matching skill survives the filter')
+assert.ok(!host.textContent.includes('/global-skill'), 'a non-matching skill is filtered out')
+// An incomplete host read must never read as a complete roster.
+await act(async () => {
+  propsOf(skillsNeedle).onChange({ target: { value: '' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+})
+ctx.skillsIncomplete = true
+await act(async () => {
+  const skillsRefresh = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('⟳ 刷新'))
+  propsOf(skillsRefresh).onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+})
+assert.ok(host.textContent.includes('complete=false'), 'an incomplete skill read is surfaced, not silently shown')
+ctx.skillsIncomplete = undefined
+await act(async () => { skillsRoot.unmount() })
 host.remove()
 
 // 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
@@ -1523,4 +1565,4 @@ ctx.sessionListFail = undefined
 await act(async () => { commandHookRoot.unmount() })
 host.remove()
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, credential roster empty state + scan-fault reporting')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')

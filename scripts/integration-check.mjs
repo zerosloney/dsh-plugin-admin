@@ -244,8 +244,13 @@ const PROBES = [
     id: 'settings describe seam',
     file: 'packages/settings/settings/src/index.ts',
     checks: [
-      ['describe(): SettingsDescriptor[] exists (credential ref discovery)', t => /describe\(options\?: SettingsDescribeOptions\): SettingsDescriptor\[\]/.test(t)],
+      ['describe(options?: SettingsDescribeOptions): SettingsDescriptor[] exists (settings-section read)', t => /describe\(options\?: SettingsDescribeOptions\): SettingsDescriptor\[\]/.test(t)],
       ['descriptor carries ns + serialized schema', t => has('ns: SettingsNamespace', 'schema: unknown')(blockOf(t, 'export interface SettingsDescriptor'))],
+      ['descriptor carries value/revision/user/applies/secrets (config read + write-only secrets)', t => has('value: unknown', 'revision: number', 'user?: unknown', 'applies: SettingsApplies', 'secrets?: RedactedSecret[]')(blockOf(t, 'export interface SettingsDescriptor'))],
+      // webSearchAdmin.saveConfig rides mutate() with PATH ops so a redacted
+      // view can be written without restating (or deleting) other fields.
+      ['mutate(ns, ops, expectedRevision?) exists for path-addressed writes', t => /mutate<const Namespace extends string>\(/.test(t) && has('ops: readonly SettingsPathOp[]', 'expectedRevision?: number')(t)],
+      ['SettingsPathOp keeps set/unset', t => has("op: 'set'", "op: 'unset'")(t)],
     ],
   },
   {
@@ -310,6 +315,72 @@ const PROBES = [
       // subagentAdmin.runtimeList rides this deprecated synchronous reader —
       // its removal turns the 运行中 tab's eventCount/descriptor lookups empty.
       ['snapshotEvents(fromSeq, toSeqExclusive) still declared', t => /snapshotEvents\(\s*fromSeq: SessionLogOffset = SessionLogOffset\(0\),\s*toSeqExclusive: SessionLogOffset = this\.seq,?\s*\)/.test(t)],
+    ],
+  },
+  {
+    id: 'skill registry (skillsAdmin roster)',
+    file: 'packages/skill/skill/src/index.ts',
+    checks: [
+      // The merged roster reads the registry directly — the session-addressed
+      // catalog strips path / source / model-only rows, which is why the 技能
+      // page used to be systematically incomplete. A rename here degrades it
+      // back to one session's user-invocable subset.
+      ['ctx.skills.snapshot() returns { skills, complete } (the incomplete flag)', t => /snapshot\(options: SkillViewOptions = \{\}\): Promise<SkillCatalogSnapshot>/.test(t)],
+      ['ctx.skills.list() returns SkillSummary[] (fallback read)', t => /list\(options: SkillViewOptions = \{\}\): Promise<SkillSummary\[\]>/.test(t)],
+      ['SkillSummary carries name/description/whenToUse/invocation/source/provider/resourceBase', t => has('readonly name: string', 'readonly description: string', 'readonly whenToUse?: string', 'readonly invocation: SkillInvocationPolicy', 'readonly source: SkillSource', 'readonly provider: string', 'readonly resourceBase?: SkillResourceBase')(blockOf(t, 'export interface SkillSummary'))],
+      ['SkillInvocationPolicy keeps both flags (independent badges + scope merge)', t => has('readonly modelInvocable: boolean', 'readonly userInvocable: boolean')(blockOf(t, 'export interface SkillInvocationPolicy'))],
+      ['SkillResourceBase keeps directory.path / url.url / opaque.description', t => has("kind: 'directory'; readonly path: string", "kind: 'url'; readonly url: string", "kind: 'opaque'; readonly description: string")(t)],
+    ],
+  },
+  {
+    id: 'session observation seam (skill scope resolution)',
+    file: 'packages/session-query/session-query/src/index.ts',
+    checks: [
+      // skills-admin resolves each session's cwd + recorded agent preset
+      // through observeSession() WITHOUT activating a cold Agent; the returned
+      // observation is a disposable resource the module releases.
+      ['observeSession(sessionId, options) returns Promise<SessionObservation>', t => has('observeSession(', 'sessionId: SessionId', 'options: SessionObservationOptions = {},', '): Promise<SessionObservation> {')(t)],
+    ],
+  },
+  {
+    id: 'agent preset scope seam (standing key + scoped services)',
+    file: 'packages/preset/agent-presets/src/index.ts',
+    checks: [
+      // A cold session scopes by the preset's standing key; a live session
+      // reads its preset-scoped registries through serviceFor(agent, name).
+      ['standingKeyFor(id?) returns the preset scope key', t => /standingKeyFor\(id\?: string\): Promise<ScopeKey>/.test(t)],
+      ['serviceFor(agent, name) exposes the preset-scoped service', t => /serviceFor<K extends string & keyof Context>\(agent: \{ ctx: Context \}, name: K\): Context\[K\] \| undefined/.test(t)],
+    ],
+  },
+  {
+    id: 'web-search provider Config keys (webSearchAdmin field table mirror)',
+    file: 'packages/web/web-search-deepseek/src/index.ts',
+    checks: [
+      // webSearchAdmin's per-provider field descriptors are a HAND-MAINTAINED
+      // mirror of each provider package's Config: the DeepSeek package's
+      // schema is reachable at runtime (it registers a settings section) but
+      // Exa / Perplexity register none, so no single mechanism can derive all
+      // three. These probes are the drift alarm — a renamed/added Config key
+      // here means the panel's editor must be updated with it.
+      ['deepseek Config keeps apiKey/apiKeyEnv/baseURL/model/apiVersion/maxTokens/maxUses', t => has('apiKey: z.string().role(\'secret\')', 'apiKeyEnv: z.string().role(\'credential-ref\')', 'baseURL: z.string()', 'model: z.string()', 'apiVersion: z.string()', 'maxTokens: z.number()', 'maxUses: z.number()')(t)],
+    ],
+  },
+  {
+    id: 'web-search exa Config keys',
+    file: 'packages/web/web-search-exa/src/index.ts',
+    checks: [
+      ['exa Config keeps apiKey/baseURL/searchType/numResults/highlightsPerResult', t => has('apiKey: z.string()', 'baseURL: z.string()', "searchType: z.union(['auto', 'keyword', 'neural']", 'numResults: z.number()', 'highlightsPerResult: z.number()')(t)],
+      // Exa / Perplexity deliberately register NO settings section — that is
+      // exactly why the panel's own row editor exists for them.
+      ['exa does not install a settings section (row editor is the only surface)', t => !t.includes('installSection(')],
+    ],
+  },
+  {
+    id: 'web-search perplexity Config keys',
+    file: 'packages/web/web-search-perplexity/src/index.ts',
+    checks: [
+      ['perplexity Config keeps apiKey/baseURL/model/maxTokens/searchRecency', t => has('apiKey: z.string()', 'baseURL: z.string()', 'model: z.string()', 'maxTokens: z.number()', "searchRecency: z.union(['day', 'week', 'month', 'year']")(t)],
+      ['perplexity does not install a settings section (row editor is the only surface)', t => !t.includes('installSection(')],
     ],
   },
 ]

@@ -24,8 +24,24 @@
  *     default instead of leaving a dangling id behind.
  * 10. A `config: {...}` inline row is rewritten as a block WITHOUT dropping
  *     the user's sibling keys.
- * 11. `setActive` / `install` / `uninstall` ride the injected shared serial
- *     queue (the same one pluginAdmin/mcpAdmin use).
+ * 11. `setActive` / `install` / `uninstall` / `saveConfig` ride the injected
+ *     shared serial queue (the same one pluginAdmin/mcpAdmin use).
+ * 12. An inline config row is READ, not just rewritten (list()/active() and
+ *     the dangling-id repair all depend on parsing the `config: {...}` line
+ *     itself).
+ * 13. `config()` reads a provider's own Config keys, pairing the row's
+ *     explicit values with the provider package's defaults, and reports what
+ *     is explicitly SET (a plain save never pins an inherited default).
+ * 14. `saveConfig()` writes / removes row keys in place, preserving unknown
+ *     config keys and insert-block siblings; secrets are written but never
+ *     read back.
+ * 15. A bundled provider with no patch row gets a bare id-targeted override;
+ *     an opt-in provider with no row refuses configuration loudly.
+ * 16. Field validation (enum choices, numeric minimums, unknown ids) and
+ *     empty-means-unchanged semantics.
+ * 17. A provider that registers a dsh settings namespace is written through
+ *     `settings.mutate` with the read revision — path ops only, so the
+ *     redacted view is never restated and a stale revision is refused.
  *
  * Run: node scripts/verify-web-search-admin.mjs
  */
@@ -79,7 +95,7 @@ const ctx = {
 const { applyWebSearchAdmin, webSearchInvocations } = await import('../lib/web-search-admin.js')
 const invocations = applyWebSearchAdmin(ctx)
 const descriptors = invocations()
-assert.equal(descriptors.length, 5, 'five web-search-admin invocations registered')
+assert.equal(descriptors.length, 7, 'seven web-search-admin invocations registered (list/active/setActive/install/uninstall/config/saveConfig)')
 
 // Resolve the live service by re-running apply with a wrapping context.
 // The module's apply() does:
@@ -352,6 +368,198 @@ const after12 = readFileSync(patchPath, 'utf8')
 assert.ok(/searchProvider: deepseek-official/.test(after12),
   'inline config: uninstalling the active provider still repairs the dangling id')
 console.log('scenario 12 OK: an inline config row is read and repaired')
+
+// ---------- Scenario 13: config() reads a provider's own Config keys --------
+// Exa / Perplexity register NO dsh settings section, so their `cordis.patch.yml`
+// row is the only configuration surface there is. The read pairs the row's
+// explicit values with the provider package's defaults, and reports which
+// fields are actually SET (a plain save must never pin an inherited default).
+writeFileSync(patchPath, [
+  '# test patch',
+  '- insert:',
+  "    - id: web-search-perplexity",
+  "      name: '@deepseek-ai/dsh-web-search-perplexity'",
+  '      config:',
+  '        customKept: keep-me',
+  '        searchRecency: month',
+  '',
+].join('\n'), 'utf8')
+const cfg13 = await service.config('perplexity')
+assert.equal(cfg13.providerId, 'perplexity')
+assert.equal(cfg13.namespace, 'web-search-perplexity', 'the provider namespace is reported')
+assert.equal(cfg13.source, 'row', 'no settings namespace mounted → the cordis row is the source')
+assert.equal(cfg13.revision, null, 'a row-backed editor has no settings revision')
+assert.equal(cfg13.restartRequired, true, 'a row write needs a restart')
+const fields13 = Object.fromEntries(cfg13.fields.map((f) => [f.key, f]))
+assert.deepEqual(Object.keys(fields13), ['apiKey', 'baseURL', 'model', 'maxTokens', 'searchRecency'], 'the field list is the provider Config key set')
+assert.equal(fields13.baseURL.default, 'https://api.perplexity.ai', 'the provider default rides the descriptor')
+assert.equal(fields13.searchRecency.value, 'month', 'an explicit row value is read')
+assert.equal(fields13.searchRecency.set, true)
+assert.deepEqual(fields13.searchRecency.choices, ['day', 'week', 'month', 'year'], 'enum choices ride the descriptor')
+assert.equal(fields13.model.value, '', 'an absent key reads empty (the package default applies)')
+assert.equal(fields13.model.set, false)
+assert.equal(fields13.apiKey.kind, 'secret')
+assert.equal(fields13.apiKey.value, '', 'a secret value never round-trips')
+console.log('scenario 13 OK: config() pairs row values with provider defaults and marks what is set')
+
+// ---------- Scenario 14: saveConfig() writes the row in place --------------
+const saved14 = await service.saveConfig('perplexity', {
+  model: 'sonar-pro', maxTokens: '2048', apiKey: 'pplx-secret',
+}, ['searchRecency'])
+assert.deepEqual(saved14, {
+  ok: true, source: 'row', changed: ['apiKey', 'model', 'maxTokens', 'searchRecency'], restartRequired: true,
+}, 'saveConfig reports the row source and every key it touched')
+const after14 = readFileSync(patchPath, 'utf8')
+assert.ok(/^ {8}model: "sonar-pro"$/m.test(after14), 'a string value is written JSON-quoted (lossless via yamlScalar)')
+assert.ok(/^ {8}maxTokens: 2048$/m.test(after14), 'a number is written bare, not quoted')
+assert.ok(/^ {8}apiKey: "pplx-secret"$/m.test(after14), 'the secret is written')
+assert.ok(!/searchRecency/.test(after14), 'an unset key is removed')
+assert.ok(/^ {8}customKept: keep-me$/m.test(after14), 'an unknown config key survives the rewrite')
+assert.ok(/^- insert:$/m.test(after14), 'the insert wrapper survives')
+const reread14 = await service.config('perplexity')
+const fields14 = Object.fromEntries(reread14.fields.map((f) => [f.key, f]))
+assert.equal(fields14.maxTokens.value, 2048, 'the written number parses back as a number')
+assert.equal(fields14.apiKey.set, true, 'the written secret reports as set')
+assert.equal(fields14.apiKey.value, '', 'and still never round-trips')
+console.log('scenario 14 OK: saveConfig writes/unset row keys and preserves unknown keys + siblings')
+
+// ---------- Scenario 15: bundled override vs opt-in refusal ----------------
+// The shipped DeepSeek row lives in the BUNDLE layer, so a bare id-targeted
+// override is the only shape that configures it; an opt-in provider has no row
+// at all until it is installed, and configuring nothing must fail loud.
+writeFileSync(patchPath, '# test patch\n', 'utf8')
+await assert.rejects(() => service.saveConfig('exa', { baseURL: 'https://exa.proxy' }, []), /先点「📥 安装」/, 'an uninstalled opt-in provider refuses configuration')
+const saved15 = await service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash', maxUses: '3' }, [])
+assert.equal(saved15.source, 'row', 'the bundled provider saves through the patch')
+const after15 = readFileSync(patchPath, 'utf8')
+assert.ok(/^- id: web-search-deepseek$/m.test(after15), 'a bare id-targeted override block is authored')
+assert.ok(/^ {4}maxUses: 3$/m.test(after15), 'the override carries the submitted value')
+const fields15 = Object.fromEntries((await service.config('deepseek-official')).fields.map((f) => [f.key, f]))
+assert.equal(fields15.maxUses.value, 3, 'the authored override reads back')
+assert.equal(fields15.model.set, true)
+console.log('scenario 15 OK: bundled config authors a bare override; uninstalled opt-in providers refuse')
+
+// ---------- Scenario 16: validation + empty-means-unchanged -----------------
+await assert.rejects(() => service.saveConfig('perplexity', { searchRecency: 'decade' }, []), /只能是 day \/ week \/ month \/ year/, 'an out-of-range enum is refused with its choices')
+await assert.rejects(() => service.saveConfig('perplexity', { maxTokens: '0' }, []), /必须是 ≥ 1 的整数/, 'a non-positive number is refused')
+await assert.rejects(() => service.saveConfig('bogus', {}, []), /未知 provider id/, 'an unknown provider id is refused')
+const before16 = readFileSync(patchPath, 'utf8')
+const saved16 = await service.saveConfig('deepseek-official', { model: '' }, [])
+assert.deepEqual(saved16, { ok: true, source: 'row', changed: [], restartRequired: false }, 'an empty submission reports nothing changed')
+assert.equal(readFileSync(patchPath, 'utf8'), before16, 'and writes nothing')
+console.log('scenario 16 OK: field validation, unknown ids, and empty-means-unchanged')
+
+// ---------- Scenario 17: the settings-backed path (live, revision-guarded) --
+// A provider that registers a dsh settings namespace (the DeepSeek package
+// does) is written through settings.mutate from the REDACTED descriptor, so no
+// other field — least of all another secret — is restated by a save.
+const savedOps = []
+let settingsRevision = 11
+const settingsStub = {
+  describe: () => [{
+    ns: 'web-search-deepseek',
+    revision: settingsRevision,
+    applies: 'live',
+    value: { apiKeyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-v4-flash' },
+    user: { model: 'deepseek-v4-flash' },
+    secrets: [{ path: ['apiKey'], set: true }],
+  }],
+  mutate: async (ns, ops, expected) => {
+    assert.equal(ns, 'web-search-deepseek', 'the write targets the provider namespace')
+    assert.equal(expected, settingsRevision, 'the read revision is sent back')
+    savedOps.push(...ops)
+    settingsRevision += 1
+  },
+}
+function mountWithSettings(settingsService) {
+  let mounted = null
+  applyWebSearchAdmin({
+    baseUrl: ctx.baseUrl,
+    get: (key) => (key === 'settings' ? settingsService : undefined),
+    effect(cb) { cb(); return () => {} },
+    provide(_key, svc) { mounted = svc },
+  })
+  assert.ok(mounted !== null, 'a settings-serving mount exposes the service')
+  return mounted
+}
+const settingsService = mountWithSettings(settingsStub)
+const cfg17 = await settingsService.config('deepseek-official')
+assert.equal(cfg17.source, 'settings', 'a registered namespace makes settings the save target')
+assert.equal(cfg17.revision, 11, 'the descriptor revision is reported')
+assert.equal(cfg17.restartRequired, false, 'a live section needs no restart')
+const fields17 = Object.fromEntries(cfg17.fields.map((f) => [f.key, f]))
+assert.equal(fields17.apiKey.set, true, 'a redacted secret is reported as set')
+assert.equal(fields17.apiKey.value, '', 'with no value attached')
+assert.equal(fields17.model.set, true, 'a user-overridden field is marked set')
+assert.equal(fields17.apiKeyEnv.set, false, 'an inherited field is not marked set')
+assert.equal(fields17.apiKeyEnv.value, 'DEEPSEEK_API_KEY', 'an inherited field still shows its resolved value')
+const saved17 = await settingsService.saveConfig('deepseek-official', { apiKeyEnv: 'MY_KEY' }, ['apiKey'], 11)
+assert.deepEqual(saved17, { ok: true, source: 'settings', changed: ['apiKey', 'apiKeyEnv'], restartRequired: false })
+assert.deepEqual(savedOps, [
+  { op: 'unset', path: ['apiKey'] },
+  { op: 'set', path: ['apiKeyEnv'], value: 'MY_KEY' },
+], 'path ops carry only the touched keys (in provider field order) — the redacted view is never restated')
+const conflicted = mountWithSettings({
+  describe: settingsStub.describe,
+  mutate: async () => { const error = new Error('stale'); error.code = 'SETTINGS_CONFLICT'; throw error },
+})
+await assert.rejects(
+  () => conflicted.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [], 11),
+  /已被其他界面/,
+  'a stale revision is refused with the panel-readable conflict message',
+)
+console.log('scenario 17 OK: the settings-backed path writes path ops with the read revision')
+
+// ---------- Scenario 18: a sibling entry key stays OUTSIDE the config block --
+// The config block is delimited by indent: a row may carry a sibling key
+// (`disabled:`) after its `config:`. New keys must be spliced INTO the block,
+// never appended to the entry — appending emits a YAML document the Loader
+// cannot parse, and a boot-critical patch that fails to parse stops dsh from
+// starting at all. Both the bare and the insert-row shapes are covered.
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web-search-perplexity',
+  "  name: '@deepseek-ai/dsh-web-search-perplexity'",
+  '  config:',
+  '    model: sonar',
+  '  disabled: false',
+  '',
+].join('\n'), 'utf8')
+await service.saveConfig('perplexity', { maxTokens: '2048' }, [])
+const after18 = readFileSync(patchPath, 'utf8')
+const lines18 = after18.split('\n')
+const configIdx18 = lines18.findIndex((l) => l.trim() === 'config:')
+const siblingIdx18 = lines18.findIndex((l) => l.trim() === 'disabled: false')
+const newKeyIdx18 = lines18.findIndex((l) => l.trim().startsWith('maxTokens:'))
+assert.ok(configIdx18 !== -1 && siblingIdx18 !== -1 && newKeyIdx18 !== -1, 'all three lines present')
+assert.ok(newKeyIdx18 > configIdx18 && newKeyIdx18 < siblingIdx18,
+  'the new key lands INSIDE the config block, before the sibling key')
+assert.ok(lines18[newKeyIdx18].startsWith('    '), 'the new key keeps the config child indent')
+console.log('scenario 18 OK: a sibling entry key stays outside the config block')
+
+// ---------- Scenario 19: install() carries a legacy row's config over --------
+// The panel's own config editor writes into a bare row, so install() may later
+// upgrade that row to the loader-compliant insert shape. Dropping the row
+// wholesale would silently discard every value written there — including a
+// configured API key.
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web-search-exa',
+  "  name: '@deepseek-ai/dsh-web-search-exa'",
+  '  config:',
+  '    apiKey: "exa-secret"',
+  '    baseURL: "https://exa.proxy"',
+  '',
+].join('\n'), 'utf8')
+pnpmCalls = []
+await service.install('exa')
+const after19 = readFileSync(patchPath, 'utf8')
+assert.ok(/^- insert:$/m.test(after19), 'the legacy row became an insert block')
+assert.ok(after19.includes('apiKey: "exa-secret"'), 'the configured secret survives the upgrade')
+assert.ok(after19.includes('baseURL: "https://exa.proxy"'), 'the configured endpoint survives the upgrade')
+assert.ok(after19.includes('apiKeyEnv: EXA_API_KEY'), 'the block still carries its own apiKeyEnv default')
+assert.ok(!/^- id: web-search-exa$/m.test(after19), 'the legacy bare row is gone')
+console.log('scenario 19 OK: install() carries a legacy row config into the compliant row')
 
 rmSync(tmpRoot, { recursive: true, force: true })
 console.log('verify-web-search-admin OK: all Web Search administration scenarios passed')

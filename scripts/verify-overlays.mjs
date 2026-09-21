@@ -5,20 +5,14 @@
  * - matchRowIdLine (bare / nested / quoted / comment / deep-mapping rejection)
  * - findRowEntry (bare + insert-nested rows, exact-id matching, last-wins)
  * - entryOpenAt / entryDisabled (scalar parsing at the entry's key indent)
- * - buildSearchOverrideBlockLines / buildScheduleInsertBlockLines /
- *   buildUiScheduleEnableBlockLines (canonical official-overlay shapes)
+ * - buildSearchOverrideBlockLines (the canonical search-override shape)
  * - rebuildSearchEntry (shape + unknown-key preservation, flow-config refusal)
- * - flipDisabledToFalse
  *
  * Service (applyOverlayAdmin against a fake ctx + temp profile/home):
  * - searchEnable authors the override row; idempotent re-run reports present
  * - searchEnable normalizes an openAt: never override in place, keeping
  *   unknown keys (journalMode) and insert-block siblings byte-identical
  * - searchEnable replaces the `[]` placeholder instead of appending below it
- * - scheduleEnable writes the official overlay rows (probe stub packages
- *   resolvable from <home>/profiles/node_modules), flips a disabled
- *   ui-schedule row, dedupes on re-run, preserves foreign blocks byte-level
- * - scheduleEnable fails loud (no write) when the packages do not resolve
  * - status() mirrors the patch state; typert descriptors present
  *
  * Run: node scripts/verify-overlays.mjs
@@ -40,14 +34,9 @@ const {
   entryOpenAt,
   entryDisabled,
   buildSearchOverrideBlockLines,
-  buildScheduleInsertBlockLines,
-  buildUiScheduleEnableBlockLines,
   rebuildSearchEntry,
-  flipDisabledToFalse,
   SEARCH_ROW_ID,
   SEARCH_OPEN_AT_ENABLED,
-  SCHEDULE_ROW_IDS,
-  UI_SCHEDULE_ROW_ID,
 } = await import(new URL('../lib/overlay-admin.js', import.meta.url).href)
 
 const { PATCH_BACKUP_SUFFIX, writePatch } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
@@ -80,7 +69,7 @@ const tempRoots = []
 
 check('matchRowIdLine parses bare, nested, quoted, and commented id lines', () => {
   assert.deepEqual(matchRowIdLine('- id: session-query-sqlite'), { indent: '', id: 'session-query-sqlite' })
-  assert.deepEqual(matchRowIdLine('    - id: schedule'), { indent: '    ', id: 'schedule' })
+  assert.deepEqual(matchRowIdLine('    - id: nested-row'), { indent: '    ', id: 'nested-row' })
   assert.deepEqual(matchRowIdLine(`- id: "mcp-4p755liA"`), { indent: '', id: 'mcp-4p755liA' })
   assert.deepEqual(matchRowIdLine(`- id: 'time-context' # official overlay`), { indent: '', id: 'time-context' })
   assert.equal(matchRowIdLine('  id: not-a-list-item'), null, 'mapping keys without the dash never match')
@@ -103,7 +92,7 @@ check('findRowEntry finds bare rows and insert-nested rows, exact-id only, last 
   assert.equal(entry.indent, '    ', 'the nested row wins (bare hit is a different id)')
   assert.equal(lines[entry.entryStart].trim(), '- id: session-query-sqlite')
   assert.equal(lines[entry.entryEnd - 1].trim(), 'path: ":memory:"', 'entry ends before the block end')
-  const missing = findRowEntry(lines, 'schedule')
+  const missing = findRowEntry(lines, 'absent-row')
   assert.equal(missing, null)
 })
 
@@ -132,16 +121,7 @@ check('canonical block builders match the official overlay shapes', () => {
     '    path: "C:/x/sessions-search-index.sqlite"',
     '    openAt: first-search',
   ])
-  assert.deepEqual(buildScheduleInsertBlockLines(['time-context', 'schedule']), [
-    '- insert:',
-    "    - id: time-context",
-    "      name: '@deepseek-ai/dsh-time-context'",
-    '    - id: schedule',
-    "      name: '@deepseek-ai/dsh-schedule'",
-  ])
-  assert.deepEqual(buildUiScheduleEnableBlockLines(), ['- id: ui-schedule', '  disabled: false'])
   assert.deepEqual(SEARCH_OPEN_AT_ENABLED, ['first-search', 'startup'])
-  assert.deepEqual(SCHEDULE_ROW_IDS, ['time-context', 'schedule'])
 })
 
 check('rebuildSearchEntry preserves shape and unknown keys, replaces path/openAt', () => {
@@ -181,16 +161,29 @@ check('rebuildSearchEntry authors config when missing and refuses flow-style con
   assert.throws(() => rebuildSearchEntry(['- id: session-query-sqlite', '  config: { path: a }'], 'C:/x/idx.sqlite'), /流式单行/, 'flow-style config refused loudly')
 })
 
-check('flipDisabledToFalse flips only boolean disabled scalars', () => {
-  assert.deepEqual(
-    flipDisabledToFalse(['- id: ui-schedule', '  disabled: true']),
-    ['- id: ui-schedule', '  disabled: false'],
-  )
-  assert.deepEqual(
-    flipDisabledToFalse(['- id: ui-schedule', '  name: kept', '  disabled: false']),
-    ['- id: ui-schedule', '  name: kept', '  disabled: false'],
-  )
+// A sibling entry key AFTER the config block must stay outside it. Appending
+// the canonical keys at the end of the entry would place them below that key
+// and emit a YAML document the Loader cannot parse — and the profile patch is
+// boot-critical, so a parse failure stops dsh from starting at all.
+check('rebuildSearchEntry keeps new keys inside the config block (sibling key after it)', () => {
+  const withSibling = [
+    '- id: session-query-sqlite',
+    '  name: \'@deepseek-ai/dsh-session-query-sqlite\'',
+    '  config:',
+    '    openAt: never',
+    '  disabled: false',
+  ]
+  const rebuilt = rebuildSearchEntry(withSibling, 'C:/x/idx.sqlite')
+  const configIdx = rebuilt.findIndex((l) => l.trim() === 'config:')
+  const siblingIdx = rebuilt.findIndex((l) => l.trim() === 'disabled: false')
+  const pathIdx = rebuilt.findIndex((l) => l.trim().startsWith('path:'))
+  const openAtIdx = rebuilt.findIndex((l) => l.trim() === 'openAt: first-search')
+  assert.ok(configIdx !== -1 && siblingIdx !== -1, 'both the config line and the sibling key survive')
+  assert.ok(pathIdx > configIdx && pathIdx < siblingIdx, 'path lands inside the block, before the sibling key')
+  assert.ok(openAtIdx > configIdx && openAtIdx < siblingIdx, 'openAt lands inside the block too')
+  assert.ok(rebuilt.every((l) => l.startsWith('    ') || !l.trim().startsWith('path:')), 'key indent preserved')
 })
+
 
 /* ================================ Service ================================ */
 
@@ -201,17 +194,6 @@ check('flipDisabledToFalse flips only boolean disabled scalars', () => {
 const overlayHome = mkdtempSync(join(tmpdir(), 'overlay-home-'))
 tempRoots.push(overlayHome)
 process.env.DSH_HOME = overlayHome
-
-// The launcher mounts the full built-in tree at <home>/profiles/node_modules;
-// stub the two schedule packages there so the resolution probe succeeds the
-// same way it does against a real dsh install.
-const profilesNodeModules = join(overlayHome, 'profiles', 'node_modules')
-for (const pkg of ['@deepseek-ai/dsh-time-context', '@deepseek-ai/dsh-schedule']) {
-  const dir = join(profilesNodeModules, pkg)
-  mkdirSync(join(dir, 'lib'), { recursive: true })
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: pkg, version: '0.0.0-stub', main: 'lib/index.js' }), 'utf8')
-  writeFileSync(join(dir, 'lib', 'index.js'), '', 'utf8')
-}
 
 const profileDir = join(overlayHome, 'profiles', 'web-fixture')
 mkdirSync(profileDir, { recursive: true })
@@ -237,7 +219,7 @@ check('service provided under overlayAdmin with typert descriptors', () => {
   assert.ok(ctx.provided.overlayAdmin, 'overlayAdmin provided')
   assert.equal(ctx.provided.overlayAdmin.typertRemote.namespace, 'overlayAdmin')
   const ids = overlayDescriptors.map((i) => i.id)
-  for (const tail of ['overlay/status', 'overlay/searchEnable', 'overlay/scheduleEnable']) {
+  for (const tail of ['overlay/status', 'overlay/searchEnable']) {
     assert.ok(ids.includes(`dsh-plugin-admin/${tail}`), `descriptor ${tail} present`)
   }
   assert.deepEqual(overlayInvocations().map((i) => i.id), ids, 'standalone descriptor list matches')
@@ -295,81 +277,13 @@ await checkAsync('searchEnable replaces the [] placeholder instead of appending 
   assert.ok(text.startsWith('# comment header'), 'header comment kept')
 })
 
-await checkAsync('scheduleEnable writes the official overlay rows and preserves foreign blocks', async () => {
-  writeFileSync(patchPath, [
-    '- insert:',
-    '    - id: "mcp-4p755liA"',
-    "      name: '@deepseek-ai/dsh-mcp-client'",
-    '      config:',
-    '        transport: stdio',
-  ].join('\n') + '\n', 'utf8')
-  const result = await ctx.provided.overlayAdmin.scheduleEnable()
-  assert.equal(result.state, 'enabled')
-  assert.deepEqual(result.rows, ['time-context', 'schedule', 'ui-schedule'])
-  const text = readPatch()
-  assert.ok(text.includes("    - id: time-context\n      name: '@deepseek-ai/dsh-time-context'"), 'time-context row')
-  assert.ok(text.includes("    - id: schedule\n      name: '@deepseek-ai/dsh-schedule'"), 'schedule row')
-  assert.ok(text.includes('- id: ui-schedule\n  disabled: false'), 'ui-schedule re-enabled')
-  assert.ok(text.includes('- id: "mcp-4p755liA"') && text.includes('transport: stdio'), 'foreign block byte-preserved')
-})
-
-await checkAsync('scheduleEnable flips a disabled ui-schedule row and dedupes on re-run', async () => {
-  const result = await ctx.provided.overlayAdmin.scheduleEnable()
-  assert.equal(result.state, 'present', 'second run is a no-op')
-  writeFileSync(patchPath, readPatch().replace('  disabled: false', '  disabled: true'), 'utf8')
-  const flipped = await ctx.provided.overlayAdmin.scheduleEnable()
-  assert.equal(flipped.state, 'enabled')
-  assert.deepEqual(flipped.rows, ['ui-schedule'])
-  const text = readPatch()
-  assert.equal((text.match(/- id: schedule/g) || []).length, 1, 'no duplicate schedule rows')
-  assert.ok(text.includes('  disabled: false'), 'ui-schedule flipped back')
-})
-
 await checkAsync('status mirrors the patch state', async () => {
-  // The schedule fixture above replaced the patch; re-author the search row
-  // (idempotent) so both overlays are present for the read-back.
+  // Re-author the search row (idempotent) so the read-back has data.
   await ctx.provided.overlayAdmin.searchEnable()
   const status = await ctx.provided.overlayAdmin.status()
   assert.equal(status.search.rowPresent, true)
   assert.equal(status.search.openAt, 'first-search')
-  assert.equal(status.schedule.timeContextRowPresent, true)
-  assert.equal(status.schedule.scheduleRowPresent, true)
-  assert.equal(status.schedule.uiScheduleRowPresent, true)
-  assert.equal(status.schedule.uiScheduleDisabled, false)
   assert.ok(status.indexPath.endsWith('sessions-search-index.sqlite'))
-})
-
-await checkAsync('scheduleEnable fails loud without writing when packages do not resolve', async () => {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'overlay-empty-home-'))
-  tempRoots.push(isolatedHome)
-  const previousHome = process.env.DSH_HOME
-  process.env.DSH_HOME = isolatedHome
-  const isolatedProfile = join(isolatedHome, 'profiles', 'bare-fixture')
-  mkdirSync(isolatedProfile, { recursive: true })
-  writeFileSync(join(isolatedProfile, 'package.json'), JSON.stringify({ name: 'bare-fixture' }, null, 2))
-  const isolatedProvided = {}
-  const isolatedCtx = {
-    baseUrl: pathToFileURL(join(isolatedProfile, 'node_modules', 'dsh-plugin-admin')).href,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
-    get: () => undefined,
-    effect: (fn) => fn(),
-    provide: (key, service) => { isolatedProvided[key] = service },
-  }
-  try {
-    // applyOverlayAdmin probes resolution lazily (inside scheduleEnable), so
-    // mounting against the packageless profile is safe.
-    applyOverlayAdmin(isolatedCtx, { enqueue: (op) => Promise.resolve().then(op) })
-    writeFileSync(join(isolatedProfile, 'cordis.patch.yml'), '# pristine\n', 'utf8')
-    const before = readFileSync(join(isolatedProfile, 'cordis.patch.yml'), 'utf8')
-    await assert.rejects(
-      () => isolatedProvided.overlayAdmin.scheduleEnable(),
-      /日程包不可解析/,
-      'resolution failure is reported loudly',
-    )
-    assert.equal(readFileSync(join(isolatedProfile, 'cordis.patch.yml'), 'utf8'), before, 'no write on failure')
-  } finally {
-    process.env.DSH_HOME = previousHome
-  }
 })
 
 await checkAsync('writePatch keeps the replaced revision in the .bak beside the patch file', async () => {

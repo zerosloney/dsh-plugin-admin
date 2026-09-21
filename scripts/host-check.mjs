@@ -138,19 +138,19 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all fifteen namespaces ride a single
+// One unified descriptor per package: all thirteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'credentialAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'storageAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all fifteen namespaces',
+  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all thirteen namespaces',
 )
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
-for (const tail of ['overlay/status', 'overlay/searchEnable', 'overlay/scheduleEnable']) {
+for (const tail of ['overlay/status', 'overlay/searchEnable']) {
   assert.ok(overlayIds.includes(`dsh-plugin-admin/${tail}`), `unified descriptor carries ${tail}`)
 }
 // The merged command-hook invocations must all be present (commands + hooks
@@ -1483,171 +1483,6 @@ rmSync(npmrcProfile, { recursive: true, force: true })
 const defaultRegistry = resolveRegistry(join(here, '..'))
 assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('https://'), 'registry resolution returns a usable URL: ' + defaultRegistry)
 
-// credential-admin: record keys (scope/id with '/') must NOT be surfaced as
-// writable refs — they are a disjoint namespace, fail assertCredentialRef,
-// and previously leaked into the panel as "describe 失败" rows. The
-// declared refs the panel offers stay intact.
-{
-  const declaredRefs = ['OPENAI_API_KEY']
-  let captured
-  const captureCtx = {
-    baseUrl: 'file:///nowhere',
-    logger: { info: () => {}, warn: () => {} },
-    get: (name) => name === 'credentials' ? {
-      listRecords: async () => [
-        { key: 'client-connection/browser-session' }, // record key — filtered
-        { key: 'dsh-tool-subagent/grants/foo' },     // record key — filtered
-      ],
-      describe: async (ref) => ({
-        configured: true,
-        source: 'env',
-        writable: true,
-        ref,
-      }),
-    } : undefined,
-    effect: (fn) => { fn(); return () => {} },
-    provide: (_k, v) => { captured = v },
-  }
-  const { applyCredentialAdmin } = await import(new URL('../lib/credential-admin.js', import.meta.url).href)
-  // Lazy provider form: credentialRefsFor is resolved per list(), so settings
-  // namespaces registered after this mount still surface.
-  const invocations = applyCredentialAdmin(captureCtx, () => declaredRefs)() // returns the invoker; callers invoke it
-  const list = await captured.list()
-  const refNames = list.refs.map((r) => r.ref).sort()
-  assert.deepEqual(refNames, ['OPENAI_API_KEY'], 'declared ref surfaces; record keys are filtered out')
-  assert.equal(list.scan, null, 'a bare array source reports no scan fault')
-  assert.ok(Array.isArray(invocations) && invocations.length === 3, 'three credential invocations registered (list/set/unset)')
-}
-
-// credential-admin: a failed ref scan must reach the panel as a report rather
-// than a bare empty roster (the panel renders zero rows either way, and only one
-// of the two is a fault).
-{
-  let captured
-  const scanCtx = {
-    baseUrl: 'file:///nowhere',
-    logger: { info: () => {}, warn: () => {} },
-    get: (name) => (name === 'credentials'
-      ? { listRecords: async () => [], describe: async (ref) => ({ configured: false, source: null, writable: true, ref }) }
-      : undefined),
-    effect: (fn) => { fn(); return () => {} },
-    provide: (_k, v) => { captured = v },
-  }
-  const { applyCredentialAdmin: applyScanAdmin } = await import(new URL('../lib/credential-admin.js', import.meta.url).href)
-  applyScanAdmin(scanCtx, () => ({ refs: [], reason: 'scan-failed', message: 'toJSON blew the stack' }))()
-  const failed = await captured.list()
-  assert.deepEqual(failed.refs, [], 'a failed scan yields no rows')
-  assert.deepEqual(
-    failed.scan,
-    { reason: 'scan-failed', message: 'toJSON blew the stack' },
-    'the scan fault crosses the RPC with its reason and message',
-  )
-  // `service-absent` is already carried by available:false — it must not double
-  // as a scan fault, or a bundle without settings would report a fake error.
-  let absentCaptured
-  const absentCtx = { ...scanCtx, provide: (_k, v) => { absentCaptured = v } }
-  applyScanAdmin(absentCtx, () => ({ refs: [], reason: 'service-absent' }))()
-  const absent = await absentCaptured.list()
-  assert.equal(absent.scan, null, 'service-absent does not masquerade as a scan fault')
-}
-
-// credential-admin: the reference half of the seam has no enumeration by design
-// ("configuration surfaces learn which references exist from settings schemas"),
-// so refs are derived by pairing each namespace's serialized schema with its
-// resolved value. Two wire-form facts are load-bearing, and the first cut missed
-// both — it shipped a panel that could never show a single row:
-//  (a) every child slot in `schema.toJSON()` is a **uid number** into the sibling
-//      `refs` map, not a nested node, so a walk treating numbers as inert values
-//      stops dead at the root;
-//  (b) the reference in force is the **runtime** value (`apiKeyEnv` names whichever
-//      key the profile configured); `meta.default` is only the fallback for a
-//      position the resolved value leaves unset.
-// Fixtures mirror schemastery 3.18.2's `toJSON()` output for the shapes the
-// mounted namespaces use (captured from the real library).
-{
-  // llm-deepseek: object with a schema-defaulted ref + the resolved value.
-  const deepseekSchema = {
-    uid: 11,
-    refs: {
-      4: { type: 'string', meta: {} },
-      10: { type: 'string', meta: { role: 'credential-ref', default: 'DEEPSEEK_API_KEY' } },
-      11: { type: 'object', meta: { default: {} }, dict: { apiKeyEnv: 10, baseURL: 4 } },
-    },
-  }
-  // llm-pi-ai: dict of provider profiles; the ref carries NO schema default.
-  const piSchema = {
-    uid: 17,
-    refs: {
-      1: { type: 'string', meta: { role: 'secret' } },
-      3: { type: 'string', meta: { role: 'credential-ref' } },
-      5: { type: 'object', meta: { default: {} }, dict: { apiKey: 1, apiKeyEnv: 3 } },
-      6: { type: 'dict', meta: { default: {} }, inner: 5 },
-      17: { type: 'object', meta: { default: {} }, dict: { providers: 6 } },
-    },
-  }
-  // A position the resolved value leaves unset (falls back to the schema default).
-  const fallbackSchema = {
-    uid: 24,
-    refs: {
-      20: { type: 'string', meta: { role: 'credential-ref', default: 'FALLBACK_KEY' } },
-      24: { type: 'object', meta: { default: {} }, dict: { apiKeyEnv: 20 } },
-    },
-  }
-  // An array of objects (the walk must descend through `inner` into items).
-  const arraySchema = {
-    uid: 33,
-    refs: {
-      28: { type: 'string', meta: { role: 'credential-ref' } },
-      29: { type: 'object', meta: { default: {} }, dict: { apiKeyEnv: 28 } },
-      30: { type: 'array', meta: { default: [] }, inner: 29 },
-      33: { type: 'object', meta: { default: {} }, dict: { items: 30 } },
-    },
-  }
-  const descriptors = [
-    { ns: 'llm-deepseek', schema: deepseekSchema, value: { apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' } },
-    { ns: 'llm-pi-ai', schema: piSchema, value: { providers: {
-      'minimax-cn': { apiKey: 'sk-must-not-leak', apiKeyEnv: 'MINIMAX_CN_API_KEY' },
-      'custom-gw': { apiKeyEnv: 'MY_GATEWAY_KEY' },
-      dormant: {},
-    } } },
-    { ns: 'llm-fallback', schema: fallbackSchema, value: {} },
-    { ns: 'llm-nested', schema: arraySchema, value: { items: [{ apiKeyEnv: 'NESTED_KEY' }, { apiKeyEnv: 'not a posix name' }] } },
-  ]
-  const describeOptions = []
-  const { credentialRefsFor } = await import(new URL('../lib/index.js', import.meta.url).href)
-  const report = credentialRefsFor({
-    get: (name) => (name === 'settings'
-      ? { describe: (options) => { describeOptions.push(options); return descriptors } }
-      : undefined),
-  })
-  assert.equal(report.reason, null, 'a completed scan reports no reason')
-  assert.deepEqual(
-    report.refs.sort(),
-    ['DEEPSEEK_API_KEY', 'FALLBACK_KEY', 'MINIMAX_CN_API_KEY', 'MY_GATEWAY_KEY', 'NESTED_KEY'],
-    'schema+value pairing descends through uid pointers, reads runtime refs, and falls back to schema defaults',
-  )
-  assert.ok(!report.refs.includes('not a posix name'), 'a ref outside the seam grammar never reaches the panel')
-  assert.deepEqual(describeOptions, [{ redactSecrets: true }], 'describe() is asked to redact secrets before the walk')
-  // An absent settings service (CLI / non-web deployment) is expected, not a
-  // fault — it must not be reported as a failed scan.
-  assert.deepEqual(
-    credentialRefsFor({ get: () => undefined }),
-    { refs: [], reason: 'service-absent' },
-    'absent settings service reports service-absent, not a failure',
-  )
-  // A throwing describe() (a namespace whose schema cannot serialize) must not
-  // be indistinguishable from "nothing is declared": the panel would otherwise
-  // render a confident empty roster over a real host fault.
-  const failed = credentialRefsFor({
-    get: () => ({ describe: () => { throw new RangeError('Maximum call stack size exceeded') } }),
-  })
-  assert.equal(failed.reason, 'scan-failed', 'a throwing describe() is reported as a failed scan')
-  assert.deepEqual(failed.refs, [], 'a failed scan yields no refs')
-  assert.ok(failed.message.includes('call stack'), 'the failure message is carried for the panel')
-  const unusable = credentialRefsFor({ get: () => ({ describe: 'not a function' }) })
-  assert.equal(unusable.reason, 'service-absent', 'a settings service without describe() reads as absent')
-}
-
 // ---------------------------------------------------------------------------
 // Regression vectors for the review-fix pure helpers: semver prerelease
 // ordering, YAML inline-comment stripping, the frontmatter closing delimiter,
@@ -1737,4 +1572,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; credential-admin filters record keys from refs (lazy declared provider); credential ref discovery over the real wire schema envelope (uid-pointer descent + runtime value over schema default + array container + grammar filter + absent-settings degrade + scan-fault report); semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
