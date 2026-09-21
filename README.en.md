@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.4 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.5 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 
 ## Feature overview
@@ -106,8 +106,8 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 
 | Plugin | dsh | Status |
 |---|---|---|
-| v1.17.4 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; unarchive degraded (below) |
-| v1.17.4 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (includes `unarchiveSession`) |
+| v1.17.5 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; unarchive degraded (below) |
+| v1.17.5 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (includes `unarchiveSession`) |
 
 - **Newest dsh release: 0.1.6-alpha.2** (alpha pre-release; the `latest` tag is still 0.1.5-rc.2). Upgrade: `npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`.
 - **dsh-workspace in 0.1.5-rc.2 lacks `unarchiveSession`** (added in 0.1.6-alpha.2): the plugin still mounts (mount-time warning), deleting an archived session skips the archived-set cleanup, and the explicit unarchive gesture reports a clear error; upgrading to 0.1.6-alpha.2 restores full behavior.

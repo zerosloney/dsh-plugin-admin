@@ -4,7 +4,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 > 面板文案为简体中文硬编码（宿主 locale 体系不覆盖外部插件）。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.4 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.5 · MIT
 
 ## 功能总览
 
@@ -105,8 +105,8 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 | 插件版本 | dsh 版本 | 状态 |
 |---|---|---|
-| v1.17.4 | **0.1.5-rc.2**（`latest` 标签，验证基线） | ✅ 全功能；取消归档降级（见下） |
-| v1.17.4 | **0.1.6-alpha.2**（`alpha` 标签，最新发布） | ✅ 全功能（含 `unarchiveSession`） |
+| v1.17.5 | **0.1.5-rc.2**（`latest` 标签，验证基线） | ✅ 全功能；取消归档降级（见下） |
+| v1.17.5 | **0.1.6-alpha.2**（`alpha` 标签，最新发布） | ✅ 全功能（含 `unarchiveSession`） |
 
 - **dsh 最新发布：0.1.6-alpha.2**（alpha 预发布；`latest` 标签仍为 0.1.5-rc.2）。升级命令：`npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`。
 - **0.1.5-rc.2 的 `dsh-workspace` 没有 `unarchiveSession`**（0.1.6-alpha.2 补上）：插件照常挂载（挂载时告警），删除已归档会话跳过归档清理、显式取消归档报清晰错误；升级到 0.1.6-alpha.2 后恢复完整。
