@@ -491,8 +491,17 @@ assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH ba
 // Mount helper: render one registered section into a fresh host div. Text
 // assertions run against document.body, so exactly one panel stays mounted
 // at a time; each panel is unmounted before the next one mounts.
+//
+// The predecessor check is load-bearing, not ceremony: while the teardowns were
+// `root.remove?.()` (a no-op — a React root has no `remove()`), panels silently
+// piled up in document.body, and one panel's text could satisfy another panel's
+// assertion. That is how a duplicated usage-dashboard block sat at the end of the
+// file, passing only because the usage panel had never really gone away.
 let host = null
 async function mountSection(section) {
+  if (host !== null && host.isConnected) {
+    throw new Error(`self-check: "${section.options.id}" would mount while a previous panel is still mounted — unmount it (root.unmount() + host.remove()) before mounting the next one`)
+  }
   const hostEl = document.body.appendChild(document.createElement('div'))
   host = hostEl
   let root
@@ -1257,30 +1266,37 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 40))
 assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env value with ; survives the newline-only split')
 
-// 15. Mount the 命令与钩子 section (merged from dsh-command-hook-admin):
-// two tabs over the two stores, plus the bridge install/uninstall affordance.
+// 15. The 命令与钩子 section (merged from dsh-command-hook-admin): two tabs over
+// the two stores, plus the bridge install/uninstall affordance. Its assertions
+// live further down (15a-15f), so it is mounted there rather than here — a panel
+// held open across the other mounts would let one panel's text satisfy another's
+// assertion, which is exactly how a duplicated usage block hid in this file.
 await act(async () => { mcpRoot.unmount() })
-const commandHookRoot = await mountSection(commandHookSection)
+host.remove()
 
 // 15p. The standalone 用量仪表盘 page: mounts, auto-loads rows, renders the
 // VibeUsage form (range pills, KPI cards, heatmap).
 const usageRoot = await mountSection(usageSection)
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = document.body.textContent
+text = host.textContent
 assert.ok(text.includes('📊 用量仪表盘') && text.includes('📈 每日趋势'), 'usage dashboard page renders')
 assert.ok(text.includes('⏱ 日期'), 'range pills row rendered')
 for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
-  assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
+  assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
 }
 assert.ok(text.includes('总 Token') && text.includes('输入 Token'), 'KPI token cards rendered')
-assert.ok(document.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
+assert.ok(text.includes('会话数') && text.includes('活跃天数'), 'KPI session cards rendered')
+assert.ok(text.includes('🕒 分时活跃'), 'hour-of-week heatmap panel rendered')
+assert.ok(text.includes('alpha-project'), 'project filter carries project names')
+assert.ok(host.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
 await act(async () => {
-  const pill7d = [...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
+  const pill7d = [...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
   pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   await new Promise((resolve) => setTimeout(resolve, 30))
 })
-assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
-usageRoot.remove?.()
+assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
+await act(async () => { usageRoot.unmount() })
+host.remove()
 
 // 15y. The Webhook 触发 page: mounts, renders rules from webhookAdmin/list.
 const webhookRoot = await mountSection(webhookSection)
@@ -1289,7 +1305,8 @@ text = document.body.textContent
 assert.ok(text.includes('ci-fail'), 'webhook rule card rendered from webhookAdmin/list')
 assert.ok(text.includes('POST'), 'endpoint hint rendered')
 assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner rendered')
-webhookRoot.remove?.()
+await act(async () => { webhookRoot.unmount() })
+host.remove()
 
 // 15z-storage-cred. The 存储与凭据 page: ONE mount renders both blocks — the
 // storage-backend picker (+ session format card) and the credential refs
@@ -1302,7 +1319,8 @@ assert.ok(text.includes('@deepseek-ai/dsh-storage-sqlite'), 'both storage backen
 assert.ok(text.includes('DEEPSEEK_API_KEY'), 'credential ref rendered')
 assert.ok(text.includes('已配置') && text.includes('未配置'), 'presence badges rendered')
 assert.ok(text.includes('$DSH_HOME/.credentials.yaml'), 'source label rendered')
-storageCredRoot.remove?.()
+await act(async () => { storageCredRoot.unmount() })
+host.remove()
 
 // 15z-storage-cred-empty. An empty ref roster must SAY so: refs come from the
 // mounted providers' schemas, so "no refs" is a fact about this composition,
@@ -1344,7 +1362,8 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 20))
 })
 assert.deepEqual(ctx.storageSwaps ?? [], ['json'], 'the FIRST radio swaps to the first backend, not the last')
-storageLoopRoot.remove?.()
+await act(async () => { storageLoopRoot.unmount() })
+host.remove()
 
 // 15z-websearch-loop. Same closure hazard in the provider list: click the FIRST
 // opt-in provider's install button and assert ITS id travels over the RPC.
@@ -1357,7 +1376,8 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 20))
 })
 assert.deepEqual(ctx.webSearchInstalls ?? [], ['exa'], 'the FIRST install button installs the provider it belongs to')
-webSearchRoot.remove?.()
+await act(async () => { webSearchRoot.unmount() })
+host.remove()
 
 // 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
 // Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.
@@ -1382,7 +1402,8 @@ await act(async () => {
 })
 assert.ok(host.textContent.includes('命中 1 个会话'), 'fulltext hit summary rendered')
 assert.ok(host.textContent.includes('分析与重构插件系统架构'), 'fulltext hit card rendered')
-searchSessionRoot?.remove?.()
+await act(async () => { searchSessionRoot.unmount() })
+host.remove()
 
 // 15z-health. Session health check: 🩺 button loads the per-session report.
 const healthRoot = await mountSection(byId['session-history'])
@@ -1394,29 +1415,17 @@ await act(async () => {
 })
 assert.ok(host.textContent.includes('🩺'), 'health report card rendered')
 assert.ok(host.textContent.includes('read') && host.textContent.includes('×3'), 'tool stat row rendered')
-healthRoot?.remove?.()
-assert.ok(document.body.textContent.includes('⏱ 日期'), 'range pills row rendered')
-for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
-  assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].some(b => b.textContent === pill), 'range pill ' + pill + ' rendered')
-}
-assert.ok(document.body.textContent.includes('总 Token') && document.body.textContent.includes('输入 Token'), 'KPI token cards rendered')
-assert.ok(document.body.textContent.includes('会话数') && document.body.textContent.includes('活跃天数'), 'KPI session cards rendered')
-assert.ok(document.body.textContent.includes('📈 每日趋势'), 'daily trend panel rendered')
-assert.ok(document.body.textContent.includes('🕒 分时活跃'), 'hour-of-week heatmap rendered')
-assert.ok(document.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
-assert.ok(document.body.textContent.includes('alpha-project'), 'project filter carries project names')
-await act(async () => {
-  const pill7d = [...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
-  pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  await new Promise((resolve) => setTimeout(resolve, 30))
-})
-assert.ok([...document.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
+await act(async () => { healthRoot.unmount() })
+host.remove()
 
 URL.createObjectURL = () => { throw new Error("stubbed out after the export test") }
 URL.revokeObjectURL = () => {}
 
+// 15. The 命令与钩子 section, mounted here so its assertions below run against
+// their own panel (15a-15f).
+const commandHookRoot = await mountSection(commandHookSection)
 
-text = document.body.textContent
+text = host.textContent
 assert.ok(text.includes('提示词命令'), 'commands tab renders')
 assert.ok(text.includes('/review'), 'live command row rendered')
 assert.ok(text.includes('已停用'), 'disabled command badge rendered')
@@ -1511,5 +1520,7 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 60))
 assert.ok(document.body.textContent.includes('注入：列表服务不可用'), 'project tab surfaces the session-list load error')
 ctx.sessionListFail = undefined
+await act(async () => { commandHookRoot.unmount() })
+host.remove()
 
 console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, credential roster empty state + scan-fault reporting')
