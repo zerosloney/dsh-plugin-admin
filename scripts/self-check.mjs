@@ -834,6 +834,81 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 assert.deepEqual(ctx.closeDeletes, ['s2'], 'close confirm calls sessionAdmin/closeSession with the live session id')
 ctx.connection.rpc.call = originalCall
 
+// 8c. Directory groups are collapsible: clicking a group header hides its
+// sessions (persisted to localStorage); clicking again restores them.
+const groupHeaders = () => [...document.querySelectorAll('.group-header')]
+const cardCount = () => document.querySelectorAll('.card').length
+assert.equal(groupHeaders().length, 3, 'session list renders one header per directory group')
+const cardsExpanded = cardCount()
+await act(async () => {
+  groupHeaders()[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(cardCount() < cardsExpanded, 'collapsing a group hides its session cards')
+assert.ok(groupHeaders()[0].className.includes('collapsed'), 'the collapsed header is marked')
+assert.ok(document.body.textContent.includes('已折叠'), 'the collapsed header shows a 已折叠 note')
+assert.equal(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/collapsed-groups') ?? '[]').length, 1, 'the collapsed group key is persisted')
+await act(async () => {
+  groupHeaders()[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.equal(cardCount(), cardsExpanded, 'expanding restores the session cards')
+assert.equal(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/collapsed-groups') ?? '[]').length, 0, 'expanding clears the persisted key')
+
+// 8d. Collapse-all / expand-all from the filter bar tail.
+const collapseAllButton = () => [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('全部折叠') || b.textContent?.includes('全部展开'))
+await act(async () => {
+  collapseAllButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.equal(cardCount(), 0, 'collapse-all hides every session card')
+assert.ok(document.body.textContent.includes('全部展开'), 'the toggle flips to 全部展开')
+await act(async () => {
+  collapseAllButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.equal(cardCount(), cardsExpanded, 'expand-all restores every session card')
+
+// 8e. Bulk delete of the current projection: the filter bar's action raises a
+// confirm bar; confirming fires one RPC per session, routing live sessions
+// through closeSession and ended/archived ones through deleteSession.
+ctx.deletes = []
+ctx.closeDeletes = []
+ctx.connection.rpc.call = async (route, method, payload) => {
+  if (method === 'sessionAdmin/closeSession') {
+    ctx.closeDeletes.push(payload.args.sessionId)
+    return { ok: true, value: { deleted: payload.args.sessionId } }
+  }
+  return originalCall(route, method, payload)
+}
+const bulkAllButton = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('删除当前 ('))
+assert.ok(bulkAllButton !== undefined, 'bulk delete-all action present')
+await act(async () => {
+  bulkAllButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(document.body.textContent.includes('确认删除 当前筛选的 3 个会话'), 'the bulk confirm bar names the scope and count')
+const bulkConfirmButton = () => [...document.querySelectorAll('.bulk-bar button')].find((b) => b.textContent?.includes('确认删除'))
+await act(async () => {
+  bulkConfirmButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 200))
+assert.deepEqual(ctx.deletes.slice().sort(), ['s1', 's3'], 'bulk delete routes ended/archived sessions through deleteSession')
+assert.deepEqual(ctx.closeDeletes, ['s2'], 'bulk delete closes the live session first')
+assert.equal(document.querySelectorAll('.bulk-bar').length, 0, 'the bulk bar clears once the run finishes')
+
+// 8f. Per-directory bulk delete from the group header.
+const groupBulkButton = [...document.querySelectorAll('.group-header button')].find((b) => b.textContent?.includes('整个目录'))
+assert.ok(groupBulkButton !== undefined, 'per-directory bulk delete action present')
+await act(async () => {
+  groupBulkButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(document.body.textContent.includes('确认删除 目录「alpha-project」的 1 个会话'), 'the group confirm names the directory and count')
+await act(async () => {
+  [...document.querySelectorAll('.bulk-bar button')].find((b) => b.textContent?.includes('取消')).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.equal(document.querySelectorAll('.bulk-bar').length, 0, 'cancel dismisses the bulk bar')
+ctx.connection.rpc.call = originalCall
+// Leave the delete spies empty for the sidebar-menu tests below (they assert
+// the exact RPC count of an armed/second click).
+ctx.deletes = []
+ctx.closeDeletes = []
+
 // 9. Unmount the sessions panel and mount the MCP服务器 section instead.
 await act(async () => { sessionsRoot.unmount() })
 host.remove()
@@ -1088,7 +1163,8 @@ await new Promise((resolve) => setTimeout(resolve, 120))
 const mergeContainer = mergeOptions.querySelector('[data-dsh-admin-archived-merge]')
 assert.ok(mergeContainer !== null, 'merge container injected into the official section scroll container')
 assert.ok(mergeContainer.textContent.includes('分析与重构插件系统架构'), 'session-history panel mounted inside the official page')
-assert.ok(mergeContainer.textContent.includes('alpha-project'), 'workspace panel mounted inside the official page')
+assert.equal(mergeContainer.querySelectorAll('[data-dsh-admin-section]').length, 1, 'only the session-history panel merges (the workspace manager is not merged)')
+assert.ok(!mergeContainer.textContent.includes('新建工作区'), 'the workspace manager is absent from the merged page')
 
 // Switching to another section unmounts the merged panels.
 archivedRow.removeAttribute('aria-current')
@@ -1676,4 +1752,4 @@ ctx.sessionListFail = undefined
 await act(async () => { commandHookRoot.unmount() })
 host.remove()
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')
