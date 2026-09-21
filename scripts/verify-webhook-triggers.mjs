@@ -36,7 +36,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // fails that check on POSIX runners.
 const WORKSPACE = join(tmpdir(), 'repos', 'app')
 
-const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, WEBHOOK_RUNTIME_PACKAGE } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
+const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
 
 const results = []
 const check = (name, fn) => {
@@ -433,6 +433,69 @@ await checkAsync('saveRule refuses an inherited short secret on edit', async () 
   assert.ok(rejected !== null && /至少 16/.test(rejected.message), 'the inherited short secret is refused with the floor message')
   const onDisk = JSON.parse(readFileSync(legacyPath, 'utf8'))
   assert.equal(onDisk.rules.find((r) => r.id === 'legacy').secret, 'short', 'the refused save left the stored rule untouched')
+})
+
+/* ============ runtime path: create-mode preset pre-resolution ============
+ * The runtime dispatch path (webhookRuntime.register run callback) is where
+ * create-mode failures used to be invisible: runRule returned the request,
+ * history recorded ok:true, and the official async createWebhookSession died
+ * in host logs only. Pre-resolving the presets (idempotent lookups the
+ * official create runs anyway) must surface bad names in history as ok:false
+ * and still return the request for valid names.
+ */
+await checkAsync('runtime path: bad preset name lands in history as ok:false; valid names return the request', async () => {
+  let capturedRun = null
+  const fakeRuntime = {
+    register: (entry) => { capturedRun = entry.run; return () => {} },
+    dispatch: () => {},
+  }
+  const runtimeCtx = {
+    baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    get: (key) => {
+      if (key === 'agents') return fakeAgents
+      if (key === 'webServer') return fakeWebServer
+      if (key === 'webhookRuntime') return fakeRuntime
+      if (key === 'permissionPresets') return {
+        resolve: (name) => { if (name === 'workspace-write') return {}; throw new Error(`permission: unknown preset "${name}"`) },
+      }
+      if (key === 'agentPresets') return {
+        resolve: async (id) => { if (id === 'cordis') return { id }; throw new Error(`agent-presets: preset "${id}" not found`) },
+      }
+      return undefined
+    },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') teardownDisposers.push(d); return d },
+    inject: (deps, fn) => { fn({ webhookRuntime: fakeRuntime }); return () => {} },
+    provide: (key, service) => { runtimeCtx.provided ??= {}; runtimeCtx.provided[key] = service },
+  }
+  applyWebhookAdmin(runtimeCtx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: { webhookTriggersPath: join(webhookHome, 'runtime-triggers.json') } })
+  assert.ok(capturedRun !== null, 'runtime rule registered')
+
+  const service = runtimeCtx.provided.webhookAdmin
+  await service.saveRule({ id: 'nightly', enabled: true, secret: 'topsecret-key-16chars', event: 'push', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' }, promptTemplate: '构建：$EVENT' })
+
+  const delivery = (deliveryId) => ({ kind: DISPATCH_KIND, source: 'nightly', deliveryId, event: { name: 'push', payload: {} }, receivedAt: Date.now() })
+  const signal = new AbortController().signal
+
+  // Valid presets → the SessionRequest comes back (create proceeds).
+  const okResult = await capturedRun(delivery('d-ok'), signal)
+  assert.ok(okResult !== null && okResult.workspacePath === WORKSPACE && okResult.agentPreset === 'cordis', 'valid presets return the session request')
+
+  // Bad agentPreset → null + history ok:false with the real error.
+  await service.saveRule({ id: 'nightly', enabled: true, secret: 'topsecret-key-16chars', event: 'push', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'nope', permissionPreset: 'workspace-write' }, promptTemplate: '构建：$EVENT' })
+  const badAgent = await capturedRun(delivery('d-bad-agent'), signal)
+  assert.equal(badAgent, null, 'unknown agentPreset → no request returned')
+  let hist = (await service.list()).history
+  const badAgentEntry = hist.find((h) => h.deliveryId === 'd-bad-agent')
+  assert.ok(badAgentEntry && badAgentEntry.ok === false && /agent-presets: preset "nope" not found/.test(badAgentEntry.error), 'unknown agentPreset recorded in history with the real error')
+
+  // Bad permissionPreset → null + history ok:false.
+  await service.saveRule({ id: 'nightly', enabled: true, secret: 'topsecret-key-16chars', event: 'push', action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'nope-perm' }, promptTemplate: '构建：$EVENT' })
+  const badPerm = await capturedRun(delivery('d-bad-perm'), signal)
+  assert.equal(badPerm, null, 'unknown permissionPreset → no request returned')
+  hist = (await service.list()).history
+  const badPermEntry = hist.find((h) => h.deliveryId === 'd-bad-perm')
+  assert.ok(badPermEntry && badPermEntry.ok === false && /permission: unknown preset "nope-perm"/.test(badPermEntry.error), 'unknown permissionPreset recorded in history with the real error')
 })
 
 console.log(results.join('\n'))
