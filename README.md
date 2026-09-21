@@ -196,7 +196,7 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 2. **安装/卸载参数白名单**：`&` `|` `>` `<` `%` `!` 引号、前导 `-`（flag 伪装）等注入向量一律在 spawn 前拒绝，合法包名/作用域/版本/本地路径照常放行；
 3. **本地安装判定**：远程 git/tarball URL（`https://`、`git+ssh://`、`github:` 简写）不再误标为本地安装，`link:`/`file:`/盘符/UNC/POSIX 路径仍正确解析；
 4. **共享日志目录拒删**：删除会话前若发现其他持久化会话解析到同一目录，则拒绝递归删除，避免平铺布局下连带清掉邻居日志；
-5. **registry 公开动词挂载探测**：`workspaceRegistry` 缺失 `unarchiveSession()` 时（dsh 版本回退/改名），`apply()` 在挂载即抛错并指明缺失动词；
+*5. **registry 公开动词缺失降级**：`workspaceRegistry` 缺失 `unarchiveSession()` 时（dsh 版本过旧，如 0.1.5-rc.2），`apply()` 不再拒绝挂载——改为挂载时告警；删除路径跳过归档清理（绝不抛裸 TypeError），显式取消归档 RPC 报清晰错误；
 6. **mcpAdmin 配置往返**：对临时 profile 的 `cordis.patch.yml` 做 list / upsert（新增、原位更新）/ remove，验证条目 id、serverName 与最终文件内容正确且仍是合法 YAML；同时校验畸形输入（非法 id / transport / 缺 command）被拒绝；`fsAdmin.reveal` 校验路径参数；
 7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
 8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝；
@@ -210,7 +210,7 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 
 本插件刻意零 dsh 导入，全部骑在运行时的 Cordis Context 上——其中一部分是 dsh 的公开服务面（`ctx.commands` / `ctx.shell` / `ctx.agents` / `ctx.sessionPersistence` 的 list/stat/open、`ctx.skills` 的 snapshot/list、`ctx.settings` 的 describe/mutate 等），另有四处依赖 **dsh/cordis 的内部实现细节**；这些接缝在依赖的 dsh 版本上都有挂载期 fail-loud 形状探测或运行时降级，不会静默坏掉，另有第五处挂载探测守着一个**成员集会随 dsh 版本变动**的公开面（workspace registry 的动词集）。升级 dsh 时应关注以下五处：
 
-1. **workspaceRegistry 的动词面**：归档/取消归档走 registry 的**公开动词** `archiveSession()` / `unarchiveSession()`（各自在 registry 内部经 `enqueueOperation` 串行化，插件不再触碰 `requireState()` / `setState()` 这两个 TypeScript `private` 成员），归档集只经公开 getter `archivedSessionIds` 读取。挂载时探测 `unarchiveSession` 是否在，缺失即抛错并指明动词名。
+1. **workspaceRegistry 的动词面**：归档/取消归档走 registry 的**公开动词** `archiveSession()` / `unarchiveSession()`（各自在 registry 内部经 `enqueueOperation` 串行化，插件不再触碰 `requireState()` / `setState()` 这两个 TypeScript `private` 成员），归档集只经公开 getter `archivedSessionIds` 读取。旧版 dsh（如 0.1.5-rc.2）的 registry **没有** `unarchiveSession()`：插件照常挂载（挂载时告警指明降级面），删除路径跳过归档清理而非抛错，显式取消归档报清晰错误。
 2. **会话日志的物理布局**：`sessionAdmin` 的删除路径按 `dsh-session-persistence-jsonl` 的内部目录布局（`projectKey` / `encodeSegment`）推导日志目录并递归删除。存在 stat 交叉校验：布局漂移或自定义持久化后端时**拒绝删除并报错**，绝不误删。
 3. **钩子桥热重启走 cordis fiber 内部**：`hooks.json` 保存后通过 `fiber.update(config, true)` 重启已挂载的桥插件（cordis 内部 API）。失败时降级为「已保存，需重启 dsh 生效」。
 4. **`ctx.agents.create/resume` 的透明包装**：在线会话删除依赖捕获 dsh 工厂返回的 AgentHandle——插件临时替换这两个方法、透传原结果并在插件卸载时还原（cordis HMR 安全）。包装不可写（frozen/getter-only）时降级为「重启后再删」并打日志。

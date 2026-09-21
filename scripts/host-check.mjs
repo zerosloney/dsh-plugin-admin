@@ -365,31 +365,45 @@ await assert.rejects(
   'archiving an unknown session is refused',
 )
 
-/* ----------- apply() probes the registry unarchive verb at mount -----------
- * A dsh version that drops WorkspaceRegistry.unarchiveSession must fail the
- * plugin mount loudly, not break archive state on first use.
+/* ----------- apply() tolerates a registry without the unarchive verb -----------
+ * Older dsh releases (0.1.5-rc.2) ship WorkspaceRegistry without
+ * unarchiveSession. The plugin must still mount: the delete path skips the
+ * archived-set cleanup and the unarchive RPC reports a clear error — never a
+ * raw TypeError taking the whole plugin down.
  */
 const brokenCtx = {
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
-  baseUrl: pathToFileURL(join(here, '..')).href,
-  provided: {},
-  provide: function (key, service) { this.provided[key] = service },
-  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'workspaceRegistry' ? brokenCtx.workspaceRegistry : undefined),
-  on: (name, fn) => () => {},
-  typert: { register: () => () => {} },
-  workspaceRegistry: {
-    list: () => [],
-    archivedSessionIds: [],
-    // unarchiveSession deliberately missing
-  },
-  sessionPersistence: {
-    list: async () => [],
-    stat: async () => undefined,
-    open: async () => ({ read: async () => [], close: async () => {} }),
-  },
+ logger: { info: () => {}, warn: () => {}, error: () => {} },
+ baseUrl: pathToFileURL(join(here, '..')).href,
+ provided: {},
+ provide: function (key, service) { this.provided[key] = service },
+ effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+ get: (name) => (name === 'workspaceRegistry' ? brokenCtx.workspaceRegistry : undefined),
+ on: (name, fn) => () => {},
+ typert: { register: () => () => {} },
+ workspaceRegistry: {
+ list: () => [],
+ archivedSessionIds: [],
+ // unarchiveSession deliberately missing
+ },
+ sessionPersistence: {
+ list: async () => [],
+ stat: async () => undefined,
+ open: async () => ({ read: async () => [], close: async () => {} }),
+ },
 }
-assert.throws(() => apply(brokenCtx), /lacks unarchiveSession\(\)/, 'mount fails loudly on a partial registry API')
+let unarchiveWarned = false
+brokenCtx.logger.warn = () => { unarchiveWarned = true }
+apply(brokenCtx)
+assert.equal(unarchiveWarned, true, 'mount warns about the missing unarchive verb instead of failing')
+await assert.doesNotReject(
+ () => brokenCtx.provided.sessionAdmin.deleteSession('session-archived'),
+ 'deleteSession succeeds when the registry lacks unarchiveSession (cleanup skips, no raw TypeError)',
+)
+await assert.rejects(
+ () => brokenCtx.provided.sessionAdmin.unarchive('session-archived'),
+ /缺少 unarchiveSession/,
+ 'the explicit unarchive gesture reports the missing verb instead of silently no-oping',
+)
 
 
 /* --------- apply() probes the persistence seam at mount ---------
