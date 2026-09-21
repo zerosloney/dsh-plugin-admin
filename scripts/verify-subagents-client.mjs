@@ -68,6 +68,7 @@ await check('registers exactly one bundle factory under the package id', () => {
 /* 2 ── materialization */
 const exports = registrations[0].factory((spec) => {
   if (spec === 'react') return React
+  if (spec === 'react-dom/client') return { createRoot }
   throw new Error(`require("${spec}") missed the platform table`)
 })
 await check('exports apply + inject ["slots", "connection"]', () => {
@@ -95,8 +96,8 @@ await check('apply() injects styles and registers the 子智能体 settings sect
   assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the nine settings sections + the todo dock',
+    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+    'unified apply injects the seven settings sections + the todo dock',
   )
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')

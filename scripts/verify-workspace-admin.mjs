@@ -328,11 +328,14 @@ function mountPanel(container) {
   }
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
-  const section = registered.find((r) => r.options.id === 'workspaces')
-  if (section === undefined) throw new Error('workspaces settings section not registered')
-  const face = section.options.inject()
+  // 工作区 no longer registers a settings section of its own: the panel is
+  // DOM-merged into dsh's own 已归档会话 page, and the bundle exports the
+  // component for direct mounting.
+  const component = bundle.WorkspacesSection
+  if (typeof component !== 'function') throw new Error('bundle does not export WorkspacesSection')
+  const face = { call: (method, args) => ctx.connection.rpc.call('/api', method, { args: args }) }
   const root = createRoot(container)
-  root.render(React.createElement(section.component, face))
+  root.render(React.createElement(component, face))
   return { root, face }
 }
 

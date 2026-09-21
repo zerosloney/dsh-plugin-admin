@@ -57,6 +57,7 @@ assert.equal(registrations[0].id, 'dsh-plugin-admin')
 // 2. Materialization: the factory consumes the platform require table.
 const exports = registrations[0].factory((spec) => {
   if (spec === 'react') return React
+  if (spec === 'react-dom/client') return { createRoot }
   throw new Error(`require("${spec}") missed the platform table`)
 })
 assert.deepEqual(exports.inject, ['slots', 'connection'], 'injects slots + connection')
@@ -203,6 +204,15 @@ const ctx = {
           ctx.deletes = ctx.deletes ?? []
           ctx.deletes.push(payload.args.sessionId)
           return { ok: true, value: { deleted: payload.args.sessionId } }
+        }
+        // The workspace panel (merged into dsh's 已归档会话 page) reloads
+        // through workspaceAdmin/list on mount.
+        if (method === 'workspaceAdmin/list') {
+          return { ok: true, value: {
+            available: true,
+            workspaces: mockWorkspaces.map((w) => ({ workspaceId: w.workspaceId, title: w.title, path: w.path, sessionIds: [], createdAt: '2026-01-02T03:04:05.000Z', updatedAt: '2026-01-02T03:04:05.000Z' })),
+            archivedSessionIds: ['s1'],
+          } }
         }
         // The 技能 roster read: the panel asks sessionAdmin/list first, then
         // hands every session id to the host in one request.
@@ -414,23 +424,27 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone 工作区 / 技能 / Web 搜索 / MCP服务器 / 子智能体 /
-// 命令与钩子 / 历史会话 / 用量仪表盘 / Webhook 触发 settings sections, and the
+// Nine slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// section, the standalone 技能 / Web 搜索 / MCP服务器 / 子智能体 /
+// 命令与钩子 / 用量仪表盘 / Webhook 触发 settings sections, and the
 // 待办清单 dock above the composer. Neither the Codex bridge (a banner inside
 // the 命令与钩子 钩子 tab) nor the Agent preset editor (the shell's own
-// ui-agent-preset section owns that roster) gets a section of its own.
-assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
+// ui-agent-preset section owns that roster) gets a section of its own — and
+// 工作区 / 历史会话 are DOM-merged into dsh's own 已归档会话 page instead of
+// registering nav rows of their own.
+assert.equal(injectedSections.length, 9, 'nine slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×9), settings.plugins.tab, and conversation.input.dock',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×7), settings.plugins.tab, and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + workspaces + skills + web search + MCP + subagents + command hooks + session history + usage dashboard + webhook triggers + todo dock')
+assert.equal(registeredSections.length, 9, 'nine registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + webhook triggers + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['session-history'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'], 'expected registration ids present')
+assert.equal(byId['session-history'], undefined, '历史会话 no longer registers a settings section of its own')
+assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -457,11 +471,22 @@ assert.equal(commandHookSection.options.label, '命令与钩子', 'command hooks
 const commandHookFace = commandHookSection.options.inject()
 assert.equal(typeof commandHookFace.call, 'function', 'command hooks inject face carries the RPC call')
 
-const historySection = byId['session-history']
-assert.equal(historySection.options.name, 'settings.section')
-assert.equal(historySection.options.order, 100, '历史会话 sorts last in the settings nav')
-assert.equal(historySection.options.label, '历史会话', 'session history section label')
-const historyFace = historySection.options.inject()
+// 工作区 / 历史会话 no longer register sections: the panels are merged into
+// dsh's own 已归档会话 page by DOM. The bundle exports both components so the
+// harness can mount them directly and keep exercising the panel contracts
+// (the merge itself is covered by the archived-sessions test below).
+const rpcCall = (method, args) => ctx.connection.rpc.call('/api', method, { args: args })
+const sessionsSection = {
+  options: { id: 'session-history', inject: () => ({ call: rpcCall, refreshSessions: null }) },
+  component: exports.SessionsSection,
+}
+const workspacesSection = {
+  options: { id: 'workspaces', inject: () => ({ call: rpcCall }) },
+  component: exports.WorkspacesSection,
+}
+assert.equal(typeof exports.SessionsSection, 'function', 'bundle exports the session-history panel for direct mounting')
+assert.equal(typeof exports.WorkspacesSection, 'function', 'bundle exports the workspace panel for direct mounting')
+const historyFace = sessionsSection.options.inject()
 assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
 assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
 
@@ -716,7 +741,7 @@ ctx.removeResult = undefined
 // 7. Unmount the plugins panel and mount the 历史会话 section instead.
 await act(async () => { pluginsRoot.unmount() })
 host.remove()
-const sessionsRoot = await mountSection(historySection)
+const sessionsRoot = await mountSection(sessionsSection)
 
 text = document.body.textContent
 assert.ok(text.includes('分析与重构插件系统架构'), 'session 1 title rendered')
@@ -1005,27 +1030,113 @@ const mcpNavRow = mkNavRow('MCP服务器')
 // from the registrations above, so a new page without an icon fails here), plus
 // the shell's own rows — including 'Agent 预设', the label this plugin must NOT
 // reuse (the official ui-agent-preset page owns it, and the icon injector can
-// only key off the label text).
+// only key off the label text). '已归档会话' is dsh's OWN page that the plugin
+// merges its panels into, so it gets the clock icon too.
 const pluginSectionLabels = registeredSections
-  .filter((entry) => entry.options.name === 'settings.section')
-  .map((entry) => entry.options.label)
+ .filter((entry) => entry.options.name === 'settings.section')
+ .map((entry) => entry.options.label)
 for (const label of pluginSectionLabels) if (label !== 'MCP服务器') mkNavRow(label)
-const officialRows = ['Agent 预设', '模型', '内置插件', '已归档会话'].map((label) => mkNavRow(label))
+const officialRows = ['Agent 预设', '模型', '内置插件'].map((label) => mkNavRow(label))
+const archivedNavRow = mkNavRow('已归档会话')
 settingsDialog.appendChild(settingsNav)
 document.body.appendChild(settingsDialog)
 await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
-assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 9, `nine settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
+assert.equal(repainted.length, pluginSectionLabels.length + 1, 'every plugin settings section plus the official 已归档会话 row got its nav icon repainted')
+assert.ok(pluginSectionLabels.length === 7, `seven settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
+assert.equal(archivedNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), '已归档会话', 'the official archived-sessions row carries the clock icon')
 for (const row of officialRows) {
-  assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
+ assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
 }
 await new Promise((resolve) => setTimeout(resolve, 60))
-assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, pluginSectionLabels.length, 'repaint is idempotent across observer fires')
+assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, pluginSectionLabels.length + 1, 'repaint is idempotent across observer fires')
 settingsDialog.remove()
+
+// 11.6 Archived-sessions merge: while dsh's OWN 已归档会话 section is the
+// active settings page, the plugin's session-history + workspace panels are
+// DOM-mounted into that section's scroll container (the content column's last
+// unmarked child) instead of registering nav rows of their own; switching
+// away, closing the dialog, or the shell re-rendering the container away all
+// unmount them.
+const mergeDialog = document.createElement('div')
+mergeDialog.setAttribute('role', 'dialog')
+mergeDialog.setAttribute('aria-modal', 'true')
+const mergeNav = document.createElement('nav')
+const mkMergeRow = (label, active) => {
+  const row = document.createElement('button')
+  if (active) row.setAttribute('aria-current', 'true')
+  const text = document.createElement('span')
+  text.textContent = label
+  row.appendChild(text)
+  mergeNav.appendChild(row)
+  return row
+}
+mkMergeRow('Agent 预设', false)
+const archivedRow = mkMergeRow('已归档会话', true)
+const mergeContent = document.createElement('div')
+mergeContent.appendChild(document.createElement('div')) // shell header
+const mergeOptions = document.createElement('div') // shell scroll container
+mergeContent.appendChild(mergeOptions)
+mergeDialog.appendChild(mergeNav)
+mergeDialog.appendChild(mergeContent)
+document.body.appendChild(mergeDialog)
+await new Promise((resolve) => setTimeout(resolve, 120))
+
+const mergeContainer = mergeOptions.querySelector('[data-dsh-admin-archived-merge]')
+assert.ok(mergeContainer !== null, 'merge container injected into the official section scroll container')
+assert.ok(mergeContainer.textContent.includes('分析与重构插件系统架构'), 'session-history panel mounted inside the official page')
+assert.ok(mergeContainer.textContent.includes('alpha-project'), 'workspace panel mounted inside the official page')
+
+// Switching to another section unmounts the merged panels.
+archivedRow.removeAttribute('aria-current')
+mkMergeRow('模型', true)
+await new Promise((resolve) => setTimeout(resolve, 120))
+assert.equal(mergeOptions.querySelector('[data-dsh-admin-archived-merge]'), null, 'switching away unmounts the merged panels')
+
+// Re-activating the official page re-injects them.
+archivedRow.setAttribute('aria-current', 'true')
+await new Promise((resolve) => setTimeout(resolve, 120))
+assert.ok(mergeOptions.querySelector('[data-dsh-admin-archived-merge]') !== null, 're-activating the official page re-injects the panels')
+
+// Closing the dialog unmounts them.
+document.body.removeChild(mergeDialog)
+await new Promise((resolve) => setTimeout(resolve, 120))
+assert.equal(document.querySelector('[data-dsh-admin-archived-merge]'), null, 'closing the dialog unmounts the merged panels')
+
+// 11.7 Fallback: a deployment WITHOUT dsh's own 已归档会话 page (0.1.5-rc.2 and
+// earlier ship no dsh-client-ui-settings-unarchive-sessions) has no host for
+// the merged panels — the injector registers the two sections the plugin used
+// to own, once, so the panels stay reachable.
+const fallbackDialog = document.createElement('div')
+fallbackDialog.setAttribute('role', 'dialog')
+fallbackDialog.setAttribute('aria-modal', 'true')
+const fallbackNav = document.createElement('nav')
+const fallbackRow = document.createElement('button')
+fallbackRow.setAttribute('aria-current', 'true')
+const fallbackLabel = document.createElement('span')
+fallbackLabel.textContent = '模型'
+fallbackRow.appendChild(fallbackLabel)
+fallbackNav.appendChild(fallbackRow)
+fallbackDialog.appendChild(fallbackNav)
+fallbackDialog.appendChild(document.createElement('div'))
+document.body.appendChild(fallbackDialog)
+await new Promise((resolve) => setTimeout(resolve, 120))
+
+assert.equal(injectedSections.length, 11, 'the fallback injects the two retired sections')
+const fallbackInjections = injectedSections.slice(9)
+assert.deepEqual(fallbackInjections.map((i) => i.key), ['settings.section', 'settings.section'], 'fallback waits on settings.section')
+fallbackInjections.forEach((i) => i.callback())
+const fallbackIds = registeredSections.slice(9).map((e) => e.options.id).sort()
+assert.deepEqual(fallbackIds, ['session-history', 'workspaces'], 'fallback registers 历史会话 + 工作区')
+assert.ok(registeredSections.some((e) => e.options.id === 'session-history' && e.options.order === 100), 'fallback 历史会话 keeps order 100')
+assert.ok(registeredSections.some((e) => e.options.id === 'workspaces' && e.options.order === 22), 'fallback 工作区 keeps order 22')
+// One-shot: further dialog churn never re-registers the same ids.
+await new Promise((resolve) => setTimeout(resolve, 80))
+assert.equal(injectedSections.length, 11, 'the fallback fires once')
+document.body.removeChild(fallbackDialog)
 
 // 12. MCP editor: edit an existing server, fill it via the React onChange
 // props (jsdom synthetic input events do not reach React 18's controlled
@@ -1423,7 +1534,7 @@ host.remove()
 
 // 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
 // Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.
-const searchSessionRoot = await mountSection(byId['session-history'])
+const searchSessionRoot = await mountSection(sessionsSection)
 await act(async () => {
   const ftBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🔎 全文搜索'))
   assert.ok(ftBtn !== undefined, 'fulltext toggle present in the sessions host')
@@ -1448,7 +1559,7 @@ await act(async () => { searchSessionRoot.unmount() })
 host.remove()
 
 // 15z-health. Session health check: 🩺 button loads the per-session report.
-const healthRoot = await mountSection(byId['session-history'])
+const healthRoot = await mountSection(sessionsSection)
 await act(async () => {
   const healthBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🩺 体检'))
   assert.ok(healthBtn !== undefined, 'health button present on a session card')
@@ -1565,4 +1676,4 @@ ctx.sessionListFail = undefined
 await act(async () => { commandHookRoot.unmount() })
 host.remove()
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')
