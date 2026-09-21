@@ -50,6 +50,8 @@ const {
   UI_SCHEDULE_ROW_ID,
 } = await import(new URL('../lib/overlay-admin.js', import.meta.url).href)
 
+const { PATCH_BACKUP_SUFFIX, writePatch } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
+
 const results = []
 const check = (name, fn) => {
   try {
@@ -368,6 +370,17 @@ await checkAsync('scheduleEnable fails loud without writing when packages do not
   } finally {
     process.env.DSH_HOME = previousHome
   }
+})
+
+await checkAsync('writePatch keeps the replaced revision in the .bak beside the patch file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'patch-backup-'))
+  tempRoots.push(dir)
+  const patchPath = join(dir, 'cordis.patch.yml')
+  writePatch(patchPath, ['# first'])
+  assert.ok(!existsSync(patchPath + PATCH_BACKUP_SUFFIX), 'the first write has no previous revision to keep')
+  writePatch(patchPath, ['# second'])
+  assert.equal(readFileSync(patchPath + PATCH_BACKUP_SUFFIX, 'utf8'), '# first\n', 'backup holds the revision the write replaced')
+  assert.equal(readFileSync(patchPath, 'utf8'), '# second\n', 'the patch holds the new revision')
 })
 
 console.log(results.join('\n'))

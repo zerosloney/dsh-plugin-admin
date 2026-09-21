@@ -28,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, resolvePluginConfig, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -476,6 +476,25 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
     threw = error
   }
   assert.ok(threw !== null && /config\.gitTimeoutMs/.test(threw.message), 'mistyped config budget fails loud at mount: ' + threw)
+}
+
+/* ------------ the Config schema is what the Loader resolves ------------
+ * dsh resolves a plugin's config through `Config['~standard'].validate`
+ * (vendor/cordis resolveConfig, Standard Schema v1) before apply mounts:
+ * an absent row must yield the defaults, a mistyped one issues a message
+ * the Loader turns into a ValidationError. Unknown keys ride through — the
+ * command-hook admin reads its overrides off the same row.
+ */
+{
+  const resolved = Config['~standard'].validate(undefined)
+  assert.ok(Array.isArray(resolved.issues) === false, 'absent config resolves without issues')
+  assert.equal(resolved.value.pnpmTimeoutMs, 300_000, 'schema default matches the mount fallback (pnpmTimeoutMs)')
+  assert.equal(resolved.value.sessionExportEventCap, 200_000, 'schema default matches the mount fallback (sessionExportEventCap)')
+  assert.deepEqual(resolvePluginConfig({ commandsDir: 'x' }).commandsDir, 'x', 'unknown keys pass through the resolution')
+  const bad = Config['~standard'].validate({ sessionSearchLimit: 1.5 })
+  assert.ok(Array.isArray(bad.issues) && /config\.sessionSearchLimit must be an integer/.test(bad.issues[0].message), 'mistyped knob reports an issue: ' + JSON.stringify(bad))
+  const notMapping = Config['~standard'].validate('soon')
+  assert.ok(Array.isArray(notMapping.issues) && /config must be a mapping/.test(notMapping.issues[0].message), 'non-mapping config reports an issue: ' + JSON.stringify(notMapping))
 }
 
 /* ------------ read() shape drift stays visible ------------

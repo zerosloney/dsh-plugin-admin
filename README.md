@@ -173,6 +173,8 @@ node scripts/integration-check.mjs
 node scripts/repro-delete-session.mjs
 ```
 
+**patch 文件恢复**：profile `cordis.patch.yml` 是启动关键路径（解析失败会让宿主起不来），因此所有写回——插件启停 / MCP / 子智能体 / 命令钩子桥 / 存储 / Web 搜索 / Webhook 运行时挂载 / overlay 启用——都收敛到 `lib/patch-utils.js` 的 `writePatch()`（全 `lib/` 内唯一改写该文件的地方）：原子写（temp + rename）之外，改写前会把**被替换的上一版**复制到同目录的 `cordis.patch.yml.dsh-admin.bak`（滚动保留一版）；子智能体模块另有首写快照 `cordis.patch.yml.bak-subagent-admin`（保留最初的原稿）。写坏了用对应的 `.bak` 覆盖回去再重启即可。
+
 自检套件覆盖：
 1. Bundle 工厂加载与模块导出校验；
 2. 十四个 slot 注册（`settings.plugins.tab`「扩展插件」+ **`settings.section` ×10**：「工作区」/「技能」/「MCP服务器」/「子智能体」/「命令与钩子」/「用量仪表盘」/「Webhook 触发」/「Web 搜索」/「存储与凭据」/「历史会话」+ `conversation.input.dock`「待办」/「日程」+ `conversation.input.right`「日程铃」），以及各面板的按需挂载（含**导航图标注入**：10 个插件设置行逐行换成专属 16×16 图标，官方行——包括同名风险最高的「Agent 预设」——原样保留）；
@@ -198,7 +200,7 @@ node scripts/repro-delete-session.mjs
 21. `verify-web-search-admin.mjs`：Web 搜索 provider——`list()` 三个 provider 与 bundled 标记、`active()` 直读 patch、`setActive()` 原位改键且保留注释 / `fetchProvider` / 内联 `config: {...}` 的兄弟键（含值里带冒号者）、`install()` 走 stub pnpm + 补 cordis 行、`uninstall()` 拒绝内置默认并同时摘除行与依赖、`[]` 占位替换、legacy 裸行升级不重复、卸载活动 provider 回落默认、三条写路径都骑注入的串行队列；
 22. `verify-storage-admin.mjs`：存储后端——`list()` 两后端与 `installedVersion`、`swap()` 原位改 `backend:` 且保留注释与兄弟键、未安装后端拒绝切换、`install()` 走 stub pnpm 后 `swap()` 成功、`formatVersion()` 的自动迁移链；
 23. `verify-hooks-codex-bridge.mjs`：Codex 钩子桥——`codexBridgeInstall()` 幂等 pnpm add + 补 `- insert: <hooks-codex>` 行（`configPath` 指向 `<dshHome>/hooks.codex.json`）、`[]` 占位替换、legacy 裸行升级为合规 insert 形、与 Claude-Code 桥生命周期互不干扰、`codexBridgeRemove()` 在空 / 部分状态下安全；
-24. `verify-project-commands.mjs` / `verify-project-hooks.mjs` / `verify-overlays.mjs` / `integration-check.mjs`：项目级 `.agents` 命令与钩子桥契约、运行时一键启用（全文检索 / 日程）的 patch 写入，以及针对真实 dsh checkout 的 51 条源码契约探针（含统一描述符的十五个命名空间）。
+24. `verify-project-commands.mjs` / `verify-project-hooks.mjs` / `verify-overlays.mjs` / `integration-check.mjs`：项目级 `.agents` 命令与钩子桥契约、运行时一键启用（全文检索 / 日程）的 patch 写入、`writePatch()` 的滚动备份契约（改写前把被替换的上一版留在同目录 `.dsh-admin.bak`，首次写入无备份可留），以及针对真实 dsh checkout 的 51 条源码契约探针（含统一描述符的十五个命名空间）。
 
 「命令与钩子」浏览器端（并入 self-check.mjs）：五个 slot 注册断言（order 27）、命令/钩子两页签切换与列表渲染（活动/停用徽标、存储路径）、桥三态横幅（未安装 → 一键安装按钮、已安装未挂载 → 重启提示）、安装后提示文案不被 reload 报告覆盖、卸载两击确认（首击只布防、二击才发 RPC）、**Codex 兄弟桥同页治理**（三态横幅 + 一键安装 + 两击卸载；安装返回稀疏载荷后仍回读 `listHooks`——断言钩子列表与横幅没被稀疏值清空）。
 
@@ -213,7 +215,8 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
 8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝；
 9. **checkUpdates 缓存命中回归**：5 分钟 TTL 内第二次查询命中缓存时，`updateAvailable` 按**当前安装版本**重算——仍落后版本 → 提醒保留（修复了缓存只存 latest 导致重开面板提醒丢失）；把安装版本抬到 latest 模拟升级完成 → 提醒自动消除（更新完删除提醒）；
-10. **checkUpdates 强制刷新（force）**：「⬆ 检查更新」传入 `force` 时**绕过 TTL 真正重查 registry**（stub 请求计数递增），返回值立即反映 registry 新版本，且**下一个 TTL 内的普通查询直接吃到 force 刷新后的缓存内容**（检查更新强制更新缓存内容）；升级到刷新后的 latest → 提醒消除。
+10. **checkUpdates 强制刷新（force）**：「⬆ 检查更新」传入 `force` 时**绕过 TTL 真正重查 registry**（stub 请求计数递增），返回值立即反映 registry 新版本，且**下一个 TTL 内的普通查询直接吃到 force 刷新后的缓存内容**（检查更新强制更新缓存内容）；升级到刷新后的 latest → 提醒消除；
+11. **`Config` 的 Standard Schema 契约**：dsh Loader 经 `Config['~standard'].validate`（cordis `resolveConfig`）解析插件配置——空配置行解析出内置默认值（与 `apply()` 的挂载兜底同值）、错值与非 mapping 回报 issues（Loader 转成 `ValidationError` 拒绝挂载）、未知键（`commandsDir` 等 commandHookAdmin 覆盖项）原样透传；`apply()` 直调（测试 / 手工挂载）走同一个 `resolvePluginConfig()`，两条路径契约一致。
 
 ---
 
@@ -227,9 +230,11 @@ Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
 4. **`ctx.agents.create/resume` 的透明包装**：在线会话删除依赖捕获 dsh 工厂返回的 AgentHandle——插件临时替换这两个方法、透传原结果并在插件卸载时还原（cordis HMR 安全）。包装不可写（frozen/getter-only）时降级为「重启后再删」并打日志。
 5. **私有的日志路径 / 投影缓存 / 已弃用读取器**：钩子载荷的 `transcript_path` 用 JSONL 后端的私有 `locate()`（缺失降级为空串）；会话删除会顺手清理 `sessionProjectionCache` 的存储域记录（`session_projcache` 表名漂移时仅降级为「侧栏刷新后消失」）；子智能体「运行中」页签用已弃用的 `session.snapshotEvents()` 同步读取器获取运行中子进程的最新尾部（读取器漂移降级为空列表）。
 
-已验证基线：**dsh 0.1.5-rc.2 线（2026-09 checkout，`@modelcontextprotocol/sdk` 1.29.0）**。升级 dsh / cordis 后请重跑 `npm test`（其 `host-check` / 各 verify 脚本会对上述接缝做真实契约断言）。
+已验证基线：**dsh 0.1.5-rc.2 线（2026-09 checkout，`@modelcontextprotocol/sdk` 1.29.0）**。升级 dsh / cordis 后请重跑 `npm test`（其 `host-check` / 各 verify 脚本会对上述接缝做真实契约断言，含插件 `Config` 的 Standard Schema 解析契约）。
 
-另有两处**有意的约定偏离**：其一，dsh 内置函数插件惯例 named-export `name` / `inject` / `Config` / `apply`——本插件只导出 `inject` / `apply`（插件名由 patch 行的 `name:` 提供），且不声明 `Config` schema（零 dsh import 原则下不引入 zod；配置行的 tunables 在挂载时逐一 fail-loud 校验，见 `apply()` 顶部的 positiveNumber/positiveInteger 探测）。其二，Web 面板文案硬编码简体中文（见开头语言说明）。
+关于 dsh 内置函数插件惯例 named-export `name` / `inject` / `Config` / `apply`：本插件**不导出 `name`**（插件名由 patch 行的 `name:` 提供，这是唯一未照做的一项）；`Config` 已按 **Standard Schema v1** 形状手写导出——Loader 的 `resolveConfig` 只触碰 `~standard.validate`，因此无需引入 zod / schemastery，**零 dsh import 原则不变**：空配置行解析为内置默认值、错值由 Loader 在挂载前抛 `ValidationError`（fail-loud）、未知键（如 commandHookAdmin 的 `commandsDir`）原样透传；`apply()` 内保留同一套 `positiveNumber` / `positiveInteger` 探测（提取为共享的 `resolvePluginConfig()`，`Config` 与 `apply()` 共用），直调 `apply(ctx, config)` 的测试与手工挂载场景得到与 Loader 完全一致的契约。另有一处**有意的约定偏离**：Web 面板文案硬编码简体中文（见开头语言说明）。
+
+可经 patch 行 `config:` 调整的 tunables——在 profile 的 `cordis.patch.yml` 里写一条 id 覆盖行（`- id: plugin-admin` 块内补 `config: { ... }`，loader 的 patch 语义会整段替换该行的 config，组合行本身仍在 bundle 层）即可；`Config` 与 `apply()` 共用同一份解析，不存在两套默认值；全部要求正数（时间预算单位为毫秒）：`pnpmTimeoutMs` 300000、`updateCheckTimeoutMs` 8000、`updateCheckConcurrency` 4、`updateCheckCacheTtlMs` 300000、`gitTimeoutMs` 5000、`gitStatsCacheTtlMs` 3000、`gitDiffMaxChars` 524288、`sessionSummaryCacheTtlMs` 60000、`sessionListConcurrency` 4、`sessionEventScanCap` 20000、`sessionSearchLimit` 30、`sessionExportEventCap` 200000。
 
 ---
 
