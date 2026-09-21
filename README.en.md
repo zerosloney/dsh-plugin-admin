@@ -1,93 +1,147 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — manage plugins, MCP servers, subagents, commands & hooks, skills, web search, webhooks, workspaces, and sessions from dsh's built-in settings UI, instead of hand-editing `cordis.patch.yml`.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — 11 management panels inside dsh's built-in settings UI: extensions, session history, workspaces, skills, MCP servers, subagents, commands & hooks, webhook triggers, web search, usage dashboard, and a todo dock. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
 **npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.4 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 
-## Why
+## Feature overview
 
-dsh's everything-is-a-plugin architecture is powerful — but day-to-day administration means editing YAML rows by hand, restarting, and hoping. This plugin moves those operations into the official settings UI with validation, atomic writes, live reload, and fail-loud errors.
+| Panel | Focus |
+|---|---|
+| 🔌 Extensions | install / uninstall / update / disable-enable profile plugins (pnpm orchestration + bundles sync), Loader runtime snapshot |
+| 💬 Session History | list / search / archive / pin / Markdown export / health reports / full-text search; online sessions delete without restart |
+| 📁 Workspaces | workspace CRUD + ordering + archive set (dsh has no official management surface) |
+| 📚 Skills | full skill roster (global layer + per-session scope merge), strictly read-only |
+| 🔌 MCP Servers | row-level CRUD + real handshake probes + try-call console |
+| 🛰️ Subagents | managed subagent rows CRUD + running monitor / follow-up + CLI backends |
+| ⌨️ Commands & Hooks | file-backed prompt commands (live) + Claude / Codex hooks bridges + read-only `.agents/` inspector |
+| 🪝 Webhook Triggers | inbound endpoint → steer a live session / create a session; signature check + idempotent dedup |
+| 🔍 Web Search | provider switching + config editor (Exa / Perplexity have no official UI) |
+| 📊 Usage Dashboard | client-side real-time token usage / activity aggregation |
+| ✅ Todo Dock | live todo panel above the composer + git file-change footer |
 
-## What you get
+Common: every write (plugin toggles / MCP / subagents / hooks bridges / web search / webhook runtime / overlays) goes through `lib/patch-utils.js` `writePatch()` — atomic (temp + rename) with the replaced revision kept beside the file as `cordis.patch.yml.dsh-admin.bak`; all writes share one serial operation queue; missing dsh services degrade per-panel with a hint, never a full plugin mount failure.
 
-**Settings pages** (standalone sections in the settings dialog, each lazy-mounted):
+## Usage
 
-- **🔌 Extensions** — a third tab inside the shell's Plugins page: install from npm or a local path, fuzzy search + source filters (built-in / package / local), one-click uninstall with inline confirmation, a **disable/enable toggle** (v1.10.0 — pure profile-patch `disabled: true` rows for the bundle's own composing rows, no pnpm, reversible, effective on the next restart; disabled plugins are skipped by the update checker, and uninstall cleans up the toggle's rows), **batch "update all"** with per-item progress, and automatic remote update detection (registry-aware, exact-version pinning so pnpm never silently no-ops). "Update available" reminders **persist in localStorage** until the upgrade actually happens or a recheck confirms you're current. Below the list sits a **📡 read-only Loader runtime snapshot** (`pluginInventoryAdmin/list` over `ctx.pluginInventory`): a collapsed header with six phase badges (active / not-mounted / loading / pending / unloading / failed, plus a preset count) that expands into a stable-sorted table of every non-composing entry, one sub-section per agent preset (raw `!!js` expressions are never sent to the browser). An absent `dsh-host-plugin-inventory` (CLI/base) renders a quiet hint; a mounted service whose `list()` throws renders an error plus a retry button — the two are never conflated.
-- **📁 Workspaces** (order 22) — the host's `ctx.workspaceRegistry` has full CRUD + an archive set but no web surface: list every workspace (title, path, session count, timestamps), **create** (native directory picker, or type an absolute path; an existing path returns that workspace with `created: false`), **rename**, **reorder** (`registry.insertBefore`), **delete** (double confirm, registry-only — the directory and its sessions stay), **check status** (surfaces `missing-dir`), and **unarchive-all** when the archive set is non-empty. Writes go through the registry's public verbs, so the sidebar and this page always agree on ordering; CLI/headless degrades to a one-line hint instead of failing to mount.
-- **📚 Skills** (order 23) — the full roster of this deployment, read straight from the `ctx.skills` registry (`@deepseek-ai/dsh-skill`) instead of one session's catalog: the **global layer** (user directories, plugin-embedded `bundled` skills, runtime registrations) merged by name with one read per distinct **(cwd, agent-preset) scope** taken from every session (`ctx.sessionQuery.observeSession` + `agentPresets.standingKeyFor`; a live session uses its own Agent as the scope key, sessions sharing a scope cost one read, no cold-agent activation). Each card shows `/<name>`, independent 🤖 model-invocable / 👤 human-invocable badges, the translated `source` label, `whenToUse`, and the resource location (SKILL.md path → **📂 open directory** via `fsAdmin/reveal`, or a URL link) plus every scope it was seen in. Text / source / scope filters narrow the roster client-side, and a scope-coverage panel reports per-scope counts, unresolved sessions and `complete=false` observations honestly. The previous revision could only ever show one session's user-invocable subset, with path, source and model-only entries projected away. Every card keeps **📋 copy `/<name>`**. Strictly read-only — `get()` (the body loader) is never called and nothing is written.
-- **🔍 Web Search** (order 31) — dsh ships three optional web-search providers but hardwires `searchProvider: deepseek-official` in the base bundle: radio-switch between `deepseek-official` / `exa` / `perplexity` (single-key rewrite of the profile's `web` row, comments and `fetchProvider` preserved; an id-override row is authored when the row only exists in the bundle layer), **📥 install** an opt-in provider (pnpm add + a loader-compliant `- insert:` row, peers pinned in lockstep), and **🗑 uninstall** it (refuses the bundled default; strips the row and repairs `searchProvider` in one write). Every card also carries a **⚙ config editor** (v1.17.3) over the provider package's own Config keys — the shell's 插件配置 page only renders cards for plugins that register a settings namespace, and Exa / Perplexity register none, so an installed provider had no configuration surface at all. The field table is a **hand-maintained mirror** of each package's `Config` (no runtime surface can expose Exa / Perplexity's schema, since they register no settings section), pinned by `integration-check` drift probes that fail `npm test` when a provider renames or adds a key. The host decides where a save lands: the provider's dsh settings section via `settings.mutate` path ops (live, revision-guarded, only the touched keys restated, never re-stating a redacted secret) when it has one, otherwise its `cordis.patch.yml` row (restart required; unknown keys and insert-block siblings preserved). Inherited package defaults stay in placeholders (a plain save never pins a default the user did not touch), numbers/enums are validated against the field descriptors, and secret fields are write-only.
-- **~~🧩 Agent Presets~~ (removed)** — v1.16.0 shipped a 预设编辑 page (host namespace `agentPresetsAdmin` + an in-browser `agent.cordis.yml` editor). It managed the same roster as the shell's own **Agent 预设** page (`ui-agent-preset`: roster cards, copy-to-create, guided authoring, delete, make-default, open-location, read-only shipped compositions), so both the page and its host namespace are gone: preset CRUD / default selection / directory reveal belong to the official page, and composition text is edited in the files it points you at.
-- **🪝 Codex Hooks Bridge** — one-click install/uninstall of the second stock bridge, `@deepseek-ai/dsh-hooks-codex` (Codex-format hooks, `$DSH_HOME/hooks.codex.json`): pnpm add + the `- insert: hooks-codex` row, legacy bare rows upgraded in place, idempotent re-install, and a lifecycle fully independent of the Claude-Code bridge. It is a **second status strip inside the 命令与钩子 钩子 tab**, not a settings page of its own — both bridges share one `listHooks()` payload and one install/remove shape, so a second page only duplicated the affordance. The strip reports mounted / installed-not-mounted / not-installed plus the resolved hooks-file path, and (unlike `bridgeInstall`, which spreads `listHooks()`) the Codex verbs answer sparsely, so the tab re-reads through `listHooks` instead of rendering that sparse payload as the whole state.
-- **📊 Usage Dashboard** — a VibeUsage-style page: date-range pills (today/24H/7D/30D/90D/all) + project filter, KPI cards with vs-previous-period deltas, a stacked daily token trend, a weekday×hour activity heatmap, and conditional local insights (cache hit rate, output ratio, concentration). All slicing happens client-side over per-session rows — range changes never re-fetch.
-- **🛰️ MCP Servers** — CRUD for stdio / streamable-http instances with **real handshake probes** (`initialize → tools/list`, tool counts & names, process-tree kill on timeout), split-command detection with actionable warnings, per-entry probe results cached to localStorage (failures stay session-only), and a **🧪 try-call console** that runs a genuine `tools/call` (MCP Inspector posture, 60s budget, 16KB result cap).
-- **🤖 Subagents** — managed `@deepseek-ai/dsh-tool-subagent` rows (name, persona, tool allow/deny, model routing, depth, background mode) plus a **Running** tab (live elapsed timers, interrupt with parent-session recheck, and follow-up delivery to live continuable children via the official `ctx.subagents.prompt` channel — queue = next turn, steer = nearest step, 32k char cap) and **CLI backends** (codex / claude-code provider packages, or any agent CLI on PATH — gemini, qwen, opencode, custom).
-- **⌨️ Commands & Hooks** — file-backed prompt commands (`$DSH_HOME/commands/*.json`, live `ctx.commands` registration, fs.watch hot reload, JSON export/import with same-name skip), Claude-Code-format hooks with dual storage + disable sidecar, bridge hot-restart, one-click `@deepseek-ai/dsh-hooks-claude-code` install/uninstall **plus a second status strip for the Codex-format sibling bridge (`@deepseek-ai/dsh-hooks-codex`)**, and a read-only `.agents/` project inspector.
-- **💬 Session History** — title/summary cards with online/archived/ended status lights, multi-dimensional search & filters, per-card token usage tags (`↑in ↓out · cache`) with a whole-page totals strip, **📌 local pinning** (localStorage + pinned filter), **🔎 full-text search** across all sessions' message content (with one-click enablement when a deployment ships it off — see *Runtime Enabler* below), **🩺 health reports** (per-tool call/error counts via callId pairing, turn-end reasons, retries, compactions), **⬇ Markdown export** (human-readable transcript download; whole-log reads cap at `sessionExportEventCap`, default 200,000 events — truncation is flagged in the file, the payload, and the toast, and the same cap bounds health reports), archive/restore, and permanent delete that works on **online sessions without restarting dsh** (transparent `AgentHandle` capture → official dispose chain, then log removal).
-- **🪝 Webhook Triggers** — inbound `POST /webhook-triggers/<ruleId>` endpoints with timing-safe shared-secret verification, event filtering, delivery idempotency IDs, and a 1MiB body cap. Actions steer an existing live session (steer/followup) or create a new one (via the one-click `@deepseek-ai/dsh-webhook` runtime mount). Rules live in `$DSH_HOME/webhook-triggers.json` (atomic writes + fs.watch), with CRUD, **trigger tests**, and delivery history in the panel. Secrets are at least 16 characters (the endpoint has no rate limit, so a short secret is brute-forceable; stored shorter secrets keep delivering but must be replaced on the next save). Note: the inbound endpoint intentionally bypasses the browser-trust fence for external callbacks — the secret is the only line of defense, always set one.
+All panels live in the dsh settings dialog → the matching nav item (each panel lazy-mounts). Operations that change profile config (plugin install/uninstall/disable-enable, MCP, web search, webhook runtime, overlay enablement) require a **dsh restart** to take effect — the panel says so.
 
-**Conversation surfaces** (mounted into the chat skeleton's slots):
+### 🔌 Extensions
+1. Open: Settings → Plugins → the **Extensions** tab.
+2. Install: type an npm package name (`dsh-xxx`) or a local absolute path in the top box → Enter → restart dsh.
+3. Update: the card's **⬆ Update** button, or **⬆⬆ Update all** in the toolbar (live progress); **⬆ Check for updates** force-rechecks the registry.
+4. Disable/enable: the card's **⏸ Disable / ▶ Enable** (only for extensions shipping their own bundle patch) → restart; disabled plugins are skipped by the update checker.
+5. Uninstall: the card's **Uninstall** → inline double confirm.
+6. Search/filter: the search box fuzzy-matches name/version/path, plus the All / Extensions / Built-in pills.
+7. Loader snapshot: the read-only sub-panel at the bottom — expand for per-entry fiber phase and Agent presets.
 
-- **✅ Todo Dock** — a live todo panel above the composer (`useProjection('todos')`, zero polling): three-state items, completion progress bar, per-item live timers, collapsible done section, and a git-based file-change footer (status letters M/A/D/R/C/? with per-file ±lines, branch badge, **copy full diff**, click-to-reveal in the system explorer). Desktop notification when backgrounded work completes.
-- **🧩 Runtime Enabler** — full-text session search ships OFF in the official web composition (the base row `session-query-sqlite` is `openAt: never`) and gets one-click enablement as a pure profile-patch write (zero dependency installs — the launcher's shared `profiles/node_modules` tree already carries every built-in package): a durable index path + `openAt: first-search`, idempotently, preserving unknown keys and sibling rows. UI: the history page swaps the raw search failure for an enable banner.
-- **Sidebar context menus** — sessions get *Copy session ID* / *Delete session* (exact-title match, same-name refusal, double-click confirm); workspaces get *Reveal in explorer*.
-- **Settings nav icon identity** — the generic gear the shell paints for unknown section ids is re-painted per page with semantic 16×16 outline icons (folder, open book, server rack, org tree, terminal prompt, bar chart, bolt, magnifier, clock), riding the shell's own css classes.
+### 💬 Session History
+1. Open: Settings → Session History.
+2. Search/filter: the search box matches title/summary/cwd/session ID at once; the status pills are All / Online / Archived / Ended.
+3. Pin: the card's **📌** (localStorage-persisted); the **📌 Pinned** pill jumps straight there.
+4. Archive/unarchive: card buttons; the sidebar updates immediately.
+5. Delete: the card's **Delete** → double confirm; an online session shows **Close & delete** (dispose first, then remove the log — no restart).
+6. Export: the card's **⬇ Export** → downloads a Markdown transcript.
+7. Health report: the card's **🩺 Health** → folded tool call/failure/retry report.
+8. Full-text search: toggle **Full-text search** and type a query; if the deployment ships it off (`openAt: never`), click **⚡ One-click enable** → restart dsh.
+
+### 📁 Workspaces
+1. Open: Settings → Workspaces.
+2. Create: the toolbar's **➕ New workspace** → pick a directory natively or type an absolute path (optional title) → submit; an existing path returns that workspace.
+3. Rename/order/status: inline **✎** to rename, **⬆/⬇** to reorder, **🔎 Check status** (surfaces `missing-dir`).
+4. Delete: 🗑 double confirm — registry only; the directory and its sessions stay.
+5. Unarchive all: **📦 Unarchive all (N)** at the top when the archive set is non-empty.
+
+### 📚 Skills
+1. Open: Settings → Skills.
+2. Browse: cards carry `/<name>`, independent 🤖 model-invocable / 👤 human-invocable badges, a source label, and scope details.
+3. Filter: text (name/description/whenToUse/path), source, scope — all client-side, zero extra requests.
+4. Copy/open: 📋 copies `/name`; when `resourceBase` is a directory, **📂 Open directory** reveals it in the system file manager.
+
+### 🔌 MCP Servers
+1. Open: Settings → MCP Servers.
+2. Add: fill in id / serverName / command (+args; a whole-line command like `npx -y fetcher-mcp` is flagged for splitting) → save → restart dsh.
+3. Test: **🔌 Test** — a real handshake (initialize → tools/list) showing server identity and tool list; successes cache to localStorage (failures stay session-only).
+4. Try-call: **🧪 Try call** — pick a tool, paste JSON args, run a genuine `tools/call` (60s budget, 16KB cap).
+5. Edit/remove: inline actions; an id matching an existing entry is refused.
+
+### 🛰️ Subagents
+1. Open: Settings → Subagents.
+2. Create: fill in name (`toolName`) / persona (supports `{{model}}`/`{{cwd}}`) / tool allow-deny / model / backend / delegation depth / background mode; advanced settings expand.
+3. Running: the tab lists children live in this process (live timers + event counts); **Interrupt** needs a double confirm; continuable cards take an inline message — **Queue** for the next turn, **Steer** at the nearest step boundary.
+4. CLI backends: the tab detects the codex / claude-code provider packages → mount → configure → unmount; **generic CLI backends** scan PATH for other agent CLIs (gemini / qwen / opencode, …) for one-click mounting or a custom command.
+
+### ⌨️ Commands & Hooks
+1. Commands tab: create/edit (incl. rename) / enable-disable / delete; saving registers live (fs.watch) — use it in a session as `/name <input>`; **⬇ Export / ⬆ Import** migrates JSON in bulk (same-name entries skipped).
+2. Hooks tab: edit hooks.json (event / matcher / command / timeout) → saving hot-restarts the bridge; **Disable** moves an entry to hooks.disabled.json; the three-state bridge banner — when not installed, **⚡ Install & mount** → restart; the Codex sibling bridge is a second status strip on the same tab.
+3. Project tab: type a project path to inspect its `.agents/` commands / hooks / skills and per-file load errors.
+
+### 🪝 Webhook Triggers
+1. Open: Settings → Webhook Triggers.
+2. Create a rule: id (lowercase start) + secret (≥16 chars; empty = keep the stored one) + optional event name + action — steer: pick a target live session (steer/queue); create: fill workspacePath (absolute) + agentPreset + permissionPreset + optional model.
+3. Trigger: `POST /webhook-triggers/<ruleId>` with the `x-webhook-secret` header (required), optional `x-webhook-event` / `x-webhook-delivery` (idempotent dedup); create mode needs the one-click `@deepseek-ai/dsh-webhook` runtime mount → restart.
+4. Test: **🧪 Trigger test** injects a test message and records delivery history; the panel's bottom section shows history (including failure reasons).
+5. Note: the endpoint shares the Web UI port and bypasses browser auth — the secret is the only gate; with the default 127.0.0.1 binding, external SaaS needs a tunnel.
+
+### 🔍 Web Search
+1. Open: Settings → Web Search.
+2. Switch: radio-select a provider (deepseek-official / exa / perplexity) → restart dsh.
+3. Install/uninstall: only exa / perplexity are removable (deepseek-official is dsh's bundled default); removing the active provider falls back to the default.
+4. Configure: the ⚙ editor saves the provider's own field table (apiKey / baseURL / model / maxTokens, …); secrets are write-only, never echoed back.
+
+### 📊 Usage Dashboard
+1. Open: Settings → Usage Dashboard.
+2. Date-range pills (Today / 24H / 7D / 30D / 90D / All) + the project filter dropdown.
+3. Read: KPI cards (tokens / sessions / messages / active days + vs-previous deltas), a stacked daily token trend, a weekday×hour activity heatmap, and local insights (cache hit rate, output-ratio anomalies, …).
+
+### ✅ Todo Dock
+1. Location: a floating panel above the chat composer, projecting the session live.
+2. Use: check items off (strikethrough + progress bar), per-item live timers, collapse the done section; the bell (top-right) fires a desktop notification when backgrounded work completes.
+3. Git file-change footer: branch badge + per-file ±lines; **⧉ Copy diff**; click a file row to reveal it in the system file manager.
+
+## Version compatibility (pinned)
+
+| Plugin | dsh | Status |
+|---|---|---|
+| v1.17.4 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; unarchive degraded (below) |
+| v1.17.4 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (includes `unarchiveSession`) |
+
+- **Newest dsh release: 0.1.6-alpha.2** (alpha pre-release; the `latest` tag is still 0.1.5-rc.2). Upgrade: `npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`.
+- **dsh-workspace in 0.1.5-rc.2 lacks `unarchiveSession`** (added in 0.1.6-alpha.2): the plugin still mounts (mount-time warning), deleting an archived session skips the archived-set cleanup, and the explicit unarchive gesture reports a clear error; upgrading to 0.1.6-alpha.2 restores full behavior.
+- Version-sensitive seams (re-run `npm test` after upgrading dsh/cordis — the verify scripts assert these against real contracts):
+  1. **workspaceRegistry verb surface** — `archiveSession` / `unarchiveSession` / `archivedSessionIds` (public verbs only, never the TS-private `requireState` / `setState`);
+  2. **Physical session-log layout** — the delete path derives the JSONL backend's directory (`projectKey` / `encodeSegment`); layout drift or a custom backend **refuses the delete** with a loud error;
+  3. **Hooks-bridge hot restart** — `fiber.update(config, true)` (cordis-internal); on failure the panel reports "saved — restart dsh to apply";
+  4. **Transparent wrap of `ctx.agents.create/resume`** — online-session delete needs the captured AgentHandle; an unwrappable member degrades to "restart dsh, then delete";
+  5. **Private readers** — `locate()` / `snapshotEvents()` / projection-cache table name; drift degrades to empty values / lists.
 
 ## Install
 
 ```sh
-# add to a profile (web used as the example)
-pnpm dsh plugin --profile web add dsh-plugin-admin
-
-# restart dsh to load
-pnpm dsh --profile web
+pnpm dsh plugin --profile web add dsh-plugin-admin   # or a local path
+pnpm dsh --profile web                               # restart to load
 ```
 
-Or from inside the dsh web UI: **Plugins → Extensions tab → type `dsh-plugin-admin`**.
+## Tests
 
-> Upgrading from the retired `dsh-plugin-subagents` or `dsh-command-hook-admin`? v0.5.0+ absorbed both, including byte-level compatibility with their managed config rows and data files. See the Chinese README migration notes.
+```sh
+npm test   # 18 scripts: self-check / host-check / verify-* / integration-check
+```
 
-## Architecture (in brief)
-
-- **Host** (`lib/index.js` + `patch-utils.js`, `subagent-admin.js`, `command-hook-admin.js`, `project-*.js`, `webhook-triggers.js`, `session-export.js`, `health-report.js`, `overlay-admin.js`, `mcp-probe.js`, `workspace-admin.js`, `skills-admin.js`, `web-search-admin.js`, `plugin-inventory-admin.js` — zero dsh imports): registers **thirteen RPC namespaces** through one unified typert descriptor — `pluginAdmin`, `sessionAdmin` (list/archive/unarchive/delete/close/fileStats/gitDiff/searchSessions/healthReport/exportSession/usageReport), `fsAdmin`, `mcpAdmin` (incl. `callTool`), `subagentAdmin`, `commandHookAdmin`, `projectAdmin`, `webhookAdmin`, `overlayAdmin` (searchEnable/status), `workspaceAdmin`, `skillsAdmin` (the merged registry roster), `webSearchAdmin` (provider picker + install/uninstall + `config`/`saveConfig`), `pluginInventoryAdmin`. Line-level YAML editing for `cordis.patch.yml` (managed blocks, byte-level preservation of foreign rows); every profile-patch write goes through one `patch-utils.writePatch()` — atomic temp+rename plus a **rolling backup of the revision it replaces** (`cordis.patch.yml.dsh-admin.bak`, so a misjudged line edit stays recoverable; the subagents module also keeps its one-time original snapshot) — bounded LRU caches, and a shared **serialized operation queue** across everything that read-modify-writes the same files. Agent handles are captured by transparently wrapping `ctx.agents.create/resume` (ctx.effect-scoped teardown, 200-entry LRU cap) so online sessions can be disposed through dsh's official chain.
-- **Client** (`lib/client.js`): React shared with the shell via the module table, official `--dsw-*` design tokens (dark/light adaptive), and **eleven slot contributions**: the Extensions tab (`settings.plugins.tab`), nine standalone `settings.section` pages (the Codex hooks bridge rides the 命令与钩子 钩子 tab, and the preset editor is gone — the shell's own `ui-agent-preset` section owns that roster), and one `conversation.input.dock` entry (the todo dock). Dock components consume the framework's `useProjection` standard-kit hook directly — open key space, no type registration needed. Shared plumbing (useState pair + shallow-merge patch + unmount-alive guard + mount effect) lives in one `sectionState` kernel that every panel instantiates.
-- **Plugin contract & config** — exports `inject` / `apply` plus a hand-written **Standard Schema v1** `Config` (the Loader's `resolveConfig` only touches `~standard.validate`, so no zod/schemastery dependency and the zero-dsh-import stance holds). An absent config row resolves to the built-in defaults, a mistyped value becomes a `ValidationError` **before** mount, and unknown keys (commandHookAdmin's `commandsDir` / `hooksPath` / `disabledPath` / `codexHooksPath` overrides) pass through untouched. `apply()` reuses the same `resolvePluginConfig()`, so direct callers (tests, hand-mounted contexts) get an identical contract. Tunables (ms unless noted): `pnpmTimeoutMs` 300000, `updateCheckTimeoutMs` 8000, `updateCheckConcurrency` 4, `updateCheckCacheTtlMs` 300000, `gitTimeoutMs` 5000, `gitStatsCacheTtlMs` 3000, `gitDiffMaxChars` 524288, `sessionSummaryCacheTtlMs` 60000, `sessionListConcurrency` 4, `sessionEventScanCap` 20000, `sessionSearchLimit` 30, `sessionExportEventCap` 200000 — all must be positive (integers where a count). Only `name` is not exported; the patch row's `name:` supplies it.
+- `integration-check.mjs` probes real dsh checkout source for contract drift (thirteen unified RPC namespaces).
+- Diagnostics (not in npm test): `node scripts/repro-delete-session.mjs` reproduces every session-delete failure mode (uncaptured live handle / layout drift / concurrent resume) to match panel errors.
 
 ## Security posture
 
-- Shell-metacharacter **whitelist** on every pnpm operand (`assertPnpmOperand`) — no `& | > < %` injection surface.
-- Atomic writes (temp + rename) for `package.json` / `cordis.patch.yml` / all JSON state; crash-safe, and the profile patch additionally keeps the revision it replaces beside the file (`cordis.patch.yml.dsh-admin.bak`).
+- Shell-metacharacter **whitelist** on every pnpm operand — no `& | > < %` injection surface.
+- Atomic writes (temp + rename) for `package.json` / `cordis.patch.yml` / all JSON state, with a rolling `.bak` of the replaced patch revision.
 - Timeout process-tree kill (`taskkill /T /F`) on package and MCP-probe operations.
-- Webhook inbound: **timing-safe secret compare** (SHA-256 both sides), empty secret **rejects all** (at save *and* at request time), secret verified **before** the body is read, bounded 1MiB payloads.
-- Provider secrets are **write-only**: the Web Search config editor never receives a stored `apiKey` (dsh's settings service redacts `role('secret')` values, and a row-backed editor reports only "already set"), and removal is always an explicit 清除 gesture — an untouched key field can never wipe a working API key.
-- The MCP stdio probe launches the server with the same **scrubbed environment** the real dsh-mcp-client transport uses (credential-shaped `KEY|PASSWORD|SECRET|TOKEN` names and `DSH_*` stripped before the entry's explicit `env` overlay) — probing an untrusted server leaks no more ambient secrets than a real launch.
+- Webhook inbound: timing-safe secret compare (SHA-256 both sides), empty secret rejects all, secret verified **before** the body is read, bounded 1MiB payloads, uniform 401 (no rule enumeration).
+- Provider secrets are write-only — never echoed back to the browser.
 - Dangerous deletes require double confirmation; same-name session deletion is refused by design.
-- Host-side validation fails loud; the client pre-checks and explains (reserved names, duplicates, unknown tools, invalid regex).
-
-## dsh internal seams & version compatibility
-
-The plugin rides the live Cordis Context with zero dsh imports. Public surfaces (`ctx.commands` / `ctx.shell` / `ctx.agents` / `ctx.sessionPersistence` list-stat-open / `ctx.skills` snapshot-list / `ctx.settings` describe-mutate) are stable; four deeper couplings rely on dsh/cordis internals and are guarded by mount-time fail-loud shape probes or runtime degradation, and a fifth mount probe guards a public surface whose member set has moved between dsh versions (the workspace registry's verbs):
-
-1. **workspaceRegistry verb surface** — archiving/unarchiving goes through the registry's **public verbs** (`archiveSession()` / `unarchiveSession()`, each serialized internally by `enqueueOperation`; the plugin no longer touches the TypeScript-`private` `requireState()` / `setState()`), and the archive set is read through the public `archivedSessionIds` getter. Older dsh releases (e.g. 0.1.5-rc.2) ship the registry **without** `unarchiveSession()`: the plugin still mounts (a mount-time warning names the degraded surface), the delete path skips the archived-set cleanup instead of throwing, and the explicit unarchive gesture reports a clear error.
-2. **Physical session-log layout** — the delete path derives the JSONL backend's log directory (`projectKey` / `encodeSegment`); a stat cross-check **refuses to delete** (loud error) on layout drift or a custom persistence backend.
-3. **Hooks-bridge hot restart** — `fiber.update(config, true)`, a cordis-internal API; on failure the panel reports "saved — restart dsh to apply".
-4. **Transparent wrap of `ctx.agents.create/resume`** — online-session delete needs the AgentHandle dsh's factories return: the plugin temporarily replaces both methods, passes results through untouched, and restores the originals on unload (HMR-safe). A frozen or getter-only member degrades to "restart dsh, then delete" with a loud log.
-5. **Private log-path / projection-cache / deprecated readers** — the hook payload's `transcript_path` uses the JSONL backend's private `locate()` (degrades to an empty string); session delete also clears the `sessionProjectionCache` storage record (a table-name drift only degrades to "gone after the sidebar refreshes"); the subagents Running tab reads running children via the deprecated `session.snapshotEvents()` synchronous reader (drift degrades to an empty list).
-
-Verified baseline: **dsh 0.1.5-rc.2 line (2026-09 checkout, `@modelcontextprotocol/sdk` 1.29.0)**. After upgrading dsh/cordis, re-run `npm test` — `host-check` and the verify scripts assert these seams against real contracts, including the plugin `Config` Standard Schema parse contract (defaults, issues, unknown-key passthrough).
-
-## Development
-
-```sh
-npm ci
-npm test
-```
-
-The suite runs eighteen scripts: bundle load + slot registration + full panel interactions (`self-check`), host contracts (`host-check`), MCP probe cache, update-reminder persistence, subagents host+client, command hooks, project commands/hooks, the todo dock (git pure functions against a real temp repo), webhook triggers (validation matrix + full HTTP handler paths), overlays (full-text search enablement), the Loader runtime inventory sub-panel, the workspace / skills / web-search admin pages (patch round-trips against a temp profile, stubbed pnpm), the Codex hooks bridge, and `integration-check` — source-level contract probes against a real dsh checkout.
-
-Release: `npm version patch && git push --tags` → GitHub Actions verifies tag/version parity and publishes with `--provenance`.
 
 ## License
 

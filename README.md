@@ -1,105 +1,121 @@
 # dsh-plugin-admin
 
-dsh web UI 插件：把管理能力拆进设置界面的既有结构——在官方**插件**设置页新增**扩展插件**页签，并在设置栏新增 **MCP服务器**、**子智能体**、**命令与钩子**、**历史会话**、**工作区**、**技能**、**Web 搜索**、**用量仪表盘** 与 **Webhook 触发** 等独立设置页，按需加载当前面板。v0.5.0 起吸收了原独立插件 `dsh-plugin-subagents` 的全部能力（子智能体管理 + CLI 后端挂载），v0.7.0 起吸收了原独立插件 `dsh-command-hook-admin` 的全部能力（提示词命令 + 钩子管理 + hooks 桥一键安装）。
+dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的 11 个管理面板——扩展插件、历史会话、工作区、技能、MCP 服务器、子智能体、命令与钩子、Webhook 触发、Web 搜索、用量仪表盘、待办清单。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
 
-> 语言说明：本插件的 Web 面板文案目前为简体中文硬编码（宿主主仓库的 locale 字典体系不覆盖外部插件）；英文环境用户会看到中文管理界面，后续版本计划接入 locale 字典。
+> 面板文案为简体中文硬编码（宿主 locale 体系不覆盖外部插件）。
 
 **npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.17.4 · MIT
 
-- **🔌 扩展插件**（插件设置页第三个页签，位于「插件配置」「插件列表」之后）：
-  - 顶部输入框支持 npm 包名（如 `dsh-xxx`）或本地绝对路径安装插件（回车或点击提交）；
-  - 列表展示当前 profile 下的全部 bundle 层（名称、版本，以及**内置 / 包安装 / 本地安装**标记；本地安装的插件额外显示其源路径，依据 profile 依赖清单中的 `link:` / `file:` / 绝对路径 spec 判定），按 **内置 → 包安装 → 本地安装** 排序，卡片以一行两列栅格展示（窄屏回落单列）；名称过长时单行省略显示，悬停可见完整名称；
-  - **名称模糊搜索**：列表上方搜索框支持按插件名 / 版本号 / 本地路径模糊过滤（大小写不敏感子串匹配），可叠加「全部 / 扩展插件 / 系统内置」筛选胶囊，无结果时给出专属空状态提示；
-  - 支持扩展插件一键卸载（带有优雅的行内二次确认）；**⬆⬆ 全部更新（v1.2.0）**——一键串行升级所有有新版本的插件（按钮实时显示进度「更新中 2 / 5（N 失败）」，单个失败不阻塞其余，完成后强制重查 registry 并给出批量总结；VS Code 扩展面板惯例）；
-  - **⏸ 停用 / ▶ 启用（v1.10.0，不卸载、可逆）**：对**自带 bundle patch 且声明了具名组合行**的扩展插件一键停用——host 读取该 bundle 自身 patch 里组合的每个行 id（带 `name:` 的新增行），作为 profile 层 `disabled: true` 行写入 `cordis.patch.yml`（缺行走规范裸块追加、已有行在 id 行下补 `disabled` 行、`[]` 空列表占位原位替换，文件其余部分字节级保留），纯 profile 写入、**零 pnpm、零依赖变动**；「▶ 启用」移除此前写入的停用行（裸停用块整块删除，含真实配置的块只摘除 `disabled` 行，用户配置行不动）。写回走与安装共享的串行操作队列 + 原子写，**重启 dsh 后生效**；卡片带「⏸ 已停用」徽标随状态联动，**已停用的插件跳过远程更新检测**（不给关掉的行报新版本），卸载时自动清理此前写入的停用行不留垃圾；
-  - **📡 Loader 运行时快照（pluginInventoryAdmin 命名空间，host 侧 `lib/plugin-inventory-admin.js`）**：扩展插件页底部新增一个**只读子面板**——打开页签时通过 `pluginInventoryAdmin/list` 拉一次 `ctx.pluginInventory.list()` 快照（host 端 web-app 默认挂载 `dsh-host-plugin-inventory`，CLI 模式未挂载则优雅降级为「本部署未挂载 dsh-host-plugin-inventory」一行提示，**不是错误**），把当前 Loader 的每个非组条目（`entryId` / `moduleName` / `enabled` / `fiberPhase ∈ {pending,loading,active,failed,unloading,null}`）摊到面板上：默认折叠头部一行六徽标统计（`🟢 N 已激活 / ⚪ N 未挂载 / ⏳ N 加载中 / ⏳ N 等待挂载 / 🟡 N 卸载中 / ⚠ 失败 N`），有 Agent 预设时尾部追加 `· M 个 Agent 预设`；点击头部展开完整表格（**稳定排序**：failed → unloading → loading → pending → active → null，模块名按字母升序，重渲染不抖动）+ 每个 preset 自己的子段（id / 系统 vs 用户 / 是否默认；broken 时原地展开 `⚠ 预设文件解析失败：<原因>`；preset 行的 `conditional` enablement 只渲 `conditional` 徽标，**原始 `!!js` 表达式一律不下发到面板**——不让人手动拷贝到不该跑 JS 的环境里）；**严格只读**：写不动任何 Loader 状态，启用/停用仍走 `pluginAdmin/setEnabled` 的 profile patch 写入。snapshot 不自动刷新——`patch-utils` 的写路径不会立即驱动 Loader 重读，下一次打开页签或重启 dsh 后才生效，所以面板不在 setEnabled 后再 fetch（避免错把已过期的快照当真）；fetch 失败时**区分两种不可用**：本部署没有 `dsh-host-plugin-inventory` 行（CLI / base bundle，`reason: 'service-absent'`）渲染一行静默提示，而服务已挂载但 `list()` 抛错（`reason: 'call-failed'`）渲染 `⚠ 读取 Loader 快照失败：<原因>` + `🔄 重试` 按钮 —— 不会把 host 故障伪装成「本部署没装」，也绝不卡在「加载中」。验证：`scripts/verify-plugin-inventory.mjs` 八个场景（CLI 降级 / 服务故障 vs 未挂载的区分 / 摘要 + 展开 + 稳定排序表 + 预设行 / fetch 失败重试 / 每次 mount 重置避免残留 / 六徽标头部 / host 投影契约（仅叶子字段、畸形行丢弃）/ 头部计数与渲染行数一致）。
-  - **远程更新检测（自动）**：打开「扩展插件」页签即自动按 profile 实际使用的 npm registry（`npm_config_registry` → 项目/用户 `.npmrc` → 官方源）查询每个 **registry 安装**的插件（跳过内置与本地路径安装）的 `latest` 版本，与本地版本比对——有新版时卡片显示琥珀色「⬆ 有新版本 vX.Y.Z」徽标并出现一键「⬆ 更新」按钮（升级时优先用 checkUpdates 已探测到的精确版本号 `npm install <name>@<version>`；host 端对 `@latest` 会先查 registry 解析为精确版本再安装，避免 pnpm 在已有范围约束下误判 "Already up to date" 而静默不更新）；工具栏「⬆ 检查更新」是唯一的手动重查入口，**强制绕过 5 分钟缓存直接重查 registry 并刷新缓存内容**（自动检查走缓存，手动检查才是真查）；查询带超时与 5 分钟缓存（host 侧缓存，**缓存命中时按当前安装版本重算 `updateAvailable`**，重启 dsh 后首次打开自动重查），网络失败按条目提示而非报错；**「有新版本」提醒会保存下来（浏览器 localStorage 持久化）**——关闭再进入页签、甚至重启 dsh 后依然显示（含本次检查网络失败时），**只有点「更新」真正升级、或后续检查确认已是最新版本后，提醒才自动消除并同步清掉持久化记录；更新其中一个插件不会影响其余插件的提醒；升级完成后的自动复核同样**强制绕过缓存**重新查询，registry 在 TTL 窗口内刚发布更新的情况下也不会把刚升完级的插件误标回「有新版本」，检查与升级并发交错时，检查刚发现的提醒也不会被升级提交用旧快照覆盖（合并一律基于当前 state 的函数式更新，持久化由统一的镜像 effect 收口）；
-  - 安装/卸载在 host 侧编排 profile 目录下的 pnpm 并自动同步 `package.json` 的 `dsh.profile.bundles` 清单（变更在重启 dsh 后生效）。
-- **📊 用量仪表盘（v1.4.0，完整 VibeUsage 形态）**：设置栏**独立页面**（导航项「📊 用量仪表盘」，order 28，图表图标），挂载即自动统计——**日期范围胶囊**（今天 / 24H / 7D / 30D / 90D / 全部）+ **项目筛选下拉**；**两排 KPI 卡**（总 Token / 输入 / 输出 / 缓存 + 会话数 / 用户消息数 / 助手消息数 / 活跃天数），每张卡带**对比上一同长周期的环比涨跌徽标**（绿涨红跌）；**每日趋势**堆叠柱图（缓存/输入/输出三段配色，悬停看当日明细）；**分时活跃热力图**（周几 × 24 小时，蓝色深浅 = token 权重，找你自己的编码时区规律）；**本地洞察**（缓存命中率 / 输出比异常 / 用量集中度 / 最高用量日，条件触发绝不噪音）。全部聚合在浏览器端按筛选实时现算——切换范围/项目零重新请求；host 只提供行级数据（`sessionAdmin/usageReport`，复用 list() 修订号缓存行 + 新增 assistant 消息计数），打开仪表盘零额外日志读取。
-- **🩺 会话体检报告（v1.7.0，历史会话卡片内嵌）**：每张会话卡片新增「🩺 体检」——host 经 `sessionAdmin/healthReport` 折叠该会话日志：`tool/call`+`tool/result` 按 **callId 配对**精确归因每工具的调用次数与失败数（错误码逐类统计）、`turn/end.reason` 分类（完成/中断/出错/max-tokens）、`assistant/attempt` 计重试、压缩事件计数；报告卡展示一行摘要（「2 个 turn · 1 完成 · 1 中断 · 1 次重试」）+ 工具统计行（名称 ×次数 ❌错误码）+ 主要错误列表。折叠核心 `foldHealthReport` / `healthSummaryLine` 为导出纯函数（verify-todo-panel 覆盖 callId 配对归因）。
-- **🔎 会话全文检索（v1.6.0，历史会话页内嵌）**：历史会话页新增「全文搜索」切换——host 经 `ctx.sessionQuery.searchSessions` 跨全部会话按消息内容检索（cursor 分页的官方索引服务），命中的会话以卡片展示（标题 + 摘要片段），点击可跳转。host 侧 `sessionAdmin/searchSessions` RPC 把命中整形为既有 session header 形状，直接复用面板渲染。**v1.10.0 起，默认部署中 base 行 `openAt: never` 会让检索直接失败——面板识别该错误码（`SESSION_QUERY_SEARCH_DISABLED`）并把原始报错换成「⚡ 一键启用」横幅（见下文「运行时一键启用」）。**
-- **🪝 Webhook 触发（v1.5.0，设置栏独立页）**：入站 Webhook → Agent 动作的完整链路——每条规则暴露 `POST /webhook-triggers/<规则ID>` 端点（`x-webhook-secret` 共享密钥 timing-safe 校验、`x-webhook-event` 事件过滤、`x-webhook-delivery` 幂等去重——同一 `(规则, delivery id)` 重放会被 202 确认但不重复执行动作，去重表有界存放于内存、进程生命周期即失效、1MiB 体积上限），命中后按动作模式**推送到既有在线会话**（steer 插队 / followup 排队，Prompt 模板支持 $RULE/$DELIVERY/$EVENT/$PAYLOAD 变量）或**新建会话**（需一键安装并挂载 `@deepseek-ai/dsh-webhook` 官方运行时）。规则存储于 `$DSH_HOME/webhook-triggers.json`（原子写 + fs.watch 防抖监听外部编辑），面板支持规则 CRUD、**🧪 触发测试**（注入测试消息并记录交付历史）、运行时三态横幅（未安装 → 一键安装；已装未挂载 → 提示重启）；secret 编辑留空 = 保持不变（secret 至少 16 字符——入站端点无速率限制，过短的密钥可被穷举；存量短 secret 的投递不受影响，但再保存该规则时会被要求换新值）。认证失败（规则不存在 / 已停用 / secret 不匹配）一律返回**同一响应体**，未认证调用方无法借 404 枚举有效规则 id。注意：Webhook 入站端点绕过 browser-trust fence 是刻意设计（供外部服务回调），secret 是唯一防线，请务必配置。
-- **📁 工作区管理（v1.16.0，设置栏独立页 order 22，host 侧 `lib/workspace-admin.js`）**：宿主 `ctx.workspaceRegistry`（`@deepseek-ai/dsh-workspace`）已实现完整的 workspace CRUD + archive set，**但 dsh 没有任何 web 管理面**——会话侧栏只读使用，本页补上：列出全部工作区（标题 + 完整路径 + 会话计数 + 创建/更新时间）+ 工具栏**➕ 新建工作区**（表单：原生选择器选目录 / 手动输入绝对路径 + 可选标题，标题留空则用目录最后一段；同名目录已存在时返回该现有工作区，`created: false`） + **✎ 重命名**（行内输入框，标题空白拒绝保存）、**🔎 检查状态**（调 `workspace.status()` 检查目录是否仍存在——`missing-dir` 时显错「该工作区的目录当前不存在（可能临时移走）；registry 不会改写记录」）、**⬆ / ⬇** 排序（调 `registry.insertBefore` 做 DOM-insertBefore-like 排序）、**🗑 删除**（双击确认 — 「仅删除注册，目录与会话本体保留」明确告知，避免误操作）。顶部**📦 取消全部归档 (N)** 在 archive 集非空时显示（串行 `workspaceAdmin/unarchiveSession` + reload）。原生目录选择通过 `ctx.directoryPicker` 走 — web-app 默认挂 `directory-picker-auto`，**有 backend 时一键「📁 选择目录」把路径填进表单**；backend 缺席（CLI / headless）第一次尝试后状态降级为「原生选择器不可用，请手动输入绝对路径」+ 按钮禁用 + 仅靠手动输入。所有写路径走 `ctx.workspaceRegistry`（host 同源 + typert 边界 JSON-safe 投影），**会话页与本面板同源**：会话侧栏看到的分组顺序就是本面板的排序。CLI / headless 部署（base bundle 不挂 `@deepseek-ai/dsh-workspace`）面板渲染一行「本部署未挂载 dsh-workspace」静默降级 —— 为此 `workspaceRegistry` **不是**插件的硬 `inject`（`@deepseek-ai/dsh-workspace` 只在 web-app bundle 挂载）：插件在 CLI / headless / sdk profile 里照样挂载（项目 `.agents` 命令/钩子桥、插件/MCP/会话管理都可用），`sessionAdmin/list` 的会话落到未分组、`archive` 报「本部署未挂载 dsh-workspace」、`unarchive` 无归档集可写时是 no-op，而不是整个插件不加载。验证：`scripts/verify-workspace-admin.mjs` 七个场景（CLI 降级 / CRUD 全链路 / 原生选择器流路径 / 选择器缺席降级 / `status` 实时探针 missing-dir / 真实 host 的原生能力选择 + 串行 unarchive / 重名标题拒绝 + 自身与无操作重命名放行）。
-- **📚 技能盘点（v1.16.0 起，v1.17.3 起改为全量清单，设置栏独立页 order 23，host 侧 `lib/skills-admin.js`）**：宿主 `ctx.skills`（`@deepseek-ai/dsh-skill` 的分层注册表）把 user / project / bundled / runtime 各来源的技能合并成一份目录，但 **dsh 没有任何 web 面板能纵览它**；而旧版本页只读 `ctx.sessionSkillCatalog`（按单个 session 取「用户可调用」子集）——**看不到别的 cwd / preset 的技能，也看不到 path、来源与只给模型调的技能**（catalog 的投影把这些字段全剥掉了，前端早就渲染不出来的 `📂 打开目录` 因此成了死按钮）。现在直接读注册表：
-- **全量清单**：host 把 ① 无 cwd / 无 scope 的**全局层**（用户目录 / 插件内置 `bundled` / `runtime` 注册）与 ② 每个会话解析出的 **(cwd, agent-preset) 作用域**（经 `ctx.sessionQuery.observeSession` + `agentPresets.standingKeyFor`，**不激活冷 Agent**；会话在线时直接用它自己的 Agent 作 scope 并读该 preset 的 scoped 注册表；同 (cwd, preset) 的多个会话**合并成一次读取**）按名字并集合并——一个技能只出一张卡，卡上列出它出现过的**全部作用域**与全部来源；
-- **卡片信息**：`/<name>` 标题；**🤖 模型可调用** 与 **👤 人类可调用** 两个旗标各自独立渲染（两者都不暴露时标 **未暴露**）；来源标签把注册表的 `source` 译成「项目 .agents / 项目 .dsh / 用户 .agents / 用户 dsh / 插件内置 / 运行时注册 / 自定义源」；`resourceBase` 是目录时显示 SKILL.md 路径 + **📂 打开目录**（复用 `fsAdmin/reveal`），是 URL 时渲染链接；`whenToUse` 与 provider 名一并列出；
-- **三个筛选器**：文本（名称 / 描述 / whenToUse / 路径）、来源、作用域——全部在浏览器端过滤，切换零额外 RPC；「▸ 查看作用域明细」展开每个作用域的技能数与覆盖会话数；
-- **诚实降级**：`sessionAdmin/list` 失败时退化为「仅全局技能」并给出说明；某个会话没有 cwd 或作用域读取抛错时**逐会话 / 逐作用域报告**（顶部告警 + 明细面板内联），已解析的清单照常渲染；注册表 `complete=false`（有 provider 发现失败）时显式提示「清单可能少列」；会话解析上限 32 / 作用域上限 24 被触及时如实回报，绝不把截断当全量；
-- **严格只读**：只调 `snapshot()` / `list()`（摘要），**从不调 `get()`**——SKILL.md 正文永不跨过 RPC 边界，也不写任何文件；每张卡的 **📋 复制 `/name`** 与剪贴板回退同旧版；
-- **优雅降级**：CLI / headless 部署（base bundle 不挂 `@deepseek-ai/dsh-skill`）首个 `skillsAdmin/list` 返回 `{ available: false }`，面板渲染一行「本部署未挂载 @deepseek-ai/dsh-skill（技能注册表不可用）」，**不是错误**；host 拒绝则直接转 `error` banner，不抛回 gateway。
-- 验证：`scripts/verify-skills-admin.mjs` 十二个场景（未挂载注册表降级 / 全局投影只留叶子字段 + 畸形行丢弃 + 从不加载正文 + 目录与 URL 两类 resourceBase / 冷会话走 standing scope key / 活会话用自己的 Agent 当 scope 并读 preset 注册表 + observation 释放 / 作用域读取失败逐条报告且清单存活 / `complete=false` 与 32 会话上限告警 / 一个技能跨作用域合并成一条 / 未挂载提示 / 全量渲染 + 三类筛选 + 作用域明细 + 未解析会话可见 / 会话列表失败降级 / 读取失败行内报错 / 复制手势）。
-- **🔍 Web 搜索 provider 切换 + 配置（v1.16.0 起，v1.17.3 起补配置编辑器，设置栏独立页 order 31，host 侧 `lib/web-search-admin.js`）**：dsh monorepo 装好了三个可选 web-search provider (`@deepseek-ai/dsh-web-search-deepseek` / `-exa` / `-perplexity`)，但 base / web-app bundle **都没在 cordis.patch.yml 里挂 exa 和 perplexity 的 row**，唯一挂的 `web` 行 `config.searchProvider: deepseek-official` 把选择权硬写死。**dsh 没有任何 web UI 切换 provider，也没有任何 UI 配置一个不自带 settings 卡片的 provider**——`dsh-client-ui-settings-plugins` 的「插件配置」页只渲染注册了 settings 命名空间的卡片（DeepSeek 包有，**Exa / Perplexity 包完全没有**），所以从面板装完 Exa 之后根本没有地方能改它的 Endpoint / 模型 / 检索模式。本页两块都补上：
-- **三个 provider 卡片**：标题 + 所属 npm 包名 + 「🔑 $EXA_API_KEY / $PERPLEXITY_API_KEY」环境变量提示（**只显示变量名，不存值** — provider 自己从 launch env 读取，与 plugin 数据边界严格分离）；`deepseek-official` 挂 **🛡 dsh 默认** 徽标 + 不显示卸载按钮（默认 provider 的 row 在 bundle 层，panel 不会去 strip bundle 文件）；
-- **radio 切换**：点单选 → `webSearchAdmin/setActive` **优先单键改写 profile patch 里已有的 `web` 行**（保留所有注释、保留 `fetchProvider: http` 行、保留相邻 row）；`web` 行本身是 base bundle 层定义的，普通 profile 的 patch 里没有它 —— 此时写一条 **id 覆盖行**（`- id: web` + 完整 `config:`，因为 loader 的补丁是整段替换 `config`，所以 `searchProvider` / `fetchProvider` 一起重述），**不是整文件替换**——重启 dsh 后生效，面板顶部常显「🔁 切换 provider / 安装 / 卸载 后需重启 dsh」banner；
-- **📥 安装 / 🗑 卸载**：仅 `exa` / `perplexity` 可装卸。安装走 `ensureProfileDependency` + loader 合规的 `- insert:` 块（裸顶层 `- id:` 行会被 loader 按 `patch: entry not found` 丢弃，早期写坏的裸行在下次 install 时就地升级）；卸载先 strip patch row 再 `pnpm remove`，并**把仍是活动 provider 的悬空 id 回落 `deepseek-official`**（否则重启后每次搜索都报 `WEB_PROVIDER_CONFIGURED_MISSING` 且被移除项的 radio 已禁用，用户看不出该改哪里）；整条写路径与 pluginAdmin / mcpAdmin **共用同一个串行队列**；
-- **⚙ 配置（v1.17.3 新增）**：每张卡片一个配置编辑器，字段表是 host 里**按 provider 包的 `Config` 手工维护的镜像**（DeepSeek：`apiKey` / `apiKeyEnv` / `baseURL` / `model` / `apiVersion` / `maxTokens` / `maxUses`；Exa：`apiKey` / `baseURL` / `searchType` / `numResults` / `highlightsPerResult`；Perplexity：`apiKey` / `baseURL` / `model` / `maxTokens` / `searchRecency`）。**为什么是镜像而不是从 schema 派生**：Exa / Perplexity 两个包**根本不注册 settings 命名空间**，没有任何运行时面能拿到它们的 schema（DeepSeek 的 schema 能拿到，但三家里只有它），所以统一走手工镜像 + **`integration-check` 的 drift 探针**（三个包的 `Config` 键名逐个钉住，包改名/加键时 `npm test` 直接报红，提示同步字段表）；枚举渲染下拉、数字带下限校验。**位置由 host 决定**：provider 注册了 dsh settings 命名空间（DeepSeek）→ 经 `ctx.settings.mutate()` 写**路径 op**（只动被改的键，脱敏视图绝不重述别的字段，回传读取时的 `revision`，被「插件配置」页并发改过则报冲突要求刷新）并**即时生效**；没有命名空间（Exa / Perplexity）→ 写它自己的 `cordis.patch.yml` 行 `config:`（保留未知键与 insert 兄弟行，**重启 dsh 生效**）。**继承值不落盘**：只有用户显式设过的键预填进输入框，包默认值只出现在 placeholder 里（一次朴素保存不会把默认值钉进配置）；**密钥字段只写不读**——`apiKey` 永远以口令框呈现（已配置时提示「已配置 — 留空不修改」），只能用显式「清除」删除，空输入永远不会清掉一把能用的 key；
-- **安全姿态**：provider 的 API key 要么由 provider 自己从 launch env / 凭据读取（卡片只显示变量名），要么由用户显式写进 settings / 行配置——**面板从不把已存的密钥值回显到浏览器**（settings 侧由 `role('secret')` 脱敏，行侧只回报「已设置」）；
-- 验证：`scripts/verify-web-search-admin.mjs` 十九个场景（list 暴露三 provider + bundled 旗标 / active 直读 web 行 / setActive 单键改写保邻居 / install 走 pnpm + 追加 row / uninstall 拒绝默认 + strip + pnpm remove / 末态 patch 完整性 / install 写 insert 行并就地升级 legacy 裸行 / 无 base 行时补 web override 行 / 卸载活动 provider 清掉悬空 id / 内联 `config: {...}` 改写保留兄弟键（含值里带冒号者）/ 三条写路径都骑注入的串行队列 / 内联行被真正读取 / `config()` 配对行值与包默认值并标记已设置 / `saveConfig()` 写键与删键 + 未知键与兄弟行保留 + 数字往返 / 内置行写裸覆盖行 + 未安装 opt-in 拒绝 / 校验与空值=不改 / settings 命名空间经 `mutate` 写路径 op + revision 冲突拒绝 / **兄弟键（`disabled:`）留在 config 块之外，新键插入块内** / **install() 升级 legacy 裸行时保留其已配置的键值**）。
-- **（已移除）Agent 预设编辑器**：v1.16.0 曾以「预设编辑」为名单开一页（host 侧 `lib/agent-presets-admin.js` 的 `agentPresetsAdmin` 命名空间 + 浏览器内编辑 `agent.cordis.yml`）。它与 shell 自带的 **Agent 预设** 页（`ui-agent-preset`：卡片 roster、复制建预设、引导式新建、删除、设为默认、打开目录、shipped 组合只读查看）管理的是同一份 roster，属于重复界面，所以**整页连同 host 命名空间一并删除**：预设的增删改 / 默认选择 / 目录跳转交给官方页，组合正文按其设计在文件里编辑（官方页的「打开目录」直达）。
-- **🪝 Codex 钩子桥（v1.16.0，并入驻「命令与钩子」的「钩子」页签，host 侧 `commandHookAdmin/codexBridgeInstall` + `commandHookAdmin/codexBridgeRemove`）**：dsh monorepo 还装好了第二款 stock hooks bridge `@deepseek-ai/dsh-hooks-codex` —— **Codex 格式** hook（5 个钩点：SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop；payload snake_case；regex-only matcher），与已有的 Claude-Code 桥（7 个钩点含 SubagentStart/Stop）**完全独立**：row id 不同（`hooks-codex` vs `hooks-claude-code`），包名不同（`@deepseek-ai/dsh-hooks-codex` vs `@deepseek-ai/dsh-hooks-claude-code`），hooks 文件路径不同（`<dshHome>/hooks.codex.json` vs `<dshHome>/hooks.json`）。dsh 没有任何 web UI 启 Codex 桥，用户要 hack 进 `cordis.patch.yml` + `pnpm add` 自己接。两个桥的安装面完全同构（同一个 `listHooks()` 载荷、同一 install/remove 形状、同一页签），所以**不再另开设置页** —— 它是「钩子」页签里与 Claude-Code 桥并排的**第二条状态条**：
-  - **🪝 Codex 状态条**：显示 ✅ 已挂载 / 📦 已装未挂载 / ⚪ 未安装 状态机（依安装标 + cordis row 双重判定）并带出 `hooks.codex.json` 实际路径；**📥 安装 Codex 钩子桥** = `pnpm add @deepseek-ai/dsh-hooks-codex` + 追写 `- insert:` wrapper 包裹的 `hooks-codex` row（同样的 `pnpm-stub + peer-pin` 链，已在 web-search / storage admin 上验证过）；**🗑 卸载 Codex 桥** = 双重确认后 strip row + `pnpm remove`，两步独立容错。Codex 动词返回**稀疏载荷**（不像 `bridgeInstall` 那样 spread `listHooks()`），所以装 / 卸后重新走 `listHooks` 回读，而不是把稀疏值当全量状态渲染（否则钩子列表与两条状态条会被一并清空 —— `self-check` 有专门用例钉住）；
-  - **side-by-side**：只动 `hooks-codex` 的 row + 包，**绝不摸 `hooks-claude-code` 行**；两个桥可同时挂载，各自 `configPath` 指向自己的文件；
-  - **遗留 bare 行就地升级**：旧用户手编辑过 `cordis.patch.yml` 留下无 `- insert:` 包裹的 `- id: hooks-codex`，本次 install 会**就地替换为合规 wrapper shape**（loader 对裸行 silently drop，无 wrapper 就装不活），然后幂等 —— 第二次 install 走 zero-op path（既不再 pnpm add，也不再写盘）；
-  - **v1 范围明示**：本状态条 v1 只做 **bridge install/remove**；不提供 Codex 格式的钩子编辑器 —— `hooks.codex.json` 用户手写，桥自己 consume（与已有的 Claude-Code 钩子编辑器不在同一文件路径上）；
-  - 验证：`scripts/verify-hooks-codex-bridge.mjs` 五个场景（install pnpm-add + 写 row + `[]` 占位替换 + `configPath` 指向 `hooks.codex.json` / `listHooks` 携带面板分支所需的生命周期字段 / legacy bare 行就地升级 + 二次 install 幂等 / 两个桥的 install + remove 完全独立互不影响 / empty patch 上 remove 是 no-op 安全降级）。
-- **📌 会话置顶与 🔢 token 用量（v1.1.0）**：卡片新增「📌 置顶」——本地收藏白名单（localStorage 持久化，宿主注册表不掺和 UI 偏好），置顶卡片带徽标，筛选胶囊新增「📌 已置顶 (N)」一键直达；每张卡片渲染**模型上报的 token 用量标签**（`↑输入 ↓输出 · 缓存读`，host 侧从会话日志 `assistant/message` 的 usage 事件折叠，ccusage 姿态），面板顶部有全页汇总条（Σ 会话数 · 输入/输出/缓存读总量）。
-- **💬 历史会话**（设置栏独立页）：
-  - **标题与内容摘要**：自动解析会话标题（`session/title` 或首条用户提问）并渲染首条消息的文本摘要气泡预览（带折行省略与多行保护）；
-  - **元信息直观展示**：显示对话消息计数（如 `5 条消息`）、工作目录路径（`📁 项目名 (完整路径)`）、创建时间及短 Session ID；
-  - **状态呼吸灯与徽标**：绿色呼吸光晕（**会话在线**，悬停提示说明"在线 = 仍挂载于 dsh host 内存，非正在运行"）、琥珀色标签（**已归档**）、灰色默认点（**已结束**）；
-  - **多维快捷搜索与筛选**：输入框支持同时模糊匹配标题、对话摘要、工作目录或 Session ID；支持按状态胶囊筛选（全部、在线、已归档、已结束）；
-  - **会话清理与恢复**：支持会话永久物理删除（行内二次防误触确认，彻底清理磁盘日志、工作区记账与归档集合）；**在线会话不再需要重启 dsh**——「关停并删除」通过插件在 host 侧透明捕获的 `AgentHandle` 走 dsh 官方 dispose 链（停止 agent 运行、等待静止、注销 agent、从内存 SessionStore 移除并触发 `session/disposed`，持久化层随即 flush 缓冲事件并释放写路径），然后才删除日志，因此日志不会在下次 flush 复活；支持已归档会话一键取消归档，侧边栏即时联动刷新。
-  - **🔌 MCP服务器**（设置栏独立页）：列出 profile 的 `cordis.patch.yml` 中所有 `@deepseek-ai/dsh-mcp-client` 实例，支持添加（stdio 子进程 / streamable-http）、编辑与移除，配置写回后重启 dsh 生效；新增**连通性检测**（🔌 测试）——host 侧按条目配置发起一次真实的 MCP 握手（`initialize` → `notifications/initialized` → `tools/list`），stdio 走新行分隔 JSON-RPC 子进程（Windows 下与 real 插件同样经 `cmd.exe` 解析 `.cmd` shim，超时强杀进程树、捕获 stderr 尾部便于诊断），streamable-http 走 `initialize` POST（兼容 SSE / 纯 JSON 响应）；成功后行内显示服务器标识、**工具数量与工具名列表**，失败给出可诊断错误（命令不存在 / 连接被拒 / 超时等）；若 `command` 写成整行调用（如 `npx -y fetcher-mcp`），探测会自动拆分执行并给出**警告**提示需拆分为 `command` + `args`（否则 dsh 启动该 MCP 服务器会失败）；结果经 typert 边界 JSON 安全清洗，绝无 `undefined` 字段；
-  - **测试结果的缓存边界**：只有**成功**的探测结果持久化到 localStorage（重开面板/重启后恢复上次状态并标注「缓存于」时刻）；**失败（❌ 不通）只在当前会话内显示、不落盘**——瞬时故障不会变成跨会话的过期 ❌，旧版本遗留的失败记录会在载入时自动清除；新增表单中手输与既有条目相同的 id 会被**直接拒绝并提示换名**——host 的 upsert 按 id 原位覆盖，不拦截就是静默毁掉该条目的既有配置。- **🧪 MCP 工具试调用台（v1.1.0，MCP Inspector 姿态）**：每张 MCP 卡片新增「🧪 试调用」——从最近一次「🔌 测试」获取的工具列表中选择工具，粘贴 JSON 参数，**真实执行一次 `tools/call`** 并就地渲染规范化结果（文本拼接 + 协议 `isError` 标记 + 截断保护 16KB + `structuredContent` 透传）。stdio 每次调用走全新子进程握手（`initialize → tools/list → tools/call`，用完强杀进程树）；streamable-http 捕获 initialize 返回的 `Mcp-Session-Id` 并在后续请求回传（有状态服务器不再当陌生人）；工具执行预算独立（60 秒，远长于列表探测）；工具不在列表时明确报出服务器实际提供哪些工具。执行前面板有「会真实执行」警示——这是面板里第一个会真正改变外部世界的按钮。
+## 功能总览
 
+| 面板 | 重点 |
+|---|---|
+| 🔌 扩展插件 | 安装 / 卸载 / 更新 / 启停 profile 插件（pnpm 编排 + bundles 清单同步），Loader 运行时快照 |
+| 💬 历史会话 | 列表 / 搜索 / 归档 / 置顶 / 导出 Markdown / 体检报告 / 全文检索；在线会话免重启删除 |
+| 📁 工作区 | workspace CRUD + 排序 + 归档集管理（dsh 无官方管理面） |
+| 📚 技能 | 全量技能清单（全局层 + 会话作用域合并），严格只读、不加载正文 |
+| 🔌 MCP 服务器 | 行级 CRUD + 真实握手探测 + 工具试调用台 |
+| 🛰️ 子智能体 | 受管子代理 CRUD + 运行中监控 / 续接 + CLI 后端挂载 |
+| ⌨️ 命令与钩子 | 提示词命令（实时生效）+ Claude / Codex hooks 桥 + 项目 `.agents` 只读视图 |
+| 🪝 Webhook 触发 | 入站端点 → steer 在线会话 / 新建会话；验签 + 幂等去重 |
+| 🔍 Web 搜索 | provider 切换 + 配置编辑（Exa / Perplexity 无官方 UI） |
+| 📊 用量仪表盘 | 浏览器端实时聚合的 token 用量 / 活跃度分析 |
+| ✅ 待办清单 | 输入框上方实时待办 + git 文件变更区 |
 
-- **🛰️ 子智能体**（设置栏独立页，order 26，融合自原 dsh-plugin-subagents 插件）：
-  - **运行中**标签页：列出当前 dsh 进程正在执行的子智能体（后端、模式、委托深度、父/子会话）；每张运行中卡片带**实时运行计时**（`⏱ 7分24秒` 秒级跳动，从面板首次观察到该子智能体起算，刷新重置——「visibly tick」防卡住感）与**事件数活动度标签**（子会话日志量，v1.2.0）；可续接子智能体提供二次确认的中断入口，一次性任务明确标为不可中断；**🧵 续接（v1.10.0）**：可续接的运行中卡片带行内续接编辑器——人工消息经官方浏览器 prompt 通道（`ctx.subagents.prompt`，需 dsh ≥ 0.1.5-rc.2）投递给子会话，`排队` 进下一轮 / `插队` 在最近步骤边界进入（与 Webhook 动作、官方子会话 composer 同语义）；host 侧校验子智能体仍在运行、属于指定父会话且为可续接模式，消息上限 32,000 字符，投递自带 requestId 与独立 signal（浏览器侧取消不跨面板传递）；
-  - 对 profile `cordis.patch.yml` 中全部受管子代理（`@deepseek-ai/dsh-tool-subagent` 实例行）做**新建 / 编辑 / 删除**：子代理名称（`toolName`，模型可见的委托工具名）、提示词（`persona`，支持 `{{model}}` / `{{cwd}}` 模板变量）、工具约束（`toolFilter.allow` / `deny`，候选来自运行中工具 ∪ 内置名录，未知工具名保存时拒绝）、模型指定（`agentOptions.provider` / `model` / `maxTokens`，留空继承父代理路由）；另有执行后端（按运行中实例枚举能力矩阵）、最大委托深度、后台模式、run_in_background 开关与**变更记录**（配置台账 `subagent-admin.history.jsonl`，超 512KB 自动轮转）；
-  - **CLI 后端**标签页：内置 CLI 后端（codex / claude-code provider 包）检测 → 挂载 → 配置（providerName / permissionMode / disposeGraceMs / env）→ 卸载，provider 包缺失时提供「安装依赖包」（`npm install -g`）；**通用命令行后端**扫描 PATH 上的其他 agent CLI（gemini / qwen / opencode 等）一键挂载或手填自定义命令，配置持久化在 profile 目录 `subagent-admin.cli.json` 并即时注册 one-shot 命令 provider（`{prompt}` 占位符替换、stdout 即结果、非零退出记失败）；providerName 改名/卸载受子智能体实例引用守卫保护；
-  - 校验 host 端 fail loud、客户端同步预检（保留名、实例间重名、行 id 冲突、provider 能力矩阵、allow/deny 交集等）；卡片带 live 状态灯（工具已挂载 / 后端在线）；
-  - 表单默认只展示身份、执行后端与提示词；工具权限、模型、递归和后台策略收进可展开的高级设置，保存操作固定在表单底部。切换执行后端会立即清除不支持的提示词/工具约束并收敛深度与后台模式；工具约束允许搜索或手动输入，但仅当前候选工具可保存；
-  - **向后兼容**：受管块标记注释（`# >>> dsh-plugin-subagents managed rows ... <<<` 与 cli backends 标记）字节级保留，原独立插件写入的既有配置、台账与 `subagent-admin.cli.json` 继续被识别与管理；从旧插件迁移只需 `pnpm dsh plugin --profile web remove dsh-plugin-subagents` 后重启（受管行无需改动）。
-- **⌨️ 命令与钩子**（设置栏独立页，order 27，融合自原 dsh-command-hook-admin 插件，三页签；**迁移注意**：与本插件并存会让两个插件同时注册 `commandHookAdmin` 服务——先 `pnpm dsh plugin --profile web remove dsh-command-hook-admin` 再重启，数据文件（`commands/`、`hooks.json`、`hooks.disabled.json`）无需任何改动）：
-  - **命令（提示词命令，实时生效）**：为纯内存的 slash 命令注册表（`ctx.commands`）补上文件后端——存储于 `$DSH_HOME/commands/*.json`（默认 `~/.dsh/commands/`，`DSH_HOME` 可整体迁移），每个文件一条命令（name / description / inputHint / prompt / images / enabled）。会话中输入 `/名称 <输入>` 时，宿主把提示词（`$ARGUMENTS` 替换为输入；未写占位符则追加到末尾）作为一条用户消息 steer 进当前 agent——与官方 `/plan` 相同的注入通道；勾选「接受图片附件」的命令可携带图片。**实时生效**：插件以 `ctx.commands.register()` 动态注册，`fs.watch` 防抖监听目录——面板保存或任何编辑器直接改文件都即时重新注册，无需重启；与内置命令重名的文件跳过注册并在列表中标记「注册失败」（悬停看原因）。面板支持新建 / 编辑（含改名）/ 启停 / 删除（行内二次确认）；**⬇ 导出 / ⬆ 导入（v1.2.0）**——全部命令一键下载为 JSON 文件、粘贴 JSON 批量导入（对接 awesome-claude-code 式命令分享生态），同名命令一律跳过、绝不静默覆盖本地修改，完成后汇报新增/跳过/失败计数。
-  - **钩子（Claude Code 格式，写文件 + 桥热重启）**：沿用 stock 桥 `@deepseek-ai/dsh-hooks-claude-code` 的配置格式与执行语义（本插件不执行钩子）。存储于 `$DSH_HOME/hooks.json`（裸事件表与 `{ "hooks": {...} }` 包裹格式都可读，保存时保持原有格式、外来键不动）；「停用」的条目移入旁车文件 `$DSH_HOME/hooks.disabled.json`（桥会执行文件里的每一条、没有 enabled 标记，移出文件才能保证停用真正生效）。每次保存 / 启停 / 删除后，插件通过 `fiber.update(config, true)` **热重启已挂载的桥条目**（宿主 loader 在条目 config 变更时用的同一重启通道），即时生效（重启瞬间钩子有约一秒空窗）；缺少该 API 或重启失败时面板如实回退提示「重启 dsh 后生效」。支持事件与匹配器校验与桥一致：`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentStop`，仅 `PreToolUse`/`PostToolUse` 有匹配对象（工具名字面量 `A|B` 或正则；非法正则保存时被拒绝，避免桥在加载时拒绝整个配置）。
-  - **hooks 桥一键安装/卸载（桥接包固化）**：不再需要手改 profile 配置——面板检测桥的三态（已挂载 / 已安装未挂载 / 未安装）并给出对应横幅：未安装时一键「⚡ 安装并挂载 hooks 桥」在 profile 目录执行 `pnpm add @deepseek-ai/dsh-hooks-claude-code` 并向 `cordis.patch.yml` 写入挂载行（`configPath` 自动指向本面板管理的 hooks.json 绝对路径，`[]` 占位符场景正确替换），随后提示重启 dsh 生效；卸载走两击确认，移除挂载行与依赖包。安装/卸载与插件安装、MCP、子智能体共享同一**串行操作队列**（都写 `package.json` 与 `cordis.patch.yml`，互不交错），写回均为原子写。同一页签里还有**第二条状态条**治理 Codex 格式的兄弟桥 `@deepseek-ai/dsh-hooks-codex`（`hooks.codex.json`、5 个钩点，与 Claude 桥生命周期完全独立）——两个桥的安装面同构（同一个 `listHooks()` 载荷、同一 install/remove 形状），因此不给它单开设置页。
-  - **项目（`.agents`，只读视图，v0.8.0）**：按会话或任意项目内路径，查看该项目 `.agents/` 的识别情况——`commands/*.md`（Claude Code 格式 markdown 命令，文件名 stem 即命令名，frontmatter `description` + 正文 prompt，`$ARGUMENTS` 替换）、`hooks.json` 或 `settings.json` 的 `hooks` 键（事件 / 匹配器 / 命令 / 超时）、`skills/`（dsh 原生发现，模型经 skill 工具调用）；每个文件 / 条目的加载失败原因（名称不合法、缺 frontmatter、空提示词、name 与文件名不一致、配置解析失败）就地展示。命令在会话创建时**按项目注册进该会话的作用域层**（同名命令项目版遮蔽全局版，会话结束自动卸载）；hooks 由插件内建的**按会话项目桥**在五个扩展点执行（语义与 stock 桥一致：exit 2 阻断、JSON `permissionDecision`、additionalContext、`${CLAUDE_PROJECT_DIR}` 替换），与全局桥独立叠加。配置开关：cordis 配置行 `projectCommands: false` / `projectHooks: false` 可分别停用。
-- **✅ 待办清单（对话框上方，v1.0.0）**：在聊天输入框正上方以展开式浮动面板实时显示当前会话的待办列表——完成项带绿色圆勾与**删除线**灰字、进行中项带**旋转加载环**、待处理项为虚线圆圈灰字；面板顶缘一条 **3px 完成度进度条**（completed/total，全部完成时变绿）；列表超出可视高度时自动把**当前进行中项滚动进视野**（nearest 滚动，不干扰手动翻阅）；进行中项右侧带**实时计时器**（`· 7分24秒`，秒级跳动，从插件首次观察到该项进行中起算、刷新页面重置——「visibly tick」防卡住感）；已完成的项可**折叠为一行「✓ N 项已完成」**（点击展开/收起，偏好存入 localStorage）；**右上角通知铃**（支持 Notification API 的平台才渲染）——开启后**页面在后台且待办全部完成**时弹桌面通知（点击通知聚焦窗口；权限经按钮引导授权、偏好持久化；前台可见时不打扰）；面板宽度复用 shell composer 卡片的对齐公式（`--dsh-composer-side-clearance` / `--dsh-composer-dock-inset` / `--dsh-composer-card-max-width` 设计变量，缺失时回退全宽），与对话框完全左右对齐；视觉沿用官方 TodoPanel 基调（`--dsw-specific-tip` 背景 + `--dsw-alias-border-l1` 边框 + 12px 圆角）。列表下方是**基于 git 状态的文件变更区**：头部为当前**分支徽标**（`⎇ main`，取自 `git status -b`，detached 时不显示）与**「⧉ 复制 diff」按钮**（按需拉取 `sessionAdmin/gitDiff` 的全文 `git diff HEAD`，512KB 上限、超限标记截断，写入剪贴板——生成 commit message 或粘贴审查正合适）；每行显示彩色状态字母（M 修改 / A 新增 / D 删除 / R 重命名 / ? 未跟踪）、路径（目录前缀暗色弱化、文件名高亮、过长省略悬停可见全名）与每文件的 +增行 -删行；**点击文件行直接在系统资源管理器中定位**（存在的文件定位自身、已删除文件定位其所在目录，复用 `fsAdmin/reveal`）；页脚显示「**第 X / Y 步** · **N 个文件已改 +A -D**」（步数从列表自身推导：首个进行中项的位置，全部完成时为总数）。文件统计口径为**会话工作区目录的实时 git 状态**——host 侧 `sessionAdmin/fileStats` 跑 `git status -b --porcelain=v1 -z`（文件列表 + 分支，含未跟踪）与 `git diff --numstat HEAD`（+/- 行数，含暂存），未跟踪文本文件直接数行；3 秒 TTL 缓存收敛轮询频率，非 git 目录/无 git/超时一律静默回零。待办列表数据来自框架注入的 `useProjection('todos')` 投影（agent 的 `todo_write` 工具实时驱动，**零轮询、零 host 状态**；仅文件统计段以 4 秒间隔轻量轮询）；面板显示期间通过 body class 隐藏 shell 自带的折叠待办条（`data-testid="todo-panel"`，未来 shell 改名时退化为两块面板同时显示，绝不损坏），列表清空即自动让位；点击页脚可折叠/展开全部内容。经 `conversation.input.dock` slot 挂载（id `todo-admin`，order 5），旧版 shell 无此 slot 时静默不出现。
-- **🧩 运行时一键启用（v1.10.0，overlayAdmin 命名空间，host 侧 `lib/overlay-admin.js`）**：官方发行版把全文检索默认关掉——base 行 `session-query-sqlite` 固定 `openAt: never`（`searchSessions` 抛 `SESSION_QUERY_SEARCH_DISABLED`，官方侧边栏搜索只匹配标题 / 工作区名）。本插件把启用做成**纯 profile patch 写入**，零依赖安装：
-- `overlayAdmin/searchEnable`：往 profile `cordis.patch.yml` 写 id 覆盖行 `- id: session-query-sqlite`（持久索引 `$DSH_HOME/sessions-search-index.sqlite` + `openAt: first-search`，按官方注释的 Node 22 启动静音姿势把 node:sqlite 导入和建索引推迟到首次搜索）；**幂等**——已启用（`first-search` / `startup`）或用户自定义过的行原样保留（只改 `path` / `openAt` 两个键，`journalMode` 等未知键字节级保留），insert 块里的嵌套行原位重建且兄弟条目不动，`[]` 空列表占位符替换而不是在其下追加（避免双 YAML 文档）；流式单行 `config: {...}` 拒绝改写并给出整理指引；
-- 写入走与 pluginAdmin / mcpAdmin / subagentAdmin / commandHookAdmin 共享的**串行操作队列**，原子写（temp + rename），行级编辑保留文件其余部分；
-- UI 接线：历史会话页全文搜索失败时识别错误码换成启用横幅（启用成功转「已写入，重启 dsh 生效」态）；
-- `overlayAdmin/status`：只读诊断（profile patch 里的行现状 + 索引路径），不探测运行时挂载真值（真值由错误码在客户端现场判定）。自检：`node scripts/verify-overlays.mjs`（14 断言，已入 `npm test` 链）。
-- **⬇ 会话导出 Markdown（v1.0.0）**：历史会话页每张卡片新增「⬇ 导出」——host 端 `sessionAdmin/exportSession` 读取会话事件（在线会话走内存、归档/结束会话走日志回放），渲染成**人可读的 Markdown 对话稿**：标题 + 元信息块 + 按日志顺序的用户/助手段落，工具调用以 `> 🔧 工具名 — 参数摘要` 单行引用嵌入，图片块记 `[图片]`，reasoning 内部思考不出现；段落与单条消息有 100KB 上限防病态日志；整份日志读取以 `sessionExportEventCap`（cordis 配置，默认 200,000 条事件）封顶——命中上限时导出文件尾附截断说明、载荷带 `truncated` 标记、面板 toast 明示「已截断」而非静默，同一上限同时保护「体检」报告（摘要行追加「· 已截断」）；浏览器直接下载 `.md`（文件名 = 标题 slug + 短 id + 日期）。与宿主可选 bundle `dsh-session-log-export` 的 **ZIP 原始日志存档**互补——那个面向备份/迁移，这个面向阅读、分享与粘贴进 issue/文档/另一个 AI；不依赖该 bundle。渲染器 `renderSessionMarkdown` / `exportFilename` 为导出纯函数，可独立测试。
-- **侧边栏右键菜单（会话 & 工作区）**：
-  - **会话行右键**：在原生菜单末尾追加**复制会话 ID**与**删除会话**（危险操作）；删除按标题**精确匹配**解析目标，存在同名会话时拒绝执行并引导到历史会话按 ID 删除，且菜单项需**4 秒内两次点击**确认；删除复用 `sessionAdmin` 的安全语义——在线会话走 `closeSession`（先 dispose 捕获的 agent handle 再删日志，不再要求重启），非在线会话走 `deleteSession`，均定向 detach。
-  - **工作区行右键**：新增**在资源管理器打开**——调用 `fsAdmin.reveal` 在系统文件管理器中定位该工作区目录（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`）。
+共同特性：所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；依赖的 dsh 服务缺失时逐面板降级提示，绝不整插件不加载。
 
----
+## 使用说明
 
-## 架构
+所有面板入口：dsh 设置弹窗 → 对应导航项（各面板按需挂载）。改动 profile 配置的操作（插件安装/卸载/启停、MCP、Web 搜索、Webhook 运行时、overlay 启用）需**重启 dsh 生效**，面板内会提示。
 
-- **Host 端（`lib/index.js`，零 dsh 依赖）**：
-  - 注入 `['typert', 'workspaceRegistry', 'sessionPersistence', 'tools', 'subagents', 'commands', 'shell']`；
-- 提供并注册**十三个 RPC 命名空间**（typert 对每个 package 名只允许一次注册，全部 invocations 并入宿主的统一描述符）：
-    - `pluginAdmin`（`list` / `install` / `remove` / `checkUpdates`）：异步 `spawn` pnpm（Windows 走 shell 解析 .cmd shim，5 分钟超时且**进程树强杀**（`taskkill /T /F`，避免超时后残留 pnpm/node 子进程继续写盘），Promise 尾链串行化防并发），镜像 CLI `reconcileBundles` 同步清单，清单写回为**原子写**（临时文件 + rename，崩溃不截断 profile 的 package.json）；安装/卸载参数经**字符白名单**校验（`assertPnpmOperand`），从根上排除 `&` `|` `>` `<` `%` 引号等 cmd 元字符注入向量；`install` 收到以 `@latest` 结尾的 spec 时，先查 registry 解析为**精确版本**再 `pnpm add`（避免 pnpm 在 manifest 已有满足版本的范围约束时误判 "Already up to date" 而静默不更新——这正是旧版「点更新无反应」的根因），registry 不可达时退回原 spec 让 pnpm 显式报错；`install` / `remove` 返回真实 pnpm 输出尾部（`output` 字段），前端作为提示气泡的悬浮诊断信息展示；`checkUpdates` 对 registry 安装的 bundle 并发查询 npm registry 的 `latest`（registry 解析：`npm_config_registry` env → 项目/用户 `.npmrc` → 官方源；有界并发 4 路、8s 超时、5 分钟缓存；`force` 参数为 true 时**绕过缓存强制重查并刷新缓存内容**），返回 `updateAvailable` / `latest` / `error`，本地路径与内置插件跳过；
-    - `sessionAdmin` (`list` / `archive` / `unarchive` / `deleteSession` / `closeSession` / `fileStats`)：直接对接 `workspaceRegistry` 与 `sessionPersistence`，提供安全幂等的持久化日志清理与归档状态流转（日志目录按 JSONL 后端物理布局从 `workspaceRegistry` 之外仅读的 header 推导；`stat` 报告已有持久化字节而标准布局下目录缺失时**响亮报错**而不是静默留下孤儿日志——自定义后端 root 或布局漂移时可立即察觉）；`list` 采用**修订号驱动的摘要缓存**（`sessionPersistence.list()` 快照原生的 `revision` token，未变化会话不重读事件日志）与**有界并发**（最多 4 路并行只读句柄（`open(id,'read')`，摘要折叠按会话设事件读取上界）），并设单会话事件扫描上限兜底；`archive` 校验会话真实存在，拒绝向归档集写入垃圾 id；对 workspaceRegistry 的**公开动词**（`archivedSessionIds` getter / `archiveSession` / `unarchiveSession`）与持久化缝（`list` / `stat` / `open`）在 `apply()` 挂载时即做**兼容性探测**（缺 `unarchiveSession` 直接抛错并指明），dsh 版本变更会明确报出缺失成员，而不是首次调用时才静默失败。`closeSession` 使**在线会话免重启删除**成为可能：`installAgentHandleCapture` 在挂载时透明包装公开的 `ctx.agents.create` / `resume`（原样调用并返回，仅把返回的 `AgentHandle` 按 session id 存入插件私有 Map），删除在线会话时先 `handle.dispose()` 走 dsh 官方 teardown 链（停止 loop → 等待静止 → 注销 agent → 从 SessionStore 移除 → 触发 `session/disposed` → 持久化层 `retire()` flush 缓冲事件并释放写路径），再删日志——日志不会被下次 flush 复活；未被捕获 handle 的在线会话（如插件挂载前已创建）会明确报错并引导重启，绝不误删。`fileStats` 为待办清单页脚供数——读取会话工作区目录的**实时 git 状态**（`git status -b --porcelain=v1 -z` + `git diff --numstat HEAD`，未跟踪文本文件直接数行），返回分支名、每文件明细（状态字母 / 路径 / +/- 行数 / 点击定位锚点：存在的文件为 absPath、已删除为所在目录 absDir）与总量；核心解析为导出的纯函数（`parseGitStatusZ` / `parseGitNumstat` / `parseGitBranch` / `gitFileStats`，可独立测试），3 秒 TTL 缓存收敛轮询，非 git 目录、无 git 或超时静默回零。
-    - `fsAdmin` (`reveal`)：跨平台在系统文件管理器中定位一个绝对路径（Windows `explorer /select`、macOS `open -R`、Linux `xdg-open`），供工作区右键菜单「在资源管理器打开」使用；
-    - `mcpAdmin` (`list` / `upsert` / `remove` / `test`)：管理 profile 的 `cordis.patch.yml` 中的 MCP 客户端实例（`@deepseek-ai/dsh-mcp-client`）。**依赖自装（v0.8.1）**：`upsert` 在写入行之前先确保 `@deepseek-ai/dsh-mcp-client` 是 profile 的直接依赖（缺失则走宿主 pnpm 安装并同步 bundles 清单，即 `bridgeInstall` 的模式——组合后的行从 profile 根导入该包，没装包的行会让整棵树起不来；安装失败则不写行；安装按 profile 已有 `@deepseek-ai/dsh-*` 依赖的**锁步版本**钉版——registry 的 `latest` 标签严重滞后；装完主包还会补全其 `@deepseek-ai/dsh-*` peerDependencies——dsh profile 固定 `autoInstallPeers: false`，peer 不会自动装，缺了运行时 import 会在启动时炸整棵插件树，present 路径同样补全以自愈旧装残留）。基于行级 YAML 块编辑（零依赖）：条目一律写成 loader 认的 `- insert:` 包装块（裸 `- id:` 行是对既有条目的覆盖，基树无此 id 时被 loader 静默丢弃——旧版写出的死行仍可列出，标记 `legacy: true`，下次保存自动升级）；同一 insert 块内手工并列的多条目在替换/删除单条时保留其余；`upsert` 按 id 原位替换或追加，`remove` 整块删除，写回走**原子写**；校验 id / serverName / transport / command / url，拒绝畸形输入；文件变更与插件安装共用同一**串行操作队列**（读-改-写不交错）。`test` 按条目 id 发起**连通性探测**：stdio 子进程（newline JSON-RPC，`initialize` → `initialized` → `tools/list`，超时 `taskkill /T /F` 强杀进程树，捕获 stderr 尾部）或 streamable-http（`fetch` POST `initialize`，兼容 SSE 与纯 JSON，超时 AbortController），返回服务器标识 / 工具数量 / 耗时，或失败原因（命令不存在、连接拒绝、超时等），全程不抛异常。
-    - `subagentAdmin`（`list` / `runtimeList` / `runtimeInterrupt` / `upsert` / `remove` / `history` / `cliList` / `cliUpsert` / `cliRemove` / `cliInstall`，实现于 `lib/subagent-admin.js` + `lib/tool-seed.js`）：管理 `@deepseek-ai/dsh-tool-subagent` 受管行与 CLI 后端；`runtimeList` 仅枚举当前进程实际运行的子智能体，`runtimeInterrupt` 在中断前复核子会话的父会话归属；行级 YAML 编辑与 mcpAdmin 同源思路（只动标记块内受管行，其余字节级保留，原子写 + 首次修改自动备份）；与 mcpAdmin / 插件安装**共用同一串行操作队列**——两个命名空间都读-改-写同一份 `cordis.patch.yml`，队列共享保证互不交错；typert 注册表对每个 package 名只允许一次注册，故其 invocations（`dsh-plugin-admin/subagent/*` id）**并入宿主的统一描述符**（单一注册承载全部十六个命名空间）。
-	    - `commandHookAdmin`（`listCommands` / `saveCommand` / `deleteCommand` / `listHooks` / `saveHook` / `deleteHook` / `setHookEnabled` / `bridgeInstall` / `bridgeRemove`，实现于 `lib/command-hook-admin.js`，融合自原 dsh-command-hook-admin 插件）：命令文件 CRUD + `ctx.commands` 实时注册 + `fs.watch` 防抖监听外部编辑；hooks.json / hooks.disabled.json 双存储读写（保持既有 JSON 格式与外来键，原子写）+ 桥热重启（`fiber.update(config, true)`，无桥时如实报告）；`bridgeInstall` / `bridgeRemove` 固化桥包生命周期——pnpm add/remove `@deepseek-ai/dsh-hooks-claude-code` + `cordis.patch.yml` 挂载行（`configPath` 指向面板的 hooksPath 绝对路径），与插件安装共享串行队列与 pnpm runner，invocations（`dsh-plugin-admin/commands/*`、`dsh-plugin-admin/hooks/*` id）同样并入统一描述符。
-    - `projectAdmin`（`list`，实现于 `lib/project-hooks.js`，复用 `lib/project-agents.js` 的命令扫描与项目根解析）：只读视图——给定 cwd 解析项目根（向上找 `.git`，无则 cwd 本身），返回该 `.agents/` 的命令（含每文件加载错误）、hooks（来源文件 / 事件 / 匹配器 / 命令 / 超时 / 解析错误）与技能名列表；面板「项目」页签的数据源。
-- v1.16.0 新增的四个：`workspaceAdmin`（`list` / `create` / `rename` / `insertBefore` / `delete` / `pickDirectory` / `status` / `unarchiveSession`，`lib/workspace-admin.js`）、`skillsAdmin`（`list`，`lib/skills-admin.js`，全量技能清单：注册表全局层 + 每个会话的 (cwd, preset) 作用域合并）、`webSearchAdmin`（`list` / `active` / `setActive` / `install` / `uninstall` / `config` / `saveConfig`，`lib/web-search-admin.js`）与 `pluginInventoryAdmin`（`list`，`lib/plugin-inventory-admin.js`，只读快照）；`webhookAdmin` / `overlayAdmin` 两个见下文各自面板小节。
-- **浏览器前端（`lib/client.js`）**：
-- 注入 `slots` + `connection`，注册**十一个界面贡献**：向官方插件设置页的 `settings.plugins.tab` 注册「扩展插件」页签（id `extensions`，order 20，排在「插件配置」0 与「插件列表」10 之后）；向设置弹窗注册**九个 `settings.section`**——`workspaces`（工作区, order 22）、`skills-admin`（技能, order 23）、`mcp-servers`（MCP服务器, order 25，紧跟「Agent 预设」）、`subagent-admin`（子智能体, order 26，样式以 `data-dsh-sa-section` 作用域隔离）、`command-hook-admin`（命令与钩子, order 27，样式以 `data-cha-section` 作用域隔离，**两个 hooks 桥的安装 / 卸载都在它的「钩子」页签里**）、`usage-dashboard`（用量仪表盘, order 28）、`webhook-triggers`（Webhook 触发, order 30）、`web-search-admin`（Web 搜索, order 31）与 `session-history`（历史会话, order 100）；向聊天骨架注册 `conversation.input.dock` 待办清单（id `todo-admin`，order 5，样式以 `data-dsh-admin-todo` 作用域隔离）；面板随官方页签 / 分区按需挂载；
-- 采用模块表平台词 `require('react')` 与 Shell 共享同一 React 实例；待办 dock 直接消费框架注入的 `useProjection` session 标准套件钩子（键空间开放，`'todos'` 投影无需类型注册即可读）；
-  - 深度利用 `--dsw-*` design tokens，自适应浅色/深色主题，支持卡片式布局、状态呼吸灯、加载动效（Spinner）、危险操作防误触确认条与空状态提示；
-  - 经 `/api` RPC Gateway 调用 Host 对应服务的 Remote 方法；
-  - 新增**侧边栏菜单注入**（纯 DOM，无需 dsh 源码改造）：MutationObserver 监听原生三点菜单弹层的出现，识别会话/工作区菜单并在末尾追加自定义项；会话行按标题解析身份（复制 ID 允许模糊匹配，删除仅**精确匹配**且同名拒绝、两次点击确认），工作区行按标题解析路径后调 `fsAdmin/reveal`。
-  - **设置导航图标身份（v0.9.1）**：shell 的设置导航对未知 section id 一律画同一个通用齿轮（`navIcon()` 只硬编码四个官方 id），本插件早期的设置页因此全同脸。slot 契约没有 icon 字段，插件沿用 DOM 注入姿势——MutationObserver 监听设置弹窗，按导航行 label 定位（hash 化的 css class 不参与匹配），把齿轮替换为**语义化 16×16 线性图标**，统一 currentColor + 1.3 描边 + 圆角端点，与官方 Outline16 同一视觉语言；替换件继承原 svg 的 css class，几何与对齐直接骑在 shell 自己的样式表上；只在弹窗 nav 列内匹配，幂等（`data-dsh-admin-nav-icon` 标记），官方行绝不触碰。**全部 9 个设置页都有专属图标**（工作区=文件夹、技能=摊开的书、MCP服务器=机架、子智能体=委派（父节点→子节点）、命令与钩子=终端提示符 `>_`、用量仪表盘=柱图、Webhook 触发=闪电、Web 搜索=放大镜、历史会话=时钟回转）。图标不是凭感觉画的：9 个 glyph 在**真实 16px 光栅**（无头 Chrome + CDP，零依赖，临时 profile）下逐个二值化成剪影，量两两归一化汉明距离（0 = 完全重合），据此改掉两处实测最挤的画法——`命令与钩子` 原本是带圆角外框的终端窗口（与 `MCP服务器` 机架剪影仅差 0.385，全集最挤），改为无外框 `>_` 提示符后该对升到 0.639；`子智能体` 原本是四框组织树（与机架 0.537，16px 下两簇方块同形），改为两个对角错位节点 + 连接线后该对升到 0.603（原第三处是已随本次收敛整页移除的 `存储与凭据` 页，其「磁盘堆叠」glyph 一并删除）。**全集最小间距由 0.385 提到 0.558**（现最挤为 `工作区` ↔ `历史会话`，两者都是既有画法；实测该对的候选改法都没有净收益，故保留）。因为 nav 行只暴露 label（没有 section id / data 属性），**label 就是匹配键**，所以本插件的页面绝不能与官方页面同名——同名会把官方行自带的图标一并改掉（`self-check.mjs` 的图标注入用例同时断言 9 个插件行被改写、官方行原样保留，其中包括官方占用的「Agent 预设」行）；导航名也**不带 emoji**——行内字形由注入的 svg 独占，label 里再带前缀 emoji 会在图标旁并排多画一枚（独立页时代的「🪝 Codex 钩子桥」行就是这么显示成双钩子的）。
+### 🔌 扩展插件
+1. 打开：设置 → 插件 → 「扩展插件」页签。
+2. 安装：顶部输入框填 npm 包名（如 `dsh-xxx`）或本地绝对路径 → 回车提交 → 重启 dsh。
+3. 更新：卡片「⬆ 更新」单升，或工具栏「⬆⬆ 全部更新」批量（实时进度）；「⬆ 检查更新」强制重查 registry。
+4. 启停：卡片「⏸ 停用 / ▶ 启用」（仅自带 bundle patch 的扩展插件）→ 重启生效；已停用插件跳过更新检测。
+5. 卸载：卡片「卸载」→ 行内二次确认。
+6. 搜索/筛选：搜索框按名称/版本/路径模糊过滤 + 「全部 / 扩展插件 / 系统内置」胶囊。
+7. Loader 快照：页底只读子面板，展开看各条目 fiber 阶段与 Agent 预设。
 
----
+### 💬 历史会话
+1. 打开：设置 → 历史会话。
+2. 搜索/筛选：搜索框同时匹配标题/摘要/工作目录/会话 ID；状态胶囊「全部 / 在线 / 已归档 / 已结束」。
+3. 置顶：卡片「📌」（localStorage 持久化），「📌 已置顶」胶囊直达。
+4. 归档/取消归档：卡片按钮，侧边栏即时联动。
+5. 删除：卡片「删除」→ 二次确认；在线会话显示「关停并删除」（先 dispose 再删日志，免重启）。
+6. 导出：卡片「⬇ 导出」→ 下载 Markdown 对话稿。
+7. 体检：卡片「🩺 体检」→ 工具调用/失败/重试折叠报告。
+8. 全文检索：切换「全文搜索」输入关键词；若部署默认关闭（`openAt: never`），点「⚡ 一键启用」→ 重启 dsh。
+
+### 📁 工作区
+1. 打开：设置 → 工作区。
+2. 新建：工具栏「➕ 新建工作区」→ 原生选择器选目录或手输绝对路径（可选标题）→ 提交；同名目录返回既有工作区。
+3. 重命名/排序/状态：行内「✎」改名、「⬆/⬇」重排、「🔎 检查状态」（missing-dir 提示）。
+4. 删除：🗑 双击确认——仅删注册，目录与会话本体保留。
+5. 取消全部归档：归档集非空时顶部「📦 取消全部归档 (N)」。
+
+### 📚 技能
+1. 打开：设置 → 技能。
+2. 浏览：卡片含 `/<name>`、🤖 模型可调用 / 👤 人类可调用旗标、来源标签、作用域明细。
+3. 筛选：文本（名称/描述/whenToUse/路径）、来源、作用域——浏览器端过滤，零额外请求。
+4. 复制/打开：📋 复制 `/name`；resourceBase 为目录时「📂 打开目录」在系统文件管理器中定位。
+
+### 🔌 MCP 服务器
+1. 打开：设置 → MCP服务器。
+2. 添加：表单填 id / serverName / command（+args；整行命令如 `npx -y fetcher-mcp` 会被提示拆分）→ 保存 → 重启 dsh。
+3. 测试：🔌 测试——真实握手（initialize → tools/list），成功显示服务器标识与工具列表；成功结果缓存到 localStorage（失败仅会话内）。
+4. 试调用：🧪 试调用——选工具、粘贴 JSON 参数、真实执行一次 tools/call（60s 预算，16KB 截断）。
+5. 编辑/移除：行内操作；与既有条目同 id 直接拒绝。
+
+### 🛰️ 子智能体
+1. 打开：设置 → 子智能体。
+2. 新建：表单填名称（toolName）/ 提示词（persona，支持 `{{model}}`/`{{cwd}}`）/ 工具约束（allow/deny）/ 模型 / 执行后端 / 委托深度 / 后台模式；高级设置可展开。
+3. 运行中：页签列出当前进程运行中的子智能体（实时计时 + 事件数）；「中断」二次确认；可续接的卡片行内输入消息，「排队」进下一轮 /「插队」在最近步骤边界进入。
+4. CLI 后端：页签——检测 codex / claude-code provider 包 → 挂载 → 配置 → 卸载；「通用命令行后端」扫描 PATH 上其他 agent CLI（gemini / qwen / opencode 等）一键挂载或手填自定义命令。
+
+### ⌨️ 命令与钩子
+1. 命令页签：新建/编辑（含改名）/启停/删除；保存即实时注册（fs.watch），会话里输入 `/名称 <输入>` 使用；「⬇ 导出 / ⬆ 导入」JSON 批量迁移（同名跳过）。
+2. 钩子页签：编辑 hooks.json（事件 / 匹配器 / 命令 / 超时）→ 保存即热重启桥；「停用」移入 hooks.disabled.json；桥三态横幅——未安装点「⚡ 安装并挂载」→ 重启；Codex 兄弟桥同页第二条状态条。
+3. 项目页签：输入项目路径，查看 `.agents/` 的命令 / hooks / 技能识别情况与逐文件加载错误。
+
+### 🪝 Webhook 触发
+1. 打开：设置 → Webhook 触发。
+2. 新建规则：id（小写字母开头）+ secret（≥16 字符，留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
+3. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
+4. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
+5. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
+
+### 🔍 Web 搜索
+1. 打开：设置 → Web 搜索。
+2. 切换：radio 选 provider（deepseek-official / exa / perplexity）→ 重启 dsh。
+3. 安装/卸载：仅 exa / perplexity 可装卸（deepseek-official 为 dsh 默认，不可卸）；卸载活动 provider 自动回落默认。
+4. 配置：⚙ 编辑器按 provider 字段表（apiKey / baseURL / model / maxTokens 等）保存；密钥只写不回显。
+
+### 📊 用量仪表盘
+1. 打开：设置 → 用量仪表盘。
+2. 日期范围胶囊（今天 / 24H / 7D / 30D / 90D / 全部）+ 项目筛选下拉。
+3. 阅读：KPI 卡（token/会话/消息/活跃天数 + 环比）、每日趋势堆叠柱图、分时活跃热力图、本地洞察（缓存命中率/输出比异常等）。
+
+### ✅ 待办清单
+1. 位置：聊天输入框正上方浮动面板，随会话实时投影。
+2. 操作：勾选完成（删除线 + 进度条）、进行中项实时计时、已完成折叠为一行；右上角通知铃（后台完成时桌面通知）。
+3. git 文件变更区：分支徽标 + 每文件 ±行数；「⧉ 复制 diff」；点击文件行在系统文件管理器中定位。
+
+## 版本兼容性（钳制）
+
+| 插件版本 | dsh 版本 | 状态 |
+|---|---|---|
+| v1.17.4 | **0.1.5-rc.2**（`latest` 标签，验证基线） | ✅ 全功能；取消归档降级（见下） |
+| v1.17.4 | **0.1.6-alpha.2**（`alpha` 标签，最新发布） | ✅ 全功能（含 `unarchiveSession`） |
+
+- **dsh 最新发布：0.1.6-alpha.2**（alpha 预发布；`latest` 标签仍为 0.1.5-rc.2）。升级命令：`npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`。
+- **0.1.5-rc.2 的 `dsh-workspace` 没有 `unarchiveSession`**（0.1.6-alpha.2 补上）：插件照常挂载（挂载时告警），删除已归档会话跳过归档清理、显式取消归档报清晰错误；升级到 0.1.6-alpha.2 后恢复完整。
+- 版本敏感接缝（升级 dsh / cordis 后重跑 `npm test` 验证，各 verify 脚本对下述接缝做真实契约断言）：
+  1. **workspaceRegistry 动词面**——`archiveSession` / `unarchiveSession` / `archivedSessionIds`（只走公开动词，不碰 TS-private `requireState` / `setState`）；
+  2. **会话日志物理布局**——删除路径按 `dsh-session-persistence-jsonl` 的 `projectKey` / `encodeSegment` 推导目录，布局漂移或自定义后端时**拒绝删除并报错**；
+  3. **hooks 桥热重启**——`fiber.update(config, true)`（cordis 内部 API），失败降级「已保存，需重启 dsh 生效」；
+  4. **`ctx.agents.create/resume` 透明包装**——在线会话删除依赖捕获的 AgentHandle，包装不可写时降级「重启后再删」；
+  5. **私有读取器**——`locate()` / `snapshotEvents()` / 投影缓存表名，漂移降级为空值 / 空列表。
 
 ## 安装与启用
 
@@ -108,122 +124,22 @@ dsh web UI 插件：把管理能力拆进设置界面的既有结构——在官
 pnpm dsh plugin --profile web add dsh-plugin-admin
 
 # 或本地路径安装（开发场景）
-# pnpm dsh plugin --profile web add E:/Demo/cli-tools/dsh-plugin-admin
+# pnpm dsh plugin --profile web add ~/dsh-plugin-admin
 
 # 重启 dsh 生效
 pnpm dsh --profile web
 ```
 
----
-
-## 发布到 npm（CI/CD）
-
-该仓库已配置 GitHub Actions：**CI** 在每次 push / PR 上跑 `npm ci && npm test`（Node 22/24 矩阵）；**发布**在推送 `v*` tag 时触发，校验 tag 与 `package.json` 版本一致后 `npm publish --provenance`。
-
-```sh
-# 1. 本地发版：bump 版本并打 tag（同时更新 package.json）
-npm version patch -m "chore: release v%s"
-git push origin master --tags
-
-# 2. GitHub Actions 自动：测试 → 校验版本一致 → 发布到 npm
-```
-
-前提：
-- 仓库需配置 npm 发布密钥：**Settings → Secrets and variables → Actions**，添加 `NPM_TOKEN`（npmjs.com 的自动化 token，`--provenance` 需要 npm ≥9.5 且发布 job 具备 OIDC `id-token: write`，工作流已声明）。
-- 首次发布若包名被占用，需先在 npmjs.com 认领。
-
----
 
 ## 自动化自检
 
 ```sh
-npm test                      # 全链 18 个脚本（与 package.json 的 test 一致）
-node scripts/self-check.mjs   # 也可以单跑某一个
-node scripts/host-check.mjs
-node scripts/verify-mcp-cache.mjs
-node scripts/verify-update-reminders.mjs
-node scripts/verify-subagents-host.mjs
-node scripts/verify-subagents-client.mjs
-node scripts/verify-command-hooks.mjs
-node scripts/verify-project-commands.mjs
-node scripts/verify-project-hooks.mjs
-node scripts/verify-todo-panel.mjs
-node scripts/verify-webhook-triggers.mjs
-node scripts/verify-overlays.mjs
-node scripts/verify-plugin-inventory.mjs
-node scripts/verify-workspace-admin.mjs
-node scripts/verify-skills-admin.mjs
-node scripts/verify-web-search-admin.mjs
-node scripts/verify-hooks-codex-bridge.mjs
-node scripts/integration-check.mjs
-# 诊断工具（不在 npm test 内）：复现会话删除路径的全部失败模式，
-# 用于把面板上看到的报错对号入座（在线未捕获 / 布局漂移 / 并发竞态等）
-node scripts/repro-delete-session.mjs
+npm test   # 18 个脚本：self-check / host-check / verify-* / integration-check
 ```
 
-**patch 文件恢复**：profile `cordis.patch.yml` 是启动关键路径（解析失败会让宿主起不来），因此所有写回——插件启停 / MCP / 子智能体 / 命令钩子桥 / Web 搜索（含 provider 配置）/ Webhook 运行时挂载 / overlay 启用——都收敛到 `lib/patch-utils.js` 的 `writePatch()`（全 `lib/` 内唯一改写该文件的地方）：原子写（temp + rename）之外，改写前会把**被替换的上一版**复制到同目录的 `cordis.patch.yml.dsh-admin.bak`（滚动保留一版）；子智能体模块另有首写快照 `cordis.patch.yml.bak-subagent-admin`（保留最初的原稿）。写坏了用对应的 `.bak` 覆盖回去再重启即可。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（含统一描述符的十三个命名空间）。
+- 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 / 布局漂移 / 并发竞态），用于把面板报错对号入座。
 
-自检套件覆盖：
-1. Bundle 工厂加载与模块导出校验；
-2. 十一个 slot 注册（`settings.plugins.tab`「扩展插件」+ **`settings.section` ×9**：「工作区」/「技能」/「MCP服务器」/「子智能体」/「命令与钩子」/「用量仪表盘」/「Webhook 触发」/「Web 搜索」/「历史会话」+ `conversation.input.dock`「待办」），以及各面板的按需挂载（含**导航图标注入**：9 个插件设置行逐行换成专属 16×16 图标，官方行——包括同名风险最高的「Agent 预设」——原样保留）；
-3. 现代化统一样式注入（`<style>` 挂载与动画定义）；
-4. React 组件真实挂载（JSDOM + React 18）；
-5. 扩展插件页签渲染、过滤统计与卸载二次确认交互；**失败反馈可见性**：安装 / 更新 / 卸载的 RPC 返回 `{ok:false}` 时，错误文案渲染后**不被同批次触发的静默列表刷新清除**（旧实现在同一微任务里先写 error 再 reload，React 18 批处理把错误吞掉，失败表现为「点击没反应」），并同步弹出顶部浮动错误 toast（双通道：面板红条持久显示细节 + toast 醒目提示；toast 为**单例**——新提示原位替换旧提示并重启倒计时，同屏至多一条，快速连续失败不会重叠遮挡）；
-6. 历史会话设置页渲染、列表与状态渲染；
-7. 会话删除二次确认交互；
-8. **侧边栏菜单注入**：验证会话菜单追加「复制会话 ID / 删除会话」，删除项为**两次点击确认**（首击改写标签、二击才触发 RPC）且对**同名会话拒绝删除**；工作区菜单追加「在资源管理器打开」；
-9. **MCP 配置面板渲染与保存流**：独立 MCP 设置页展示服务器列表、添加/编辑/移除入口与空状态；打开添加表单填写 id / serverName / command 后保存，断言 `mcpAdmin/upsert` 收到正确载荷、表单关闭且新服务器入列；**连通性测试按钮**（🔌 测试）触发 `mcpAdmin/test` 并在行内渲染 ✅ 连通（含服务器名与工具数量）。
-10. `verify-mcp-cache.mjs`：MCP 连通性测试缓存的 localStorage 往返（预置缓存渲染 / 新探测持久化 + 重挂载恢复 / 配置保存失效缓存 / **失败探测 `{ok:false}` 只存于会话不落盘、重挂载不复活 ❌**）；
-11. `verify-update-reminders.mjs`：插件**更新提醒持久化**（保存下来、更新完删除提醒）——① 已保存的提醒在重开面板且本次检查网络失败时依然渲染且不被抹除；② 检查确认已是最新版本 → 徽标与 localStorage 记录同时清除；③ 点击卡片「⬆ 更新」→ 安装后提醒立即消失（含回调确认后仍不复活）；④ 某个插件查询出错时不丢失已有提醒；⑤ 同时有两个过时插件时**只更新其中一个**，另一个的提醒在重挂载（刷新）后依然保留、localStorage 也只留未更新那条；⑥ **首开即全量查询失败**时逐条渲染「⚠ 更新检查失败」标签并给出失败计数，绝不显示「全部为最新版本」——瞬时错误不写入 localStorage，下一次成功检查自动消退（混合轮次只对确实验证过的条目说「其余均为最新版本」）；⑦ 自动检查在飞期间点击「⬆ 更新」，检查刚发现的其他插件提醒**不会被升级提交用旧快照覆盖**（deferred 桩脚本化交错：先放行检查、再放行安装，中间断言提醒与 localStorage 均在；旧实现在此处会丢失提醒且跳过升级后的强制复核）。
-12. `verify-subagents-host.mjs`：子智能体 host 契约——patch 编辑器往返（序列化 → 解析、原位替换、删除清块、遗留行迁移）、校验矩阵（保留名 / 能力缺口 / 未知工具 / allow-deny 交集）、apply() 挂载后的 CRUD + 台账 + 备份 + 原子写、CLI 后端块生命周期与检测矩阵（stub 探针）、真实 PATH 探测的存在性/版本分离语义（缺失名与绝对路径报 ✗，在位命令无论 `--version` 是否成功都报 ✓）、通用 CLI 后端校验与命令 provider 的 argv/退出码映射、`cli.json` 持久化与 live 注册；
-13. `verify-subagents-client.mjs`：子智能体浏览器端——统一 bundle 内五个 slot 注册、「运行中」页签列出运行中子智能体并经二次确认中断、子智能体列表/空态渲染、新建表单四类字段保存载荷、客户端预检拦截保留名、编辑预填、两击删除、高级设置折叠与切换后端的能力收敛、变更记录页、LLM 目录下拉、CLI 后端检测卡片 / 挂载 / 两击卸载 / 通用后端挂载卸载 / 安装依赖包流；
-14. `verify-command-hooks.mjs`：命令与钩子 host 契约——统一描述符的九个 invocation（namespace/service/id 形状）、命令文件 CRUD + `ctx.commands` 实时注册（`$ARGUMENTS` 处理器 steer 断言、改名、停用不注册、删除、输入校验 fail loud）、hooks.json 双格式读写（裸事件表与 `{hooks:…}` 包裹各自保持、外来键字节不动）、停用旁车文件进出（条目 id 随存储切换）、匹配器/超时校验矩阵、经 `fiber.update(config, true)` 的桥热重启断言、桥包生命周期（stub pnpm：安装写入挂载行且 `configPath` 指向面板 hooks.json、`[]` 占位符替换、幂等不重复装、既有 MCP 行保留、卸载移除行与依赖、未安装时卸载为 no-op）、全 stub 幂等 teardown；
-15. `verify-todo-panel.mjs`：待办清单 host + 浏览器端——git 解析纯函数（porcelain `-z` 记录与重命名旧路径跳过、`## ` 分支头记录、numstat 加减行与二进制零行、花括号/箭头两种重命名路径归一化、untracked 行数回调、`parseGitBranch` 的 tracking/ahead/detached 三态）、`sessionAdmin/fileStats` 对**真实临时 git 仓库**的折叠（修改 / 删除 / 未跟踪三态、每文件明细 + 定位锚点、分支名、3 秒 TTL 缓存、无 git 工作区全零、参数守卫）、客户端 `conversation.input.dock` 注册（id/order/inject face）、面板渲染（三态行、删除线、旋转环、顶缘进度条（部分蓝/满格绿）、进行中项实时计时器、git 文件行（状态字母 / 目录-文件名分色 / +/- / **点击触发 `fsAdmin/reveal`**，删除文件定位目录）、分支徽标、已完成折叠行与 localStorage 偏好持久化、「第 X / Y 步 · N 个文件已改 +A -B」、`body.dsh-admin-todo-live` 抑制类的挂载/清空/卸载三态、页脚点击折叠与 `aria-expanded`）。
-16. `verify-webhook-triggers.mjs`：Webhook 触发 host + HTTP 层——`secretMatches` / `renderPromptTemplate`（默认模板与 $VARS 替换）/ `validateRuleEntry` 合法与非法矩阵（steer/create 形状、id 语法与重名、绝对路径、长度上限）、`saveRule` 往返与**空 secret 保持已存值**语义、`deleteRule` 未知 id 拒绝、HTTP handler 全路径（405/415/404/401/400/413/503/202 steer 成功并真实注入 fake agents；未知规则/已停用/错误 secret 三者**响应体一致**的防枚举断言；`x-webhook-delivery` **重放去重**：同 id 二投 202+`duplicate:true` 不再执行、换 id 照常执行）、`runtimeInstall` 写依赖 + cordis 补丁行（stub pnpm）。
+## 信任边界
 
-17. `verify-plugin-inventory.mjs`：Loader 运行时快照子面板——未挂载 `ctx.pluginInventory` 时渲染提示而非报错、有快照时渲染按 fiber 阶段计数与预设数的紧凑摘要、展开后渲染稳定排序表与每个预设的子区块（含 `!!js` 表达式的 `conditional` 徽标）、拉取失败渲染错误提示 + 重试按钮、折叠头部恒渲染六个阶段徽标（含零计数）；
-18. `verify-workspace-admin.mjs`：工作区管理——未挂载 `ctx.workspaceRegistry` 时的降级提示、list / create（`created: true`）/ 同名目录 create（`created: false`）/ rename / insertBefore 重排 / delete 往返、原生选择器把路径回填进新建表单、选择器缺失时按钮禁用并允许手输、`status()` 的 ok / missing-dir 两态横幅、以及面板不暴露的四个动词（attach / detach / insertSessionBefore / archiveSession）；
-19. `verify-skills-admin.mjs`：技能盘点——未挂载 `ctx.skills` 时的降级提示、全局层只投影叶子字段（畸形行丢弃、正文接口 `get()` 永不被调）、冷会话经 `observeSession` + `agentPresets.standingKeyFor` 解析作用域并释放 observation、活会话用自己的 Agent 作 scope 并读 preset 注册表、同 (cwd, preset) 多会话合并成一次读取、作用域读取失败逐条报告而清单存活、`complete=false` 与 32 会话上限告警、同名技能跨作用域合并成一条，以及浏览器端全量渲染 + 文本 / 来源 / 作用域三类筛选 + 作用域明细面板 + 未解析会话可见 + 复制手势；
-20. `verify-web-search-admin.mjs`：Web 搜索 provider——`list()` 三个 provider 与 bundled 标记、`active()` 直读 patch、`setActive()` 原位改键且保留注释 / `fetchProvider` / 内联 `config: {...}` 的兄弟键（含值里带冒号者）、`install()` 走 stub pnpm + 补 cordis 行、`uninstall()` 拒绝内置默认并同时摘除行与依赖、`[]` 占位替换、legacy 裸行升级不重复、卸载活动 provider 回落默认、三条写路径都骑注入的串行队列，以及 `config()` / `saveConfig()` 的 provider 配置编辑（行值 + 包默认值配对并标记「已设置」、未知键与 insert 兄弟行保留、数字 / 枚举校验、空值 = 不改、内置行写裸覆盖行、未安装的 opt-in provider 拒绝、settings 命名空间经 `mutate` 写路径 op + revision 冲突拒绝）；
-21. `verify-hooks-codex-bridge.mjs`：Codex 钩子桥——`codexBridgeInstall()` 幂等 pnpm add + 补 `- insert: <hooks-codex>` 行（`configPath` 指向 `<dshHome>/hooks.codex.json`）、`[]` 占位替换、legacy 裸行升级为合规 insert 形、与 Claude-Code 桥生命周期互不干扰、`codexBridgeRemove()` 在空 / 部分状态下安全；
-22. `verify-project-commands.mjs` / `verify-project-hooks.mjs` / `verify-overlays.mjs` / `integration-check.mjs`：项目级 `.agents` 命令与钩子桥契约、运行时一键启用（全文检索）的 patch 写入、`writePatch()` 的滚动备份契约（改写前把被替换的上一版留在同目录 `.dsh-admin.bak`，首次写入无备份可留），以及针对真实 dsh checkout 的源码契约探针（含统一描述符的十三个命名空间）。
-
-「命令与钩子」浏览器端（并入 self-check.mjs）：五个 slot 注册断言（order 27）、命令/钩子两页签切换与列表渲染（活动/停用徽标、存储路径）、桥三态横幅（未安装 → 一键安装按钮、已安装未挂载 → 重启提示）、安装后提示文案不被 reload 报告覆盖、卸载两击确认（首击只布防、二击才发 RPC）、**Codex 兄弟桥同页治理**（三态横幅 + 一键安装 + 两击卸载；安装返回稀疏载荷后仍回读 `listHooks`——断言钩子列表与横幅没被稀疏值清空）。
-
-Host 侧自检（`scripts/host-check.mjs`）覆盖下列契约：
-1. `sessionAdmin.deleteSession` 的**定向 detach 契约**：删除会话只允许触碰实际记账该会话的那一个工作区，绝不允许批量遍历（dsh 的 `detachSession` 写入带剪枝语义——记录中所有不在 registry 内存头索引里的会话会被永久剥离；批量调用在索引不完整时会把无关工作区的记账整体清空，表现为所有会话落入"未分组"）；
-2. **`closeSession` 免重启删除**：`installAgentHandleCapture` 透明包装 `ctx.agents.resume` 捕获返回的 `AgentHandle`，`closeSession` 对在线会话先 `dispose()`（断言恰好一次）再删日志与 detach；未被捕获 handle 的在线会话**失败闭合**（明确报错、日志目录完好）；非在线会话经 `closeSession` 与 `deleteSession` 行为一致；
-2. **安装/卸载参数白名单**：`&` `|` `>` `<` `%` `!` 引号、前导 `-`（flag 伪装）等注入向量一律在 spawn 前拒绝，合法包名/作用域/版本/本地路径照常放行；
-3. **本地安装判定**：远程 git/tarball URL（`https://`、`git+ssh://`、`github:` 简写）不再误标为本地安装，`link:`/`file:`/盘符/UNC/POSIX 路径仍正确解析；
-4. **共享日志目录拒删**：删除会话前若发现其他持久化会话解析到同一目录，则拒绝递归删除，避免平铺布局下连带清掉邻居日志；
-*5. **registry 公开动词缺失降级**：`workspaceRegistry` 缺失 `unarchiveSession()` 时（dsh 版本过旧，如 0.1.5-rc.2），`apply()` 不再拒绝挂载——改为挂载时告警；删除路径跳过归档清理（绝不抛裸 TypeError），显式取消归档 RPC 报清晰错误；
-6. **mcpAdmin 配置往返**：对临时 profile 的 `cordis.patch.yml` 做 list / upsert（新增、原位更新）/ remove，验证条目 id、serverName 与最终文件内容正确且仍是合法 YAML；同时校验畸形输入（非法 id / transport / 缺 command）被拒绝；`fsAdmin.reveal` 校验路径参数；
-7. **mcpAdmin 写操作串行化**：并发 `upsert` 经与插件安装共享的操作队列后全部落盘，读-改-写不交错；
-8. **mcpAdmin.test 连通性探测**：对真实 stdio MCP 服务器（newline JSON-RPC 握手）与 streamable-http 服务器（`initialize` POST）分别断言 `ok:true` 且携带 serverInfo / toolCount；对不存在的命令（`not found`）、静默子进程（超时）、死 HTTP 端点（连接失败）断言 `ok:false` 且错误可诊断；未知 id 被拒绝；
-9. **checkUpdates 缓存命中回归**：5 分钟 TTL 内第二次查询命中缓存时，`updateAvailable` 按**当前安装版本**重算——仍落后版本 → 提醒保留（修复了缓存只存 latest 导致重开面板提醒丢失）；把安装版本抬到 latest 模拟升级完成 → 提醒自动消除（更新完删除提醒）；
-10. **checkUpdates 强制刷新（force）**：「⬆ 检查更新」传入 `force` 时**绕过 TTL 真正重查 registry**（stub 请求计数递增），返回值立即反映 registry 新版本，且**下一个 TTL 内的普通查询直接吃到 force 刷新后的缓存内容**（检查更新强制更新缓存内容）；升级到刷新后的 latest → 提醒消除；
-11. **`Config` 的 Standard Schema 契约**：dsh Loader 经 `Config['~standard'].validate`（cordis `resolveConfig`）解析插件配置——空配置行解析出内置默认值（与 `apply()` 的挂载兜底同值）、错值与非 mapping 回报 issues（Loader 转成 `ValidationError` 拒绝挂载）、未知键（`commandsDir` 等 commandHookAdmin 覆盖项）原样透传；`apply()` 直调（测试 / 手工挂载）走同一个 `resolvePluginConfig()`，两条路径契约一致。
-
----
-
-## dsh 内部接缝与版本兼容性
-
-本插件刻意零 dsh 导入，全部骑在运行时的 Cordis Context 上——其中一部分是 dsh 的公开服务面（`ctx.commands` / `ctx.shell` / `ctx.agents` / `ctx.sessionPersistence` 的 list/stat/open、`ctx.skills` 的 snapshot/list、`ctx.settings` 的 describe/mutate 等），另有四处依赖 **dsh/cordis 的内部实现细节**；这些接缝在依赖的 dsh 版本上都有挂载期 fail-loud 形状探测或运行时降级，不会静默坏掉，另有第五处挂载探测守着一个**成员集会随 dsh 版本变动**的公开面（workspace registry 的动词集）。升级 dsh 时应关注以下五处：
-
-1. **workspaceRegistry 的动词面**：归档/取消归档走 registry 的**公开动词** `archiveSession()` / `unarchiveSession()`（各自在 registry 内部经 `enqueueOperation` 串行化，插件不再触碰 `requireState()` / `setState()` 这两个 TypeScript `private` 成员），归档集只经公开 getter `archivedSessionIds` 读取。旧版 dsh（如 0.1.5-rc.2）的 registry **没有** `unarchiveSession()`：插件照常挂载（挂载时告警指明降级面），删除路径跳过归档清理而非抛错，显式取消归档报清晰错误。
-2. **会话日志的物理布局**：`sessionAdmin` 的删除路径按 `dsh-session-persistence-jsonl` 的内部目录布局（`projectKey` / `encodeSegment`）推导日志目录并递归删除。存在 stat 交叉校验：布局漂移或自定义持久化后端时**拒绝删除并报错**，绝不误删。
-3. **钩子桥热重启走 cordis fiber 内部**：`hooks.json` 保存后通过 `fiber.update(config, true)` 重启已挂载的桥插件（cordis 内部 API）。失败时降级为「已保存，需重启 dsh 生效」。
-4. **`ctx.agents.create/resume` 的透明包装**：在线会话删除依赖捕获 dsh 工厂返回的 AgentHandle——插件临时替换这两个方法、透传原结果并在插件卸载时还原（cordis HMR 安全）。包装不可写（frozen/getter-only）时降级为「重启后再删」并打日志。
-5. **私有的日志路径 / 投影缓存 / 已弃用读取器**：钩子载荷的 `transcript_path` 用 JSONL 后端的私有 `locate()`（缺失降级为空串）；会话删除会顺手清理 `sessionProjectionCache` 的存储域记录（`session_projcache` 表名漂移时仅降级为「侧栏刷新后消失」）；子智能体「运行中」页签用已弃用的 `session.snapshotEvents()` 同步读取器获取运行中子进程的最新尾部（读取器漂移降级为空列表）。
-
-已验证基线：**dsh 0.1.5-rc.2 线（2026-09 checkout，`@modelcontextprotocol/sdk` 1.29.0）**。升级 dsh / cordis 后请重跑 `npm test`（其 `host-check` / 各 verify 脚本会对上述接缝做真实契约断言，含插件 `Config` 的 Standard Schema 解析契约）。
-
-关于 dsh 内置函数插件惯例 named-export `name` / `inject` / `Config` / `apply`：本插件**不导出 `name`**（插件名由 patch 行的 `name:` 提供，这是唯一未照做的一项）；`Config` 已按 **Standard Schema v1** 形状手写导出——Loader 的 `resolveConfig` 只触碰 `~standard.validate`，因此无需引入 zod / schemastery，**零 dsh import 原则不变**：空配置行解析为内置默认值、错值由 Loader 在挂载前抛 `ValidationError`（fail-loud）、未知键（如 commandHookAdmin 的 `commandsDir`）原样透传；`apply()` 内保留同一套 `positiveNumber` / `positiveInteger` 探测（提取为共享的 `resolvePluginConfig()`，`Config` 与 `apply()` 共用），直调 `apply(ctx, config)` 的测试与手工挂载场景得到与 Loader 完全一致的契约。另有一处**有意的约定偏离**：Web 面板文案硬编码简体中文（见开头语言说明）。
-
-可经 patch 行 `config:` 调整的 tunables——在 profile 的 `cordis.patch.yml` 里写一条 id 覆盖行（`- id: plugin-admin` 块内补 `config: { ... }`，loader 的 patch 语义会整段替换该行的 config，组合行本身仍在 bundle 层）即可；`Config` 与 `apply()` 共用同一份解析，不存在两套默认值；全部要求正数（时间预算单位为毫秒）：`pnpmTimeoutMs` 300000、`updateCheckTimeoutMs` 8000、`updateCheckConcurrency` 4、`updateCheckCacheTtlMs` 300000、`gitTimeoutMs` 5000、`gitStatsCacheTtlMs` 3000、`gitDiffMaxChars` 524288、`sessionSummaryCacheTtlMs` 60000、`sessionListConcurrency` 4、`sessionEventScanCap` 20000、`sessionSearchLimit` 30、`sessionExportEventCap` 200000。
-
----
-
-## 信任边界说明
-
-该插件允许浏览器端触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥（`@deepseek-ai/dsh-hooks-claude-code`）的一键安装与挂载（桥会在宿主本地执行钩子命令）以及会话日志物理删除，与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。提示词命令只是把文本 steer 进会话（与手打消息同级）；本插件管理 hooks 配置文件、不改变桥自身的信任级别——能改配置的人本来就能在宿主上执行命令。暴露到非本机前请务必评估权限范围。
+浏览器端可触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。暴露到非本机前请务必评估权限范围。
