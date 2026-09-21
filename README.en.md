@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — nine standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** and **workspace** management panels injected into dsh's own **已归档会话 (Archived Sessions)** page instead of occupying two more sidebar rows. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — nine standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** panel injected into dsh's own **已归档会话 (Archived Sessions)** page (collapsible directories + bulk delete) instead of occupying another sidebar row. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
@@ -12,7 +12,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 | Panel | Focus |
 |---|---|
 | 🔌 Extensions | install / uninstall / update / disable-enable profile plugins (pnpm orchestration + bundles sync), Loader runtime snapshot |
-| 🗂️ Archived Sessions | **dsh's own page**; the plugin injects its session-history + workspace panels into it (below) |
+| 🗂️ Archived Sessions | **dsh's own page**; the plugin injects its session-history panel into it (collapsible directories + bulk delete, below) |
 | 📚 Skills | full skill roster (global layer + per-session scope merge), strictly read-only |
 | 🔌 MCP Servers | row-level CRUD + real handshake probes + try-call console |
 | 🛰️ Subagents | managed subagent rows CRUD + running monitor / follow-up + CLI backends |
@@ -38,13 +38,17 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 7. Loader snapshot: the read-only sub-panel at the bottom — expand for per-entry fiber phase and Agent presets.
 
 ### 🗂️ Archived Sessions (dsh's own page + plugin injection)
-**已归档会话** is dsh's OWN settings page (the archived-session list with per-row unarchive). The plugin no longer registers 历史会话 / 工作区 rows of its own — it injects both panels **into that page**: the official archived list, then the plugin's session-history panel and workspace panel below it.
+**已归档会话** is dsh's OWN settings page (the archived-session list with per-row unarchive). The plugin no longer registers a 历史会话 row of its own — it injects that panel **into this page**: the official archived list, then the plugin's session-history panel below it. (The workspace panel is no longer injected — removed in v1.19.0.)
 
 1. Open: Settings → 已归档会话.
 2. Official area (top): archived sessions (title · owning workspace · time), a search box filtering by title/workspace, one **Unarchive** per row.
-3. Plugin area · session history: the search box matches title/summary/cwd/session ID at once; status pills All / Online / Archived / Ended; the card's **📌 Pin** (localStorage-persisted); **Delete** with a double confirm (an online session shows **Close & delete** — dispose first, then remove the log, no restart); **⬇ Export** downloads a Markdown transcript; **🩺 Health** folds tool call/failure/retry reports; **Full-text search** queries every session's content (one-click enable when the deployment ships it off → restart dsh).
-4. Plugin area · workspaces: **➕ New workspace** (native directory picker or a typed absolute path, optional title); inline **✎** rename, **⬆/⬇** reorder, **🔎 Check status** (surfaces `missing-dir`); **🗑 Delete** with a double confirm (registry only — the directory and its sessions stay); **📦 Unarchive all (N)** when the archive set is non-empty.
-5. How it merges: a MutationObserver detects whether that official section is the active one, then mounts the two panels into the section's own scroll container — the same container the shell mounts plugin sections into, so scoped CSS and internal scrolling are unchanged. Switching away or closing the dialog unmounts them.
+3. Plugin area · session history: the search box matches title/summary/cwd/session ID at once; status pills All / Online / Archived / Ended / Pinned; the card's **📌 Pin** (localStorage-persisted); **Delete** with a double confirm (an online session shows **Close & delete** — dispose first, then remove the log, no restart); **⬇ Export** downloads a Markdown transcript; **🩺 Health** folds tool call/failure/retry reports; **Full-text search** queries every session's content (one-click enable when the deployment ships it off → restart dsh).
+4. **Collapsible directories**: sessions group by working directory, and each directory header is a clickable row — click it to fold/unfold that directory's sessions (caret ▾/▸ plus a 已折叠 note); the folded set persists in localStorage across reloads. The filter bar's tail carries **▴ Collapse all / ▾ Expand all**.
+5. **Bulk delete** (no more one-by-one):
+   - The filter bar's **🗑 Delete current (N)** — deletes **all** N sessions the current filter/search shows;
+   - Each directory header's **🗑 Delete directory** — deletes every session under that directory;
+   - Both raise a confirm bar first ("Delete the N sessions in the current filter? / in directory X?") and only run on **Confirm**; progress shows "Deleting x / N…". Online sessions are closed first (closeSession) before their log goes, the rest delete directly (deleteSession); one failure never blocks the rest, and the run ends with a failure count.
+6. How it merges: a MutationObserver detects whether that official section is the active one, then mounts the panel into the section's own scroll container — the same container the shell mounts plugin sections into, so scoped CSS and internal scrolling are unchanged. Switching away or closing the dialog unmounts it.
 
 ### 📚 Skills
 1. Open: Settings → Skills.
