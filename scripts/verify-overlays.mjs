@@ -114,6 +114,23 @@ check('entryOpenAt and entryDisabled read scalars at the key indent only', () =>
   assert.equal(entryDisabled(['- id: r', '  config:', '    path: a']), undefined)
 })
 
+check('entryDisabled ignores NESTED disabled keys (toggle misjudgment regression)', () => {
+  // A hand-edited row whose config block carries its own `disabled:` key must
+  // not read as the entry's own disable flag — the enable/disable toggle used
+  // to treat such a row as already disabled and skip it.
+  assert.equal(entryDisabled(['- id: r', '  config:', '    disabled: true']), undefined,
+    'nested disabled under a +2 key indent is not the entry flag')
+  assert.equal(entryDisabled(['- id: r', '  config:', '    disabled: true', '  enabled: true']), undefined,
+    'still none when the nested key comes first in reading order')
+  // Canonical +2 shape still reads.
+  assert.equal(entryDisabled(['- id: r', '  disabled: true']), true)
+  // Hand-edited +4 key indent reads too (first own-key indent fixes the level).
+  assert.equal(entryDisabled(['- id: r', '    name: x', '    disabled: true']), true)
+  // Insert shape (entry at +4, keys at +6, nested payload at +8).
+  assert.equal(entryDisabled(['    - id: r', '      name: x', '      config:', '        disabled: true', '      disabled: false']), false,
+    'insert-shape entry flag wins over the deeper nested one')
+})
+
 check('canonical block builders match the official overlay shapes', () => {
   assert.deepEqual(buildSearchOverrideBlockLines('C:/x/sessions-search-index.sqlite'), [
     '- id: session-query-sqlite',

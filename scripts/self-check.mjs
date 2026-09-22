@@ -298,7 +298,7 @@ const ctx = {
         }
         if (method === 'sessionAdmin/usageReport') {
           const now = Date.now()
-          return { ok: true, value: { generatedAt: now, rows: [
+          return { ok: true, value: { generatedAt: now, retained: 2, storagePath: 'C:/Users/demo/.dsh/usage-ledger.json', snapshotIntervalMs: 3_600_000, lastSnapshotAt: now - 60_000, rows: [
             { createdAt: now - 2 * 86400000, project: 'alpha-project', input: 20000, output: 1000, cacheRead: 100, userMsgs: 4, assistantMsgs: 6 },
             { createdAt: now - 8 * 3600000, project: 'alpha-project', input: 1500, output: 1100, cacheRead: 4000, userMsgs: 2, assistantMsgs: 3 },
             { createdAt: now - 3 * 3600000, project: 'beta-project', input: 800, output: 2200, cacheRead: 0, userMsgs: 1, assistantMsgs: 2 },
@@ -424,25 +424,25 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Nine slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// Ten slot contributions: the 扩展插件 tab inside the shell-owned 插件
 // section, the standalone 技能 / Web 搜索 / MCP服务器 / 子智能体 /
-// 命令与钩子 / 用量仪表盘 / Webhook 触发 settings sections, and the
-// 待办清单 dock above the composer. Neither the Codex bridge (a banner inside
-// the 命令与钩子 钩子 tab) nor the Agent preset editor (the shell's own
+// 命令与钩子 / 用量仪表盘 / 定时任务 / Webhook 触发 settings sections, and
+// the 待办清单 dock above the composer. Neither the Codex bridge (a banner
+// inside the 命令与钩子 钩子 tab) nor the Agent preset editor (the shell's own
 // ui-agent-preset section owns that roster) gets a section of its own — and
 // 工作区 / 历史会话 are DOM-merged into dsh's own 已归档会话 page instead of
 // registering nav rows of their own.
-assert.equal(injectedSections.length, 9, 'nine slot contributions injected')
+assert.equal(injectedSections.length, 10, 'ten slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×7), settings.plugins.tab, and conversation.input.dock',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×8), settings.plugins.tab, and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 9, 'nine registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + webhook triggers + todo dock')
+assert.equal(registeredSections.length, 10, 'ten registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + cron tasks + webhook triggers + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'] && byId['cron-tasks'], 'expected registration ids present')
 assert.equal(byId['session-history'], undefined, '历史会话 no longer registers a settings section of its own')
 assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
 
@@ -501,6 +501,12 @@ assert.equal(usageSection.options.order, 28, 'usage dashboard sorts after 命令
 assert.equal(usageSection.options.label, '用量仪表盘', 'usage dashboard label')
 assert.equal(typeof usageSection.options.inject().call, 'function', 'usage dashboard inject face carries the RPC call')
 
+const cronSection = byId['cron-tasks']
+assert.equal(cronSection.options.name, 'settings.section', 'cron tasks is a standalone settings page')
+assert.equal(cronSection.options.order, 29, '定时任务 sorts between 用量仪表盘 (28) and Webhook 触发 (30)')
+assert.equal(cronSection.options.label, '定时任务', 'cron tasks section label')
+assert.equal(typeof cronSection.options.inject().call, 'function', 'cron tasks inject face carries the RPC call')
+
 // 4. Style injection: the section stylesheets land in <head>.
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]'),
@@ -521,13 +527,29 @@ assert.ok(
 // The command-hook section must keep the unified visual recipes (segmented
 // tabs, blue primary buttons, notice tints) — a regression here would drift
 // it back to the standalone plugin's private look (underline tabs, dark primary).
+// Since the scope unification those recipes live ONCE, re-rooted onto every
+// scope that had a drifting copy; the command-hook sheet keeps only what is
+// unique to it. Assert BOTH halves: the shared rule reaches the CH root, and
+// no component is defined in two sheets at once (the drift invariant).
+const sheets = [...document.querySelectorAll('style[data-plugin-css], style[data-dsh-sa-styles]')]
+const cssAll = sheets.map((s) => s.textContent).join('\n')
 const chCss = document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]').textContent
-assert.ok(chCss.includes('.tab.active'), 'CH tabs use the segmented tab recipe')
+assert.ok(cssAll.includes('[data-cha-section] .tab.active'), 'CH tabs use the unified segmented tab recipe (re-rooted)')
 assert.ok(
-  chCss.includes('.btn.primary') && chCss.includes('--dsw-static-blue-500'),
+  cssAll.includes('[data-cha-section] .btn.primary') && cssAll.includes('--dsw-static-blue-600'),
   'CH buttons use the unified blue primary',
 )
-assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH banners/badges use the unified notice/tag recipes')
+assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH banners/badges keep their own unique recipes')
+// Anti-drift invariant: one definition per shared component, in ONE sheet. A
+// second copy is a definition waiting to diverge again. The pattern anchors the
+// selector (`[scope] .btn` immediately followed by `{` or `,`) so a nested
+// selector like `.cli-scan-card .btn {` is not mistaken for a definition.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+for (const shared of ['.btn', '.tag', '.input', '.list', '.empty', '.toolbar', '.card', '.card-sub', '.tabs', '.tab', '.form', '.field', '.btn.primary', '.btn.sm']) {
+  const re = new RegExp(`\\[data-[a-z-]+\\] ${escapeRe(shared)}\\s*(?=\\{|,)`, 'g')
+  const owners = sheets.filter((s) => (s.textContent.match(re) ?? []).length > 0)
+  assert.equal(owners.length, 1, `${shared} is defined in exactly one stylesheet (found ${owners.length})`)
+}
 
 // Mount helper: render one registered section into a fresh host div. Text
 // assertions run against document.body, so exactly one panel stays mounted
@@ -1119,7 +1141,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length + 1, 'every plugin settings section plus the official 已归档会话 row got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 7, `seven settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
+assert.ok(pluginSectionLabels.length === 8, `eight settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
 assert.equal(archivedNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), '已归档会话', 'the official archived-sessions row carries the clock icon')
@@ -1201,17 +1223,17 @@ fallbackDialog.appendChild(document.createElement('div'))
 document.body.appendChild(fallbackDialog)
 await new Promise((resolve) => setTimeout(resolve, 120))
 
-assert.equal(injectedSections.length, 11, 'the fallback injects the two retired sections')
-const fallbackInjections = injectedSections.slice(9)
+assert.equal(injectedSections.length, 12, 'the fallback injects the two retired sections')
+const fallbackInjections = injectedSections.slice(10)
 assert.deepEqual(fallbackInjections.map((i) => i.key), ['settings.section', 'settings.section'], 'fallback waits on settings.section')
 fallbackInjections.forEach((i) => i.callback())
-const fallbackIds = registeredSections.slice(9).map((e) => e.options.id).sort()
+const fallbackIds = registeredSections.slice(10).map((e) => e.options.id).sort()
 assert.deepEqual(fallbackIds, ['session-history', 'workspaces'], 'fallback registers 历史会话 + 工作区')
 assert.ok(registeredSections.some((e) => e.options.id === 'session-history' && e.options.order === 100), 'fallback 历史会话 keeps order 100')
 assert.ok(registeredSections.some((e) => e.options.id === 'workspaces' && e.options.order === 22), 'fallback 工作区 keeps order 22')
 // One-shot: further dialog churn never re-registers the same ids.
 await new Promise((resolve) => setTimeout(resolve, 80))
-assert.equal(injectedSections.length, 11, 'the fallback fires once')
+assert.equal(injectedSections.length, 12, 'the fallback fires once')
 document.body.removeChild(fallbackDialog)
 
 // 12. MCP editor: edit an existing server, fill it via the React onChange
@@ -1492,6 +1514,32 @@ assert.ok(text.includes('会话数') && text.includes('活跃天数'), 'KPI sess
 assert.ok(text.includes('🕒 分时活跃'), 'hour-of-week heatmap panel rendered')
 assert.ok(text.includes('alpha-project'), 'project filter carries project names')
 assert.ok(host.querySelectorAll('.heat-row').length === 7, 'seven weekday rows in the heatmap')
+// ONE state chip (the sweep cadence). The deleted-session badge was removed
+// from this row on request — the rows are still retained in the ledger, they
+// just no longer need a badge here.
+const usageHead = host.querySelector('.usage-head')
+assert.ok(usageHead !== null, 'the dashboard head renders as a chip row')
+assert.equal(usageHead.querySelectorAll('.usage-chip').length, 1, 'exactly one state chip remains')
+assert.ok(!host.textContent.includes('已删除会话'), 'the deleted-session badge is gone from the head')
+const sweepChip = usageHead.querySelector('.usage-chip.on')
+assert.ok(sweepChip !== null, 'the sweep chip renders in its ON state when the host reports an interval')
+assert.ok(sweepChip.textContent.includes('60 分钟'), 'the chip carries the cadence instead of hiding it in a tooltip')
+assert.equal(usageHead.querySelectorAll('.usage-chip.off').length, 0, 'the OFF state does not render alongside it')
+// The filter label and its box are ONE control: the label is a prefix segment
+// inside the same bordered wrapper, so a narrow dialog can never orphan it.
+const filter = host.querySelector('.usage-filter')
+assert.ok(filter !== null, 'the filter renders as a grouped control')
+assert.ok(filter.querySelector('.usage-filter-label') !== null, 'the label is inside the filter group')
+assert.equal(filter.querySelector('.usage-filter-label').textContent, '筛选', 'the label reads 筛选')
+assert.equal(filter.querySelectorAll('select').length, 1, 'the select lives inside the same group')
+assert.equal(filter.querySelector('select').options[0].text, '全部项目', 'the placeholder names the dimension once, not on every option')
+assert.ok([...filter.querySelectorAll('option')].every((o) => !o.text.includes('：')), 'no option repeats the dimension prefix')
+assert.equal(filter.querySelector('select').getAttribute('title'), '全部项目', 'the select title carries the full current value')
+assert.equal(filter.querySelector('select').getAttribute('aria-label'), '按项目筛选', 'the select is labelled for assistive tech')
+// Range state is not colour-only.
+const pressed = [...host.querySelectorAll('.usage-toolbar .pill')].filter((b) => b.getAttribute('aria-pressed') === 'true')
+assert.equal(pressed.length, 1, 'exactly one range pill is pressed')
+assert.equal(pressed[0].textContent, '30D', 'the pressed pill is the default 30D window')
 await act(async () => {
   const pill7d = [...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
   pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1567,9 +1615,10 @@ await act(async () => { webSearchRoot.unmount() })
 host.remove()
 
 // 15z-skills-roster. The 技能 page renders the WHOLE roster from
-// skillsAdmin/list (the host merges the global layer with one read per
-// session scope) and filters it locally — the previous revision could only
-// ever show ONE session's user-invocable subset.
+// skillsAdmin/list (the host merges the global layer with one read per agent
+// preset standing scope and one per session scope) and filters it locally —
+// the previous revision could only ever show ONE session's user-invocable
+// subset.
 const skillsRoot = await mountSection(byId['skills-admin'])
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = host.textContent
@@ -1752,4 +1801,4 @@ ctx.sessionListFail = undefined
 await act(async () => { commandHookRoot.unmount() })
 host.remove()
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + filters, web-search provider config editor')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes')

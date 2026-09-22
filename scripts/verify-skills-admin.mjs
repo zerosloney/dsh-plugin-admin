@@ -20,13 +20,27 @@
  *  8. The session cap is enforced with a warning.
  *  9. One skill seen from several scopes stays ONE entry: scope labels merge,
  *     missing description / path fill in, the two invocation flags OR together.
+ * 10. Every agent preset's STANDING scope is read with no session at all (the
+ *     web deployment shape: host-plane skill-filesystem disabled, local
+ *     discovery preset-owned), default preset first, one read per preset.
+ * 11. An unusable preset (broken composition, throwing standing mount) is
+ *     reported per scope, never mounted, never sinks the roster; the preset cap
+ *     is enforced with a warning.
  *
  * Client half (lib/client.js 技能 page):
- * 10. Missing registry → the quiet "本部署未挂载 @deepseek-ai/dsh-skill" hint.
- * 11. The roster renders every skill with its badges, source label, path and
- *     scope list; the text / source / scope filters narrow it locally.
- * 12. An unresolved session scope is surfaced outside the collapsible panel.
- * 13. A failed host read surfaces inline; the copy gesture writes /<name>.
+ * 12. Missing registry → the quiet "本部署未挂载 @deepseek-ai/dsh-skill" hint.
+ * 13. The roster renders every skill with its badges, source label, path and
+ *     scope list INSIDE one scroll container (the section is overflow:hidden),
+ *     behind a refresh + text-filter toolbar (no source/scope dropdowns);
+ *     preset scopes are counted separately from session scopes and listed in
+ *     the coverage panel.
+ * 14. An unavailable — or rejected — session list degrades to the global layer
+ *     with a note, and an unresolved session scope is surfaced outside the
+ *     collapsible panel.
+ * 15. A failed host read surfaces inline.
+ * 16. The copy gesture writes /<name>.
+ * 17. An empty roster names every layer's contribution, including the
+ *     by-design-empty global layer of a web deployment.
  *
  * Run: node scripts/verify-skills-admin.mjs
  */
@@ -132,7 +146,7 @@ function observationFor(cwd, preset, disposals = []) {
 
 await checkAsync('1. a deployment without ctx.skills degrades instead of throwing', async () => {
   const { service } = mountHost({})
-  assert.deepEqual(await service.list({}), {
+  assert.deepEqual(await service.list(), {
     available: false,
     registry: false,
     complete: false,
@@ -158,7 +172,7 @@ await checkAsync('2. the global read projects leaf fields, drops malformed rows,
     ],
   }), calls)
   const { service } = mountHost({ skills: registry })
-  const view = await service.list({})
+  const view = await service.list()
   assert.deepEqual(calls, [{}], 'the global read passes no cwd and no scope')
   assert.equal(view.available, true)
   assert.equal(view.complete, true)
@@ -214,7 +228,7 @@ await checkAsync('3. session scopes resolve through observeSession + the preset 
       serviceFor: (agent, key) => (agent === liveAgent && key === 'skills' ? presetRegistry : undefined),
     },
   })
-  const view = await service.list({ sessionIds: ['live-1', 'cold-1', 'cold-2', 'no-cwd'] })
+  const view = await service.list(['live-1', 'cold-1', 'cold-2', 'no-cwd'])
   assert.deepEqual(hostCalls, [
     {},
     { cwd: '/w/cold', scope: { standing: 'build' } },
@@ -250,7 +264,7 @@ await checkAsync('3b. a preset that no longer resolves is REPORTED, never silent
       standingKeyFor: async () => { throw new Error('agent-preset/not-found') },
     },
   })
-  const view = await service.list({ sessionIds: ['s-gone'] })
+  const view = await service.list(['s-gone'])
   assert.deepEqual(hostCalls, [{}], 'the cwd-only fallback read is NOT issued for a broken preset')
   const scope = view.scopes.find((s) => s.kind === 'session')
   assert.ok(scope.error.includes('deleted-preset'), 'the broken preset is named in the scope failure')
@@ -275,7 +289,7 @@ await checkAsync('4. a cold session scopes by the preset standing key against th
     agents: { get: () => undefined },
     agentPresets: { standingKeyFor: async (preset) => ({ standing: preset }) },
   })
-  const view = await service.list({ sessionIds: ['cold-1'] })
+  const view = await service.list(['cold-1'])
   assert.deepEqual(hostCalls, [{}, { cwd: '/w/cold', scope: { standing: 'build' } }], 'the scoped read carries cwd + the standing scope key')
   assert.deepEqual(view.skills.map((s) => s.name), ['cold-skill', 'global-skill'])
   const cold = view.skills.find((s) => s.name === 'cold-skill')
@@ -296,7 +310,7 @@ await checkAsync('5. a throwing scope read is reported per scope and the roster 
     agents: { get: () => undefined },
     agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
   })
-  const view = await service.list({ sessionIds: ['s-broken'] })
+  const view = await service.list(['s-broken'])
   assert.deepEqual(view.skills.map((s) => s.name), ['global-skill'], 'a failed scope does not sink the roster')
   const scope = view.scopes.find((s) => s.kind === 'session')
   assert.equal(scope.error, 'provider blew up')
@@ -313,7 +327,7 @@ await checkAsync('6. complete:false propagates and the session cap warns', async
     agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
   })
   const many = Array.from({ length: 40 }, (_, index) => 'sess-' + String(index))
-  const view = await service.list({ sessionIds: many })
+  const view = await service.list(many)
   assert.equal(view.complete, false, 'an incomplete observation is surfaced, never silently completed')
   assert.ok(view.warnings.includes('仅解析前 32 个会话（共 40 个）'), 'the session cap is reported')
   assert.equal(view.sessions.length, 32, 'only the cap is resolved')
@@ -336,7 +350,7 @@ await checkAsync('7. one name seen from several scopes merges into ONE entry', a
     agents: { get: () => undefined },
     agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
   })
-  const view = await service.list({ sessionIds: ['s1'] })
+  const view = await service.list(['s1'])
   assert.equal(view.skills.length, 1, 'the same name stays one card')
   const shared = view.skills[0]
   assert.deepEqual(shared.scopes, ['全局', '/w/x @ build'])
@@ -345,6 +359,84 @@ await checkAsync('7. one name seen from several scopes merges into ONE entry', a
   assert.equal(shared.path, '/w/x/.agents/skills/shared')
   assert.equal(shared.modelInvocable, true, 'the invocation flags OR together')
   assert.equal(shared.userInvocable, true)
+})
+
+await checkAsync('8. every agent preset standing scope is read, default first, with NO session at all', async () => {
+  // The web deployment shape: host-plane skill-filesystem disabled, so the
+  // global layer is empty and the user directories only exist behind presets.
+  const calls = []
+  const registry = registryStub((options) => ({
+    complete: true,
+    skills: options.scope === undefined
+      ? []
+      : [{ name: 'user-dir-skill', description: 'user dirs', source: 'user-agents', provider: 'filesystem', invocation: { modelInvocable: true, userInvocable: true }, resourceBase: { kind: 'directory', path: '/home/.agents/skills/user-dir-skill' } }],
+  }), calls)
+  const { service } = mountHost({
+    skills: registry,
+    agentPresets: {
+      list: async () => [
+        { id: 'standard', name: '标准模式' },
+        { id: 'cordis', name: '创造模式' },
+        { id: 'minimal', name: '极简模式' },
+      ],
+      selectionPolicy: () => ({ enabled: true, defaultId: 'cordis' }),
+      standingKeyFor: async (id) => ({ standing: id }),
+    },
+  })
+  const view = await service.list()
+  assert.deepEqual(calls, [
+    {},
+    { scope: { standing: 'cordis' } },
+    { scope: { standing: 'standard' } },
+    { scope: { standing: 'minimal' } },
+  ], 'the global read, then one standing-scope read per preset with the default first')
+  assert.ok(view.skills.some((s) => s.name === 'user-dir-skill'), 'the user directories surface without a single session')
+  assert.equal(view.skills.length, 1, 'one name seen from several preset scopes stays ONE entry')
+  const shared = view.skills[0]
+  assert.deepEqual(shared.scopes, ['预设 创造模式（默认）', '预设 标准模式', '预设 极简模式'], 'every preset that exposes the skill is named on the card')
+  assert.deepEqual(view.scopes.filter((s) => s.kind === 'preset').map((s) => s.label), ['预设 创造模式（默认）', '预设 标准模式', '预设 极简模式'])
+  assert.deepEqual(view.scopes.filter((s) => s.kind === 'preset').map((s) => s.preset), ['cordis', 'standard', 'minimal'])
+  assert.equal(shared.path, '/home/.agents/skills/user-dir-skill')
+})
+
+await checkAsync('8b. an unusable preset is REPORTED, the roster survives, and the preset cap warns', async () => {
+  const calls = []
+  const registry = registryStub(() => ({ complete: true, skills: [
+    { name: 'from-preset', description: 'p', source: 'user-agents', provider: 'f', invocation: { modelInvocable: true, userInvocable: true } },
+  ] }), calls)
+  const { service } = mountHost({
+    skills: registry,
+    agentPresets: {
+      list: async () => [
+        { id: 'ok', name: '好的预设' },
+        { id: 'unreadable', broken: 'the composition file is missing' },
+        { id: 'vanished' },
+      ],
+      standingKeyFor: async (id) => {
+        if (id === 'vanished') throw new Error('agent-preset/not-found')
+        return { standing: id }
+      },
+    },
+  })
+  const view = await service.list()
+  const scopes = view.scopes.filter((s) => s.kind === 'preset')
+  assert.deepEqual(scopes.map((s) => s.error === null), [true, false, false], 'only the readable preset answers without an error')
+  assert.ok(scopes[1].error.includes('the composition file is missing'), 'the broken composition reason is carried')
+  assert.ok(scopes[1].error.includes('unreadable'), 'the broken preset is named')
+  assert.ok(scopes[2].error.includes('agent-preset/not-found'), 'a preset whose standing mount throws is reported too')
+  assert.equal(scopes[2].label, '预设 vanished', 'a preset without a display name falls back to its id')
+  assert.deepEqual(view.skills.map((s) => s.name), ['from-preset'], 'one unusable preset never sinks the roster')
+  assert.ok(!calls.some((options) => options.scope?.standing === 'unreadable'), 'the unreadable preset is never mounted')
+
+  // Cap: the panel reads at most MAX_PRESETS presets and says so.
+  const manyPresets = Array.from({ length: 11 }, (_, index) => ({ id: 'p' + String(index), name: '预设' + String(index) }))
+  const capped = mountHost({
+    skills: registryStub(() => ({ complete: true, skills: [] })),
+    agentPresets: { list: async () => manyPresets, standingKeyFor: async (id) => ({ standing: id }) },
+  })
+  const cappedView = await capped.service.list()
+  assert.equal(cappedView.scopes.filter((s) => s.kind === 'preset').length, 8, 'only the cap is read')
+  assert.ok(cappedView.warnings.includes('仅读取前 8 个预设（共 11 个）'), 'the preset cap is reported')
 })
 
 /* ============================= Client half ============================= */
@@ -380,11 +472,12 @@ const call = async (method, args) => {
       complete: true,
       skills: [
         { name: 'alpha-only', description: '只在这个工作区可见', whenToUse: '改 alpha 的时候', source: 'project-agents', sources: ['project-agents'], provider: 'filesystem', path: '/proj/.agents/skills/alpha-only/SKILL.md', url: null, resource: 'directory', modelInvocable: true, userInvocable: true, scopes: ['alpha @ build', '全局'] },
-        { name: 'global-skill', description: '插件内置技能', whenToUse: null, source: 'bundled', sources: ['bundled'], provider: 'runtime', path: null, url: null, resource: 'opaque', modelInvocable: true, userInvocable: false, scopes: ['全局'] },
-        { name: 'human-only', description: '仅人类可调用', whenToUse: null, source: 'user-agents', sources: ['user-agents'], provider: 'filesystem', path: '/home/.agents/skills/human-only/SKILL.md', url: null, resource: 'directory', modelInvocable: false, userInvocable: true, scopes: ['alpha @ build'] },
+        { name: 'global-skill', description: '插件内置技能', whenToUse: null, source: 'bundled', sources: ['bundled'], provider: 'runtime', path: null, url: null, resource: 'opaque', modelInvocable: true, userInvocable: false, scopes: ['预设 创造模式（默认）', '全局'] },
+        { name: 'human-only', description: '仅人类可调用', whenToUse: null, source: 'user-agents', sources: ['user-agents'], provider: 'filesystem', path: '/home/.agents/skills/human-only/SKILL.md', url: null, resource: 'directory', modelInvocable: false, userInvocable: true, scopes: ['预设 创造模式（默认）'] },
       ],
       scopes: [
         { label: '全局', short: '全局', kind: 'global', cwd: null, preset: null, sessionIds: [], count: 2, error: null },
+        { label: '预设 创造模式（默认）', short: '预设 创造模式（默认）', kind: 'preset', cwd: null, preset: 'cordis', sessionIds: [], count: 3, error: null },
         { label: 'alpha @ build', short: 'alpha @ build', kind: 'session', cwd: 'E:/Demo/alpha', preset: 'build', sessionIds: ['s-alpha', 's-beta'], count: 2, error: null },
       ],
       sessions: [
@@ -430,7 +523,7 @@ const fiberHandler = async (node, handlerName, event) => {
   await act(async () => { fiber.memoizedProps[handlerName](event) })
 }
 
-await checkAsync('8. a deployment without the registry renders the quiet unavailable hint', async () => {
+await checkAsync('12. a deployment without the registry renders the quiet unavailable hint', async () => {
   rosterMode = 'unavailable'
   const host = document.body.appendChild(document.createElement('div'))
   const mounted = await mountPanel(host)
@@ -442,7 +535,7 @@ await checkAsync('8. a deployment without the registry renders the quiet unavail
   rosterMode = 'roster'
 })
 
-await checkAsync('9. the roster renders every skill, its origin, path and badges', async () => {
+await checkAsync('13. the roster renders every skill, its origin, path and badges', async () => {
   const host = document.body.appendChild(document.createElement('div'))
   const mounted = await mountPanel(host)
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
@@ -454,10 +547,23 @@ await checkAsync('9. the roster renders every skill, its origin, path and badges
   assert.ok(text.includes('项目 .agents') && text.includes('插件内置') && text.includes('用户 .agents'), 'each source renders its friendly label')
   assert.ok(text.includes('/proj/.agents/skills/alpha-only/SKILL.md'), 'the SKILL.md path renders')
   assert.ok(text.includes('可见于：'), 'the per-skill scope list renders')
-  assert.ok(text.includes('共 3 个技能（全局 + 1 个会话作用域）'), 'the roster summary counts the scopes')
+  assert.ok(text.includes('共 3 个技能（全局 + 1 个预设 + 1 个会话作用域）'), 'the roster summary counts both scope kinds')
   assert.ok(text.includes('会话 s-beta 的作用域未能解析：会话没有项目 cwd'), 'an unresolved session scope is surfaced outside the collapsed panel')
   const openButtons = [...host.querySelectorAll('button')].filter((b) => b.textContent?.includes('📂 打开目录'))
   assert.equal(openButtons.length, 2, 'only path-bearing skills offer the reveal action')
+
+  // The section is `overflow: hidden` and caps at the dialog height, so the
+  // cards must live in ONE scroll region — a bare list would be clipped.
+  const list = host.querySelector('.list')
+  assert.ok(list !== null, 'the cards render inside the scroll container')
+  assert.equal(list.querySelectorAll('.card').length, 3, 'every card is inside it')
+  assert.equal([...host.querySelectorAll('.card')].filter((c) => !list.contains(c)).length, 0, 'no card escapes the scroll container')
+
+  // The toolbar is refresh + text filter ONLY: the source / scope dropdowns
+  // were removed (they restated what every card already prints).
+  const toolbar = host.querySelector('.toolbar')
+  assert.equal(toolbar.querySelectorAll('select').length, 0, 'no filter dropdowns remain')
+  assert.equal(toolbar.querySelectorAll('button').length, 1, 'only the refresh button is left')
 
   // Text filter.
   const needle = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === '过滤技能')
@@ -467,36 +573,20 @@ await checkAsync('9. the roster renders every skill, its origin, path and badges
   assert.ok(!host.textContent.includes('/human-only'), 'a non-matching skill is filtered out')
   await fiberHandler(needle, 'onChange', { target: { value: '' } })
 
-  // Source filter (a select whose aria-label is 按来源过滤).
-  const sourceSelect = [...host.querySelectorAll('select')].find((s) => s.getAttribute('aria-label') === '按来源过滤')
-  assert.ok(sourceSelect !== undefined, 'the source filter renders')
-  await fiberHandler(sourceSelect, 'onChange', { target: { value: 'bundled' } })
-  assert.ok(host.textContent.includes('/global-skill'))
-  assert.ok(!host.textContent.includes('/alpha-only'), 'the source filter narrows the roster')
-  await fiberHandler(sourceSelect, 'onChange', { target: { value: 'all' } })
-
-  // Scope filter.
-  const scopeSelect = [...host.querySelectorAll('select')].find((s) => s.getAttribute('aria-label') === '按作用域过滤')
-  assert.ok(scopeSelect !== undefined, 'the scope filter renders')
-  const scopeValues = [...scopeSelect.querySelectorAll('option')].map((o) => o.value)
-  assert.ok(scopeValues.includes('全局') && scopeValues.some((v) => v.includes('@ build')), 'scope options come from the roster')
-  await fiberHandler(scopeSelect, 'onChange', { target: { value: '全局' } })
-  assert.ok(host.textContent.includes('/global-skill'))
-  assert.ok(!host.textContent.includes('/human-only'), 'the scope filter narrows the roster')
-  await fiberHandler(scopeSelect, 'onChange', { target: { value: 'all' } })
-
   // Scope coverage panel.
   const toggle = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('查看作用域明细'))
   assert.ok(toggle !== undefined, 'the scope toggle renders')
   await fiberHandler(toggle, 'onClick', {})
   assert.ok(host.textContent.includes('作用域覆盖') && host.textContent.includes('全局'), 'the scope panel lists coverage')
   assert.ok(host.textContent.includes('2 个会话'), 'a scope reports how many sessions it covers')
+  assert.ok(host.textContent.includes('预设 创造模式（默认）'), 'a preset scope is listed beside the session scopes')
+  assert.ok(host.textContent.includes('3 个技能'), 'the preset scope reports its own skill count')
 
   await act(async () => { mounted.root.unmount() })
   host.remove()
 })
 
-await checkAsync('10. an unavailable session list degrades to the global layer with a note', async () => {
+await checkAsync('14. an unavailable session list degrades to the global layer with a note', async () => {
   sessionListFails = true
   const host = document.body.appendChild(document.createElement('div'))
   const mounted = await mountPanel(host)
@@ -508,7 +598,7 @@ await checkAsync('10. an unavailable session list degrades to the global layer w
   sessionListFails = false
 })
 
-await checkAsync('10b. a REJECTED session list also degrades instead of failing the page', async () => {
+await checkAsync('14b. a REJECTED session list also degrades instead of failing the page', async () => {
   // The session list is only an enrichment: a transport rejection must behave
   // exactly like a returned {ok:false} — global roster plus a note, never the
   // page-level error state.
@@ -524,7 +614,7 @@ await checkAsync('10b. a REJECTED session list also degrades instead of failing 
   sessionListFails = false
 })
 
-await checkAsync('11. a failed roster read surfaces inline instead of a blank page', async () => {
+await checkAsync('15. a failed roster read surfaces inline instead of a blank page', async () => {
   const failing = async (method, args) => {
     if (method === 'sessionAdmin/list') return { ok: true, value: { sessions: [], profileDir: '' } }
     if (method === 'skillsAdmin/list') return { ok: false, error: 'registry is absent' }
@@ -555,7 +645,7 @@ await checkAsync('11. a failed roster read surfaces inline instead of a blank pa
   host.remove()
 })
 
-await checkAsync('12. the copy gesture writes /<name> to the clipboard', async () => {
+await checkAsync('16. the copy gesture writes /<name> to the clipboard', async () => {
   class StubClipboard {
     constructor() { this.lastWrite = null }
     async writeText(text) { this.lastWrite = text }
@@ -575,6 +665,59 @@ await checkAsync('12. the copy gesture writes /<name> to the clipboard', async (
   assert.ok(['/alpha-only', '/global-skill', '/human-only'].includes(globalThis.window.navigator.clipboard.lastWrite), 'the slash name reaches the clipboard')
   assert.ok(host.textContent.includes('✓ 已复制'), 'the transient confirmation renders')
   await act(async () => { mounted.root.unmount() })
+  host.remove()
+})
+
+await checkAsync('17. an empty roster surfaces the cause (global count + scope failures + warnings)', async () => {
+  // Override the roster call for this test only: global layer returned nothing,
+  // one session scope failed, one warning was carried. The diagnose line must
+  // surface every one of those facts so the empty state is not a black hole.
+  const emptyCall = async (method, args) => {
+    if (method === 'sessionAdmin/list') {
+      return { ok: true, value: { sessions: [{ sessionId: 's-only', title: 'Only', archived: false }], profileDir: '' } }
+    }
+    if (method === 'skillsAdmin/list') return { ok: true, value: {
+      available: true,
+      registry: true,
+      complete: true,
+      skills: [],
+      scopes: [
+        { label: '全局', short: '全局', kind: 'global', cwd: null, preset: null, sessionIds: [], count: 0, error: null },
+        { label: '预设 创造模式（默认）', short: '预设 创造模式（默认）', kind: 'preset', cwd: null, preset: 'cordis', sessionIds: [], count: 0, error: '预设 "cordis" 的组合不可用：composition file is unreadable' },
+        { label: '/w/only @ build', short: 'only @ build', kind: 'session', cwd: 'E:/Demo/only', preset: 'build', sessionIds: ['s-only'], count: 0, error: 'preset "build" 无法解析：agent-preset/not-found' },
+      ],
+      sessions: [{ sessionId: 's-only', ok: true, cwd: 'E:/Demo/only', preset: 'build', message: '' }],
+      warnings: ['仅解析前 32 个会话（共 40 个）'],
+    } }
+    return { ok: false, error: 'unexpected ' + method }
+  }
+  const injected = []
+  const registered = []
+  const ctx = {
+    effect: () => () => {},
+    connection: { rpc: { call: (route, method, payload) => emptyCall(method, payload.args) } },
+    slots: {
+      inject: (key, cb) => injected.push({ key, cb }),
+      register: (options, component) => { registered.push({ options, component }); return () => {} },
+    },
+  }
+  bundle.apply(ctx)
+  injected.forEach((entry) => entry.cb())
+  const section = registered.find((r) => r.options.id === 'skills-admin')
+  const host = document.body.appendChild(document.createElement('div'))
+  const root = createRoot(host)
+  await act(async () => {
+    root.render(React.createElement(section.component, section.options.inject()))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  })
+  const text = host.textContent
+  assert.ok(text.includes('没有发现任何技能'), 'the original empty-roster text is preserved')
+  assert.ok(text.includes('诊断：'), 'the diagnose line renders alongside the empty state')
+  assert.ok(text.includes('全局层：0 个技能（本部署由预设挂载本地技能，全局层为空属正常）'), 'an empty global layer is explained when a preset layer carries the skills')
+  assert.ok(text.includes('预设作用域：1 个（1 个解析失败'), 'preset scope count + failed count are surfaced')
+  assert.ok(text.includes('会话作用域：1 个（1 个解析失败'), 'session scope count + failed count are surfaced')
+  assert.ok(text.includes('警告：1 条'), 'warning count is surfaced')
+  await act(async () => { root.unmount() })
   host.remove()
 })
 

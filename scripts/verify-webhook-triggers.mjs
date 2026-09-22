@@ -80,6 +80,20 @@ check('renderPromptTemplate substitutes $VARS and keeps unknown tokens', () => {
   assert.ok(def.startsWith('Webhook 触发：规则「r」事件「e」'), 'default template applied when empty')
 })
 
+check('renderPromptTemplate substitutes payload $ patterns VERBATIM', () => {
+  // String.replace treats `$&`, `` $` ``, `$'`, and `$n` inside a STRING
+  // replacement as special patterns — a webhook payload (or delivery id)
+  // carrying one used to re-expand against the template and corrupt the
+  // prompt. The function-form substitution must land them literally.
+  const payload = { snippet: "cost $& after $`X and $'Y and $1" }
+  const out = renderPromptTemplate('P:$PAYLOAD:R:$RULE', {
+    ruleId: 'r1', deliveryId: 'd-$&-1', event: 'e', payload,
+  })
+  assert.ok(out.includes("$& after $`X and $'Y and $1"), 'payload $ patterns survive verbatim')
+  assert.ok(out.includes('R:r1'), 'template vars still substituted')
+  assert.equal(out.includes('$PAYLOAD'), false, 'a payload $& must not re-expand to the matched token')
+})
+
 check('validateRuleEntry accepts well-formed steer and create rules', () => {
   const steer = validateRuleEntry({ id: 'ci-fail', enabled: true, secret: 'x'.repeat(16), event: 'push', action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: '$PAYLOAD' }, [])
   assert.deepEqual(steer.action, { mode: 'steer', sessionId: 'session-1', steer: true })
@@ -103,6 +117,8 @@ check('validateRuleEntry rejects malformed entries', () => {
   assert.throws(bad({ id: 'ok4', action: { mode: 'create', workspacePath: 'relative/path', agentPreset: 'p', permissionPreset: 'w' } }), /绝对路径/, 'create needs absolute path')
   assert.throws(bad({ id: 'ok5', action: { mode: 'create', workspacePath: WORKSPACE } }), /create 模式需要 agentPreset/, 'create needs preset')
   assert.throws(bad({ id: 'ok6', secret: 'x'.repeat(257), action: { mode: 'steer', sessionId: 's' } }), /secret 长度/, 'secret bound enforced')
+  assert.throws(bad({ id: 'a'.repeat(65), action: { mode: 'steer', sessionId: 's' } }), /无效/, 'id over 64 chars rejected')
+  assert.equal(validateRuleEntry({ id: 'a'.repeat(64), action: { mode: 'steer', sessionId: 's' } }, []).id, 'a'.repeat(64), 'id at the 64-char bound passes')
 })
 
 check('validateRuleEntry enforces the secret floor', () => {

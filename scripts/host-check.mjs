@@ -11,8 +11,17 @@
  *   the bug that emptied workspace accounting and dumped sessions into
  *   ungrouped)
  * - Asserts log-dir removal (via the derived JSONL layout under $DSH_HOME),
- *   the standard-layout fail-loud, archived-set cleanup, and the mount-time
- *   loud-fail probes for the registry and persistence seams
+ * the standard-layout fail-loud, archived-set cleanup, and the mount-time
+ * loud-fail probes for the registry and persistence seams
+ * - Drives the usage ledger end to end: usageReport() persists the live read,
+ * deleteSession() snapshots the row BEFORE the log goes, and the next report
+ * returns it flagged `deleted: true` with its tokens intact (a deleted
+ * session must not shrink the 用量仪表盘 totals). The background sweep is
+ * driven at a 30ms interval to prove it records with NO dashboard read, and
+ * the live event observer (`session/created` + `session/event` +
+ * `session/disposed`) is driven directly to prove a session that lives and
+ * dies inside one interval is still recorded — and that a read can never
+ * overwrite observer-owned numbers
  *
  * Run: node scripts/host-check.mjs
  */
@@ -28,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, resolvePluginConfig, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, resolvePluginConfig, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -138,15 +147,15 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
-// One unified descriptor per package: all thirteen namespaces ride a single
+// One unified descriptor per package: all fourteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
 assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all thirteen namespaces',
+  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all fourteen namespaces',
 )
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
@@ -504,6 +513,13 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
   assert.ok(Array.isArray(resolved.issues) === false, 'absent config resolves without issues')
   assert.equal(resolved.value.pnpmTimeoutMs, 300_000, 'schema default matches the mount fallback (pnpmTimeoutMs)')
   assert.equal(resolved.value.sessionExportEventCap, 200_000, 'schema default matches the mount fallback (sessionExportEventCap)')
+  assert.equal(resolved.value.usageSnapshotIntervalMs, 3_600_000, 'schema default matches the mount fallback (usageSnapshotIntervalMs)')
+  assert.equal(resolvePluginConfig({ usageSnapshotIntervalMs: 0 }).usageSnapshotIntervalMs, 0, 'zero is a legal sweep interval (it disables the sweep)')
+  const negativeSweep = Config['~standard'].validate({ usageSnapshotIntervalMs: -1 })
+  assert.ok(
+    Array.isArray(negativeSweep.issues) && /config\.usageSnapshotIntervalMs must be a non-negative/.test(negativeSweep.issues[0].message),
+    'a negative sweep interval reports an issue: ' + JSON.stringify(negativeSweep),
+  )
   assert.deepEqual(resolvePluginConfig({ commandsDir: 'x' }).commandsDir, 'x', 'unknown keys pass through the resolution')
   const bad = Config['~standard'].validate({ sessionSearchLimit: 1.5 })
   assert.ok(Array.isArray(bad.issues) && /config\.sessionSearchLimit must be an integer/.test(bad.issues[0].message), 'mistyped knob reports an issue: ' + JSON.stringify(bad))
@@ -1208,6 +1224,225 @@ apply(closeNonLiveCtx)
 await closeNonLiveCtx.provided.sessionAdmin.closeSession('session-close-nonlive')
 assert.ok(!existsSync(closeNonLiveDir), 'closeSession on a non-live session removes its artifacts')
 
+/* ---------------- usage ledger: deleting a session keeps its usage ----------------
+ * dsh's token accounting lives in the session log, so the 用量仪表盘 used to
+ * lose a session's tokens the moment its log was deleted. The ledger keeps one
+ * row per session ever seen: usageReport() writes the live read through it, the
+ * delete paths snapshot BEFORE the log goes, and a session missing from the
+ * live read comes back flagged `deleted: true` with its last known numbers.
+ */
+const usageHeader = { id: 'session-usage', cwd: 'E:/Demo/usage-project', createdAt: 1 }
+let usageHeaders = [{ header: usageHeader, revision: 'r-usage' }]
+const usageCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: () => undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    unarchiveSession: async () => {},
+  },
+  sessionPersistence: {
+    list: async () => usageHeaders,
+    stat: async (id) => (id === 'session-usage' ? { header: usageHeader, revision: 'r-usage', sizeBytes: null } : undefined),
+    open: async () => ({
+      read: async () => ({
+        eventState: 'shared-frozen',
+        events: [
+          { type: 'user/message', data: { content: [{ type: 'text', text: '折叠一下这个会话' }] } },
+          { type: 'assistant/message', data: { usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 200, cacheWriteTokens: 10 } } },
+        ],
+      }),
+      close: async () => {},
+    }),
+  },
+}
+apply(usageCtx)
+const ledgerPath = join(chaHome, 'usage-ledger.json')
+rmSync(ledgerPath, { force: true })
+
+const usageFirst = await usageCtx.provided.sessionAdmin.usageReport()
+assert.equal(usageFirst.rows.length, 1, 'the live session yields one dashboard row')
+assert.equal(usageFirst.rows[0].project, 'usage-project', 'the project falls back to the cwd basename')
+assert.equal(usageFirst.rows[0].input, 1000, 'the folded input tokens reach the dashboard')
+assert.equal(usageFirst.rows[0].cacheRead, 200, 'cache reads are accounted too')
+assert.equal(usageFirst.rows[0].deleted, false, 'a live row is not flagged deleted')
+assert.equal(usageFirst.retained, 0)
+assert.equal(usageFirst.storagePath, ledgerPath, 'the dashboard reports where the ledger lives')
+assert.ok(existsSync(ledgerPath), 'the first dashboard read persists the ledger')
+
+// The delete path snapshots BEFORE the log goes: with the log already gone
+// from persistence.list(), the ledger is the only reason the row survives.
+await usageCtx.provided.sessionAdmin.deleteSession('session-usage')
+usageHeaders = []
+const usageAfter = await usageCtx.provided.sessionAdmin.usageReport()
+assert.equal(usageAfter.rows.length, 1, 'the deleted session is still a row')
+assert.equal(usageAfter.rows[0].deleted, true, 'and is flagged deleted')
+assert.equal(usageAfter.rows[0].input, 1000, 'with its last known tokens intact')
+assert.equal(usageAfter.retained, 1, 'the retained count is reported to the panel')
+assert.equal(usageAfter.rows[0].lastSeenAt > 0, true, 'the retention stamp rides along')
+const storedLedger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+assert.equal(storedLedger.entries[0].id, 'session-usage', 'the on-disk ledger holds the retained row')
+assert.equal(storedLedger.entries[0].deleted, true, 'the on-disk row is flagged deleted')
+assert.equal(storedLedger.entries[0].output, 50, 'output tokens persist to disk')
+rmSync(ledgerPath, { force: true })
+
+/* ------------- usage ledger background sweep (no dashboard needed) -------------
+ * The dashboard read is opportunistic, so a session deleted before anyone
+ * opened the panel still lost its tokens. The sweep folds the whole session
+ * table into the ledger on a timer instead. The interval is a config knob, so
+ * the test drives it at 30ms rather than waiting an hour, and disposes this
+ * mount's effects so the timer stops with the test.
+ */
+const sweepHeader = { id: 'session-sweep', cwd: 'E:/Demo/sweep-project', createdAt: 1 }
+const sweepDisposers = []
+const sweepCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => {
+    const d = fn()
+    if (typeof d === 'function') { sweepDisposers.push(d); globalEffectDisposers.push(d) }
+    return d
+  },
+  get: () => undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    unarchiveSession: async () => {},
+  },
+  sessionPersistence: {
+    list: async () => [{ header: sweepHeader, revision: 'r-sweep' }],
+    stat: async (id) => (id === 'session-sweep' ? { header: sweepHeader, revision: 'r-sweep', sizeBytes: null } : undefined),
+    open: async () => ({
+      read: async () => ({
+        eventState: 'shared-frozen',
+        events: [{ type: 'assistant/message', data: { usage: { inputTokens: 4242, outputTokens: 24, cacheReadTokens: 7 } } }],
+      }),
+      close: async () => {},
+    }),
+  },
+}
+rmSync(ledgerPath, { force: true })
+apply(sweepCtx, { usageSnapshotIntervalMs: 30 })
+await new Promise((resolve) => setTimeout(resolve, 250))
+assert.ok(existsSync(ledgerPath), 'the sweep writes the ledger with no dashboard read at all')
+const swept = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+assert.equal(swept.entries.length, 1, 'the sweep records the session it found')
+assert.equal(swept.entries[0].input, 4242, 'the swept row carries the folded tokens')
+assert.equal(swept.entries[0].project, 'sweep-project', 'the swept row carries the project')
+assert.equal(swept.entries[0].deleted, false, 'a live session is not flagged deleted')
+// A second tick must upsert, never append.
+await new Promise((resolve) => setTimeout(resolve, 120))
+const sweptAgain = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+assert.equal(sweptAgain.entries.length, 1, 'the sweep upserts one row per session')
+// The report discloses the sweep state so the panel can say so.
+const sweepReport = await sweepCtx.provided.sessionAdmin.usageReport()
+assert.equal(sweepReport.snapshotIntervalMs, 30, 'the report carries the configured interval')
+assert.equal(typeof sweepReport.lastSnapshotAt, 'number', 'the report carries the last sweep stamp')
+// Disposing the mount stops the timer: no further writes after the log is gone.
+for (const dispose of sweepDisposers) dispose()
+rmSync(ledgerPath, { force: true })
+await new Promise((resolve) => setTimeout(resolve, 150))
+assert.ok(!existsSync(ledgerPath), 'the disposed sweep stops writing')
+
+/* --------- usage ledger live event observer (short-session zero loss) ---------
+ * A session created, used, and deleted inside one sweep interval would still
+ * be gone before any read touched it. The observer folds the harness's
+ * per-append firehose (`session/event`) instead of watching the sessions
+ * directory: it fires at append time, so there is no debounce-vs-delete race.
+ * Only sessions whose log this process saw from seq 0 are accumulated
+ * (firstLiveSeq === 0) — a resumed session's history is not ours to own.
+ * The sweep is disabled here so ONLY the observer can write.
+ */
+const eventListeners = new Map()
+let observeHeaders = []
+const observeCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d); return d },
+  get: () => undefined,
+  on: (name, fn) => {
+    const list = eventListeners.get(name) ?? []
+    list.push(fn)
+    eventListeners.set(name, list)
+    return () => {}
+  },
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    unarchiveSession: async () => {},
+  },
+  sessionPersistence: {
+    list: async () => observeHeaders,
+    stat: async (id) => (id === 'session-live' ? { header: observeHeaders[0].header, revision: 'r-live', sizeBytes: null } : undefined),
+    open: async () => ({ read: async () => ({ eventState: 'shared-frozen', events: [] }), close: async () => {} }),
+  },
+}
+rmSync(ledgerPath, { force: true })
+apply(observeCtx, { usageSnapshotIntervalMs: 0 })
+const emitSession = (name, ...args) => { for (const fn of eventListeners.get(name) ?? []) fn(...args) }
+const readLedger = () => (existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, 'utf8')).entries : [])
+const liveSession = { id: 'session-live', firstLiveSeq: 0, header: { id: 'session-live', cwd: 'E:/Demo/live-project', createdAt: 1234 } }
+
+emitSession('session/created', liveSession)
+emitSession('session/event', liveSession, { type: 'user/message', seq: 0, data: { content: [{ type: 'text', text: 'hi' }] } })
+emitSession('session/event', liveSession, { type: 'assistant/message', seq: 1, data: { usage: { inputTokens: 500, outputTokens: 60, cacheReadTokens: 10, cacheWriteTokens: 2 } } })
+emitSession('session/disposed', liveSession)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const observed = readLedger()
+assert.equal(observed.length, 1, 'the observer writes the ledger with NO read and NO sweep')
+assert.equal(observed[0].id, 'session-live')
+assert.equal(observed[0].input, 500, 'the folded input tokens land in the ledger')
+assert.equal(observed[0].output, 60)
+assert.equal(observed[0].cacheRead, 10)
+assert.equal(observed[0].userMsgs, 1, 'the user turn is counted')
+assert.equal(observed[0].assistantMsgs, 1)
+assert.equal(observed[0].project, 'live-project', 'the row carries the project from the session header')
+assert.equal(observed[0].deleted, false, 'a live session is not flagged deleted')
+
+// A resumed session carries history this process never saw: not ours to own.
+emitSession('session/created', { id: 'session-resumed', firstLiveSeq: 7, header: { id: 'session-resumed', cwd: 'E:/Demo/other', createdAt: 1 } })
+emitSession('session/event', { id: 'session-resumed' }, { type: 'assistant/message', seq: 8, data: { usage: { inputTokens: 999 } } })
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.ok(!readLedger().some((entry) => entry.id === 'session-resumed'), 'a resumed session stays read-owned')
+
+// A compaction checkpoint is not a user turn; the next turn accumulates.
+emitSession('session/event', liveSession, { type: 'user/message', seq: 2, data: { source: { kind: 'plugin', plugin: 'compact' }, content: [] } })
+emitSession('session/event', liveSession, { type: 'assistant/message', seq: 3, data: { usage: { inputTokens: 1000 } } })
+emitSession('session/disposed', liveSession)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const accumulated = readLedger().find((entry) => entry.id === 'session-live')
+assert.equal(accumulated.userMsgs, 1, 'a compaction checkpoint does not count as a user turn')
+assert.equal(accumulated.input, 1500, 'a later turn ADDS to the accumulator (absolute, never a reset)')
+
+// The read path must not clobber an observer-owned row with the log's older,
+// cap-truncated fold: the row is present in the live read, so it would
+// otherwise be overwritten with the fixture's zero tokens.
+observeHeaders = [{ header: liveSession.header, revision: 'r-live' }]
+const protectedReport = await observeCtx.provided.sessionAdmin.usageReport()
+assert.equal(protectedReport.rows.find((row) => row.id === 'session-live').input, 1500, 'a read never overwrites observer-owned numbers')
+assert.equal(protectedReport.rows.find((row) => row.id === 'session-live').deleted, false, 'a live protected row stays live')
+// Once the session is gone, the same read flags it — numbers intact.
+observeHeaders = []
+const retainedReport = await observeCtx.provided.sessionAdmin.usageReport()
+const retainedRow = retainedReport.rows.find((row) => row.id === 'session-live')
+assert.equal(retainedRow.deleted, true, 'a vanished protected session is flagged deleted by the read')
+assert.equal(retainedRow.input, 1500, 'and keeps the observer-owned totals')
+assert.equal(retainedReport.retained, 1)
+rmSync(ledgerPath, { force: true })
+
 /* ------------------- pluginAdmin.checkUpdates -------------------
  * The registry fetch is injected (fetchLatestVersion takes the registry base
  * URL), so drive it against a local HTTP stub: dsh-remote-tool has a newer
@@ -1288,6 +1523,47 @@ assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
       else process.env[key] = value
     }
   }
+}
+
+// escapeCmdArg: cross-spawn's verbatim-argv quoting. Plain tokens stay bare;
+// quoted tokens double backslash runs preceding a quote, escape each quote,
+// and double trailing backslashes — a trailing `\` must not escape the
+// wrapper's closing quote, and `\"` inside must not leave the quote active.
+{
+  const BS = String.fromCharCode(92)
+  assert.equal(escapeCmdArg('npx'), 'npx', 'plain token stays bare')
+  assert.equal(escapeCmdArg('C:/Program Files/tool'), '"C:/Program Files/tool"', 'space token is wrapped')
+  assert.equal(escapeCmdArg('say "hello"'), '"say \\"hello\\""', 'inner quotes are escaped')
+  assert.equal(escapeCmdArg('C:' + BS + 'path with space' + BS), '"C:' + BS + 'path with space' + BS + BS + '"', 'trailing backslash is doubled')
+  assert.equal(escapeCmdArg('a' + BS + '"b'), '"a' + BS + BS + BS + '"b"', 'backslash run before a quote is doubled first')
+}
+
+// readBoundedText: the non-SSE probe paths buffer the whole JSON answer, so
+// the length cap is what keeps a misbehaving server from ballooning host
+// memory — over-cap reads cancel the stream and fail loud; under-cap reads
+// decode multi-chunk bodies intact.
+const { readBoundedText } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
+{
+  const fakeResponse = (chunks) => ({
+    body: {
+      getReader() {
+        let i = 0
+        return {
+          read: async () => (i < chunks.length
+            ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+            : { done: true, value: undefined }),
+          async cancel() { /* stream already gone */ },
+        }
+      },
+    },
+  })
+  await assert.rejects(
+    () => readBoundedText(fakeResponse(['a'.repeat(200 * 1024), 'b'.repeat(200 * 1024)]), 256 * 1024),
+    /exceeded 262144 bytes/,
+    'an over-cap body fails loud instead of buffering unboundedly',
+  )
+  assert.equal(await readBoundedText(fakeResponse(['hello ', 'world']), 256 * 1024), 'hello world',
+    'an under-cap multi-chunk body reads whole')
 }
 
 // Cache-hit regression: the 5-minute in-memory cache used to store only
@@ -1586,4 +1862,4 @@ rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')

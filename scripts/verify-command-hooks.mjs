@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { applyCommandHookAdmin, BRIDGE_PACKAGE, ensureProfileDependency, harnessLockstepVersion, profileDependencyInstalled } from '../lib/command-hook-admin.js'
+import { pruneStalePnpmOverride } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -432,6 +433,34 @@ try {
     // Leave the dep ABSENT so the bridge-install test below still exercises
     // its install path (it expects one pnpm add).
     writeManifest({})
+  })
+
+  await check('stale link overrides are pruned before the registry add', async () => {
+    const manifestPath = join(profileDir, 'package.json')
+    const writeWithOverride = (spec) => writeFileSync(manifestPath, JSON.stringify({
+      name: 'cha-fixture',
+      dependencies: {},
+      ...(spec === null ? {} : { pnpm: { overrides: { '@deepseek-ai/dsh-llm': spec } } }),
+    }, null, 2) + '\n', 'utf8')
+    // A link override whose target no longer exists (host checkout moved or
+    // deleted) is removed — an emptied overrides map cleans up after itself.
+    writeWithOverride('link:' + join(tempRoot, 'gone-host', 'node_modules', '@deepseek-ai', 'dsh-llm').split('\\').join('/'))
+    assert.equal(pruneStalePnpmOverride(profileDir, '@deepseek-ai/dsh-llm'), true, 'dead link override removed')
+    const pruned = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    assert.equal(pruned.pnpm, undefined, 'empty overrides map does not linger')
+    assert.deepEqual(pruned.dependencies, {})
+    // A live link target is kept.
+    const liveTarget = join(tempRoot, 'live-host-peer')
+    mkdirSync(liveTarget, { recursive: true })
+    writeWithOverride('link:' + liveTarget.split('\\').join('/'))
+    assert.equal(pruneStalePnpmOverride(profileDir, '@deepseek-ai/dsh-llm'), false, 'live link override kept')
+    assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).pnpm.overrides['@deepseek-ai/dsh-llm'], 'link:' + liveTarget.split('\\').join('/'))
+    // A non-link override is never this function's business.
+    writeWithOverride('^0.2.0')
+    assert.equal(pruneStalePnpmOverride(profileDir, '@deepseek-ai/dsh-llm'), false, 'range override untouched')
+    assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).pnpm.overrides['@deepseek-ai/dsh-llm'], '^0.2.0')
+    // Leave the dep ABSENT for the bridge-install test below (one pnpm add).
+    writeFileSync(manifestPath, JSON.stringify({ name: 'cha-fixture', dependencies: {} }, null, 2) + '\n', 'utf8')
   })
 
   await check('bridge: install pnpm-adds and authors the mount row', async () => {

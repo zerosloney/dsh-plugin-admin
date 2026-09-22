@@ -13,6 +13,9 @@ out.txt
 # cbx local tool state
 .cbx/
 
+# zcode local tool state
+.zcode/
+
 # OS
 Thumbs.db
 Desktop.ini

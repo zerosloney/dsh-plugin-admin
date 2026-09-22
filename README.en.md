@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — nine standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** panel injected into dsh's own **已归档会话 (Archived Sessions)** page (collapsible directories + bulk delete) instead of occupying another sidebar row. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — ten standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Cron Tasks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** panel injected into dsh's own **已归档会话 (Archived Sessions)** page (collapsible directories + bulk delete) instead of occupying another sidebar row. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
@@ -13,13 +13,14 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 |---|---|
 | 🔌 Extensions | install / uninstall / update / disable-enable profile plugins (pnpm orchestration + bundles sync), Loader runtime snapshot |
 | 🗂️ Archived Sessions | **dsh's own page**; the plugin injects its session-history panel into it (collapsible directories + bulk delete, below) |
-| 📚 Skills | full skill roster (global layer + per-session scope merge), strictly read-only |
+| 📚 Skills | full skill roster (global layer + every agent preset's standing scope + per-session scope merge), strictly read-only |
 | 🔌 MCP Servers | row-level CRUD + real handshake probes + try-call console |
 | 🛰️ Subagents | managed subagent rows CRUD + running monitor / follow-up + CLI backends |
 | ⌨️ Commands & Hooks | file-backed prompt commands (live) + Claude / Codex hooks bridges + read-only `.agents/` inspector |
+| ⏰ Cron Tasks | host-level cron (`*/5 * * * *` five-field expressions) → steer a live session / create a session at fire time; local timezone, runs while the dsh process is alive |
 | 🪝 Webhook Triggers | inbound endpoint → steer a live session / create a session; signature check + idempotent dedup |
 | 🔍 Web Search | provider switching + config editor (Exa / Perplexity have no official UI) |
-| 📊 Usage Dashboard | client-side real-time token usage / activity aggregation |
+| 📊 Usage Dashboard | client-side token usage / activity aggregation, persisted to a local ledger: live event observer + hourly sweep + pre-delete snapshot (deleting a session keeps its usage) |
 | ✅ Todo Dock | live todo panel above the composer + git file-change footer |
 
 Common: every write (plugin toggles / MCP / subagents / hooks bridges / web search / webhook runtime / overlays) goes through `lib/patch-utils.js` `writePatch()` — atomic (temp + rename) with the replaced revision kept beside the file as `cordis.patch.yml.dsh-admin.bak`; all writes share one serial operation queue; missing dsh services degrade per-panel with a hint, never a full plugin mount failure.
@@ -52,9 +53,10 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 
 ### 📚 Skills
 1. Open: Settings → Skills.
-2. Browse: cards carry `/<name>`, independent 🤖 model-invocable / 👤 human-invocable badges, a source label, and scope details.
-3. Filter: text (name/description/whenToUse/path), source, scope — all client-side, zero extra requests.
-4. Copy/open: 📋 copies `/name`; when `resourceBase` is a directory, **📂 Open directory** reveals it in the system file manager.
+2. Browse: cards carry `/<name>`, independent 🤖 model-invocable / 👤 human-invocable badges, a source label, and scope details. The list scrolls inside the dialog height (30+ skills are no longer clipped) behind a refresh + search toolbar.
+3. Scopes: three layers merge — the **global layer**, **every agent preset's standing scope**, and **every known session's (cwd, preset) scope**. A web deployment (`dsh-web-app`) disables the host-plane `skill-filesystem` row and lets presets own local discovery, so an empty global layer there is normal: the user directories (`~/.agents/skills`, `~/.dsh/skills`) are listed through preset scopes. Reading a preset scope goes through `agentPresets.standingKeyFor`, which ensures that preset's standing mount (it composes plugins only — no agent, session, or turn starts); it is the only host-side route into a preset layer.
+4. Filter: text only (name/description/whenToUse/path), client-side, zero extra requests. There is no source/scope dropdown: every card already prints its source label and its "visible in" scopes, so a dropdown would only restate the card.
+5. Copy/open: 📋 copies `/name`; when `resourceBase` is a directory, **📂 Open directory** reveals it in the system file manager.
 
 ### 🔌 MCP Servers
 1. Open: Settings → MCP Servers.
@@ -72,7 +74,15 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 ### ⌨️ Commands & Hooks
 1. Commands tab: create/edit (incl. rename) / enable-disable / delete; saving registers live (fs.watch) — use it in a session as `/name <input>`; **⬇ Export / ⬆ Import** migrates JSON in bulk (same-name entries skipped).
 2. Hooks tab: edit hooks.json (event / matcher / command / timeout) → saving hot-restarts the bridge; **Disable** moves an entry to hooks.disabled.json; the three-state bridge banner — when not installed, **⚡ Install & mount** → restart; the Codex sibling bridge is a second status strip on the same tab.
-3. Project tab: type a project path to inspect its `.agents/` commands / hooks / skills and per-file load errors.
+3. Project tab: type a project path to inspect its `.agents/` commands / hooks / skills and per-file load errors. Project hooks share the stock bridge's default timeout (10 minutes per hook — the dsh hook-protocol default; override per hook with `timeout` in the hooks config). Several hung hooks slow the current turn serially; aborting the turn cancels the chain.
+
+### ⏰ Cron Tasks
+1. Open: Settings → Cron Tasks (定时任务).
+2. Create a task: id (lowercase start) + a cron expression (standard five fields "minute hour day month weekday", local timezone; supports `*`, comma lists, hyphen ranges, slash steps; weekday accepts `0-7` and `SUN-SAT`) + a built-in preset dropdown (every 5 min / hourly / daily 09:00 / weekdays 09:00 / Sunday 00:00) + action — the same vocabulary as Webhook Triggers: steer (pick a target live session, steer/queue) or create (workspacePath + agentPreset + permissionPreset).
+3. Semantics: **host-level** — fires while the dsh process is alive, independent of any session (unlike `dsh-schedule`'s session-local every semantics and 300s floor). Each row shows a live countdown plus the local time of the next fire; a steer target that is not live is flagged "⚠ target offline".
+4. Manual: **▶ Run now** takes the exact same path as a timed fire (inject a message / create a session + record history).
+5. Persistence & scheduling: tasks live in `~/.dsh/cron-tasks.json` (atomic writes + fs.watch mirror, so edits outside the panel apply instantly); one timer per task, re-reading storage before firing so it never races a panel edit; all timers are cleared on plugin unload / dsh exit. **Missed fires while the process was down are not backfilled** — the next future occurrence is recomputed on restart.
+6. Note: create mode shares the `@deepseek-ai/dsh-webhook` runtime with Webhook Triggers — install and mount it there first → restart.
 
 ### 🪝 Webhook Triggers
 1. Open: Settings → Webhook Triggers.
@@ -91,6 +101,12 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 1. Open: Settings → Usage Dashboard.
 2. Date-range pills (Today / 24H / 7D / 30D / 90D / All) + the project filter dropdown.
 3. Read: KPI cards (tokens / sessions / messages / active days + vs-previous deltas), a stacked daily token trend, a weekday×hour activity heatmap, and local insights (cache hit rate, output-ratio anomalies, …).
+4. Persistence: dsh's own token accounting lives in the session log, so deleting a session deleted its usage with it. Three layers keep it instead:
+   - **Live event observer** — subscribes to the `session/event` firehose (fired on every append), accumulates absolute totals for sessions this process watched from seq 0, debounces 2s to disk, and flushes immediately on `session/disposed` / `session/flush`. A session created, used, and deleted inside one sweep interval is still recorded.
+   - **Background sweep** — folds the whole session table every 60 minutes (`config.usageSnapshotIntervalMs`, milliseconds; `0` disables it — the toolbar's 「⏱ 自动快照」 shows the state and the last sweep time), covering sessions that already existed before this process started.
+   - **Pre-delete snapshot** — this plugin's own `deleteSession` / `closeSession` write the session's usage into the ledger BEFORE the log is removed.
+   The ledger is `$DSH_HOME/usage-ledger.json` (one row per session, atomic write + serial queue, capped at 2000 rows, oldest `lastSeenAt` first); deleted sessions stay in the data as `deleted: true` (no separate badge — they simply join the KPI and session counts). An idle sweep re-reads nothing (revision-cached) and writes nothing (`changed: false`), and a read never overwrites numbers the live observer owns.
+   > Why not `fs.watch` on `$DSH_HOME/sessions`: a file watcher only tells you *something changed* — a compressed log still has to be re-parsed whole, and the deletion event races the debounce window. `session/event` is the synchronous firehose at append time: more exact, and cheaper.
 
 ### ✅ Todo Dock
 1. Location: a floating panel above the chat composer, projecting the session live.
@@ -124,11 +140,11 @@ pnpm dsh --profile web                               # restart to load
 ## Tests
 
 ```sh
-npm test   # 18 scripts: self-check / host-check / verify-* / integration-check
+npm test   # 19 scripts: self-check / host-check / verify-* / integration-check
 ```
 
 - `integration-check.mjs` probes real dsh checkout source for contract drift (thirteen unified RPC namespaces).
-- Diagnostics (not in npm test): `node scripts/repro-delete-session.mjs` reproduces every session-delete failure mode (uncaptured live handle / layout drift / concurrent resume) to match panel errors.
+- Diagnostics (not in npm test): `node scripts/repro-delete-session.mjs` reproduces every session-delete failure mode (uncaptured live handle / layout drift / concurrent resume) to match panel errors; `node scripts/smoke-cron-panel.mjs` really mounts the Cron Tasks panel in jsdom (list / toggle / editor / preset / save).
 
 ## Security posture
 
