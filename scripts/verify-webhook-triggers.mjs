@@ -171,7 +171,7 @@ const webhookAdminInvocations = applyWebhookAdmin(ctx, {
   enqueue: (op) => Promise.resolve().then(op),
   runPnpm: null,
   reconcileBundles: null,
-  settings: {},
+  settings: { webhookHistoryPath: join(webhookHome, 'history-main.json') },
 })
 
 check('service provided with typertRemote binding and descriptors', () => {
@@ -393,7 +393,7 @@ await checkAsync('runtimeInstall writes dependency + cordis patch row (stub pnpm
     enqueue: (op) => Promise.resolve().then(op),
     runPnpm: (dir, args) => { installs.push([dir, ...args]); return stubPnpm(dir, args) },
     reconcileBundles: () => {},
-    settings: {},
+    settings: { webhookHistoryPath: join(webhookHome, 'history-main.json') },
   })
   const service = ctx.provided.webhookAdmin
   const result = await service.runtimeInstall()
@@ -438,7 +438,7 @@ await checkAsync('saveRule refuses an inherited short secret on edit', async () 
   // Fresh mount on the same home: the rules mirror loads from disk at apply
   // time, so the seeded legacy rule is authoritative without waiting on the
   // debounced fs.watch reload.
-  applyWebhookAdmin(ctx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: {} })
+  applyWebhookAdmin(ctx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: { webhookTriggersPath: legacyPath, webhookHistoryPath: join(webhookHome, 'history-legacy.json') } })
   const fresh = ctx.provided.webhookAdmin
   let rejected = null
   try {
@@ -484,7 +484,7 @@ await checkAsync('runtime path: bad preset name lands in history as ok:false; va
     inject: (deps, fn) => { fn({ webhookRuntime: fakeRuntime }); return () => {} },
     provide: (key, service) => { runtimeCtx.provided ??= {}; runtimeCtx.provided[key] = service },
   }
-  applyWebhookAdmin(runtimeCtx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: { webhookTriggersPath: join(webhookHome, 'runtime-triggers.json') } })
+  applyWebhookAdmin(runtimeCtx, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings: { webhookTriggersPath: join(webhookHome, 'runtime-triggers.json'), webhookHistoryPath: join(webhookHome, 'history-runtime.json') } })
   assert.ok(capturedRun !== null, 'runtime rule registered')
 
   const service = runtimeCtx.provided.webhookAdmin
@@ -512,6 +512,105 @@ await checkAsync('runtime path: bad preset name lands in history as ok:false; va
   hist = (await service.list()).history
   const badPermEntry = hist.find((h) => h.deliveryId === 'd-bad-perm')
   assert.ok(badPermEntry && badPermEntry.ok === false && /permission: unknown preset "nope-perm"/.test(badPermEntry.error), 'unknown permissionPreset recorded in history with the real error')
+})
+
+/* ==================== persisted history + replay dedup ====================
+ * The delivery history ring and the x-webhook-delivery dedup used to live
+ * only in process memory (50 entries, gone on restart). Both now persist to
+ * <dshHome>/webhook-history.json on every delivery: history survives the
+ * remount, and a delivery id already claimed before the "restart" stays
+ * claimed after it.
+ */
+// Fresh host context whose steered messages land in a LOCAL log (so counts
+// are per-test) and whose route registrations append to the shared capture.
+function makeIsolatedCtx(disposers, steeredLog) {
+  const c = {
+    baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    get: (key) => {
+      if (key === 'agents') {
+        return { get: (id) => (id === 'session-live' ? { steer: (msg) => steeredLog.push({ id, msg }), followup: (msg) => steeredLog.push({ id, msg, followup: true }) } : undefined) }
+      }
+      if (key === 'webServer') return fakeWebServer
+      return undefined
+    },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d },
+    inject: undefined,
+    provide: (k, svc) => { c.provided ??= {}; c.provided[k] = svc },
+  }
+  return c
+}
+
+await checkAsync('delivery history persists across a remount', async () => {
+  const historyPath = join(webhookHome, 'history-persist.json')
+  const triggersPath = join(webhookHome, 'triggers-persist.json')
+  const settings = { webhookTriggersPath: triggersPath, webhookHistoryPath: historyPath }
+  const disposers1 = []
+  const steered1 = []
+  const ctx1 = makeIsolatedCtx(disposers1, steered1)
+  applyWebhookAdmin(ctx1, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings })
+  await ctx1.provided.webhookAdmin.saveRule({ id: 'persist', secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+  const handler1 = registeredRoutes[registeredRoutes.length - 1].handler
+  const res = mockRes()
+  await handler1(mockReq({
+    url: '/webhook-triggers/persist',
+    headers: { 'content-type': 'application/json', 'x-webhook-secret': 'topsecret-key-16chars', 'x-webhook-event': 'push', 'x-webhook-delivery': 'd-persist-1' },
+    chunks: ['{"ok":true}'],
+  }), res)
+  assert.equal(res.statusCode, 202)
+  assert.equal(steered1.length, 1, 'mount 1 steered once')
+  const onDisk = JSON.parse(readFileSync(historyPath, 'utf8'))
+  assert.ok(onDisk.history.some((h) => h.deliveryId === 'd-persist-1' && h.ok), 'delivery recorded in the sidecar')
+
+  // Mount 2 (the "restart"): fresh module state, same storage files.
+  const disposers2 = []
+  const ctx2 = makeIsolatedCtx(disposers2, [])
+  applyWebhookAdmin(ctx2, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings })
+  const list2 = await ctx2.provided.webhookAdmin.list()
+  assert.ok(list2.history.some((h) => h.deliveryId === 'd-persist-1'), 'history survives the remount')
+  for (const d of disposers1.splice(0).concat(disposers2.splice(0))) { try { d() } catch {} }
+})
+
+await checkAsync('replay dedup persists across a remount (cross-restart idempotency)', async () => {
+  const historyPath = join(webhookHome, 'history-dedup.json')
+  const triggersPath = join(webhookHome, 'triggers-dedup.json')
+  const settings = { webhookTriggersPath: triggersPath, webhookHistoryPath: historyPath }
+  const steeredAll = []
+  const mount = () => {
+    const disposers = []
+    const c = makeIsolatedCtx(disposers, steeredAll)
+    applyWebhookAdmin(c, { enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null, settings })
+    return { service: c.provided.webhookAdmin, handler: registeredRoutes[registeredRoutes.length - 1].handler, disposers }
+  }
+  const req = () => mockReq({
+    url: '/webhook-triggers/dedup',
+    headers: { 'content-type': 'application/json', 'x-webhook-secret': 'topsecret-key-16chars', 'x-webhook-event': 'push', 'x-webhook-delivery': 'd-same-1' },
+    chunks: ['{"n":1}'],
+  })
+  let m = mount()
+  try {
+    await m.service.saveRule({ id: 'dedup', secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+    const res1 = mockRes()
+    await m.handler(req(), res1)
+    assert.equal(res1.statusCode, 202)
+    assert.equal(JSON.parse(res1.body).duplicate, undefined, 'first delivery executes')
+    const res2 = mockRes()
+    await m.handler(req(), res2)
+    assert.equal(JSON.parse(res2.body).duplicate, true, 'same delivery id deduped in-process')
+    for (const d of m.disposers.splice(0)) { try { d() } catch {} }
+
+    // "Restart": remount with the same sidecar files — the id stays claimed.
+    m = mount()
+    const list = await m.service.list()
+    assert.equal(list.rules.some((r) => r.id === 'dedup'), true, 'rule restored from storage')
+    const res3 = mockRes()
+    await m.handler(req(), res3)
+    assert.equal(res3.statusCode, 202)
+    assert.equal(JSON.parse(res3.body).duplicate, true, 'same delivery id deduped ACROSS the remount')
+    assert.equal(steeredAll.length, 1, 'exactly one steer ever executed for this delivery id')
+  } finally {
+    for (const d of m.disposers.splice(0)) { try { d() } catch {} }
+  }
 })
 
 console.log(results.join('\n'))

@@ -2,7 +2,7 @@
 
 dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**命令与钩子**、**定时任务**、**Webhook 触发**、**Web 搜索**、**用量仪表盘**、**待办清单**十个独立面板，并把**历史会话**面板注入 dsh 官方的**已归档会话**页（目录可折叠 + 批量删除，不再单独占侧边栏入口）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
 
-> 面板文案为简体中文硬编码（宿主 locale 体系不覆盖外部插件）。
+> 面板文案内置简体/English 双语（扩展插件面板工具栏 🌐 切换，跟随浏览器语言，回退中文原文，永不出坏）。
 
 **npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.22.0 · MIT
 
@@ -13,7 +13,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 | 🔌 扩展插件 | 安装 / 卸载 / 更新 / 启停 profile 插件（pnpm 编排 + bundles 清单同步），Loader 运行时快照 |
 | 🗂️ 已归档会话 | **dsh 官方页**；插件把「历史会话」面板注入其中（目录折叠 + 批量删除，见下） |
 | 📚 技能 | 全量技能清单（全局层 + 每个 Agent 预设的 standing 作用域 + 会话作用域合并），严格只读、不加载正文 |
-| 🔌 MCP 服务器 | 行级 CRUD + 真实握手探测 + 工具试调用台 |
+| 🔌 MCP 服务器 | 行级 CRUD + 真实握手探测 + 工具试调用台；**已挂载条目的配置修改热应用至运行中的 server（无需重启）** |
 | 🛰️ 子智能体 | 受管子代理 CRUD + 运行中监控 / 续接 + CLI 后端挂载 |
 | ⌨️ 命令与钩子 | 提示词命令（实时生效）+ Claude / Codex hooks 桥 + 项目 `.agents` 只读视图 |
 | ⏰ 定时任务 | 宿主级 cron（`*/5 * * * *` 五字段表达式）→ 到点 steer 在线会话 / 新建会话；本地时区，进程存活即运行 |
@@ -63,6 +63,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 3. 测试：🔌 测试——真实握手（initialize → tools/list），成功显示服务器标识与工具列表；成功结果缓存到 localStorage（失败仅会话内）。
 4. 试调用：🧪 试调用——选工具、粘贴 JSON 参数、真实执行一次 tools/call（60s 预算，16KB 截断）。
 5. 编辑/移除：行内操作；与既有条目同 id 直接拒绝。
+6. 热生效：**修改已挂载条目**保存即通过 loader 同款 `fiber.update` 通道热重启对应 server（按 serverName 匹配，改名也生效；noSave 保证 patch 文件不被宿主改写），面板提示「无需重启」；**新增条目**与**删除**仍需重启（新 fiber 挂载是 loader 启动期职责）。热应用失败时面板显示具体原因并回退到重启提示。
 
 ### 🛰️ 子智能体
 1. 打开：设置 → 子智能体。
@@ -88,7 +89,8 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 2. 新建规则：id（小写字母开头）+ secret（≥16 字符，留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
 3. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
 4. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
-5. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
+5. 持久化：交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合落盘 `$DSH_HOME/webhook-history.json`（原子写），**重启 dsh 后历史保留、重发的同 delivery id 依旧去重**；容量可用插件 config 行 `webhookHistoryCap` 调整。
+6. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
 
 ### 🔍 Web 搜索
 1. 打开：设置 → Web 搜索。
@@ -104,7 +106,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
    - **实时事件观察**：订阅 `session/event` 事件流（每次 append 都触发），对**本进程从 seq 0 就开始观察**的会话按绝对量累计，2 秒防抖落盘，并在 `session/disposed` / `session/flush` 时立即落盘——会话在扫描间隔内被创建、用完、删掉也不会漏。
    - **后台定时快照**：每 60 分钟扫一遍整张会话表（`config.usageSnapshotIntervalMs`，毫秒；`0` 关闭，工具栏「⏱ 自动快照」显示状态与最近一次时间），覆盖**上次进程启动前就存在**的会话。
    - **删除前快照**：本插件自己的 `deleteSession` / `closeSession` 在删日志**之前**先把该会话的用量写进台账。
-   台账在 `$DSH_HOME/usage-ledger.json`（每会话一行，原子写 + 串行队列，上限 2000 行按最后见到时间淘汰）；被删会话以 `deleted: true` 留在数据里（不再单独打标记，只并入 KPI 与会话数）。空转不读日志（revision 缓存）也不写盘（无变化即跳过）；读取路径不会覆盖实时观察器掌握的数字。
+   台账在 `$DSH_HOME/usage-ledger.json`（每会话一行，原子写 + 串行队列；上限默认 2000 行、插件 config 行 `usageLedgerCap` 可调（100–100000），按最后见到时间淘汰）；被删会话以 `deleted: true` 留在数据里（不再单独打标记，只并入 KPI 与会话数）。空转不读日志（revision 缓存）也不写盘（无变化即跳过）；读取路径不会覆盖实时观察器掌握的数字。
    > 为什么不是 `fs.watch` 盯 `$DSH_HOME/sessions`：文件监听只能告诉你「目录/文件变了」，压缩日志要重新整份解析，而且删除事件和防抖窗口会互相抢跑；`session/event` 是 append 时刻的同步火线，更准也更省。
 
 ### ✅ 待办清单
@@ -146,11 +148,23 @@ pnpm dsh --profile web
 ## 自动化自检
 
 ```sh
-npm test   # 19 个脚本：self-check / host-check / verify-* / integration-check
+npm test   # 20 个脚本：self-check / host-check / verify-* / integration-check
 ```
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（含统一描述符的十三个命名空间）。
+- `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
+- `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 / 布局漂移 / 并发竞态），用于把面板报错对号入座；`node scripts/smoke-cron-panel.mjs` 在 jsdom 里真实挂载定时任务面板（列表 / 开关 / 编辑器 / 预设 / 保存）。
+
+## 可调配置键（插件 config 行）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `usageSnapshotIntervalMs` | 3600000 | 用量后台快照间隔，`0` 关闭 |
+| `usageLedgerCap` | 2000 | 用量台账保留行数（100–100000），超出按最后见到时间淘汰 |
+| `webhookHistoryCap` | 200 | Webhook 交付历史条数（1–10000），历史与去重集合同文件落盘 |
+| `webhookTriggersPath` / `webhookHistoryPath` | `$DSH_HOME` 下 | 规则 / 交付历史存储文件路径覆盖（测试与特殊部署用） |
+| `pnpmTimeoutMs` / `gitTimeoutMs` 等 | 见 `resolvePluginConfig` | pnpm / git / 更新检查预算 |
 
 ## 信任边界
 

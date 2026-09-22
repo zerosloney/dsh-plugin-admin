@@ -46,6 +46,10 @@ globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.MutationObserver = dom.window.MutationObserver
 Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true })
+// Pin the panel language to zh-CN: jsdom's navigator.language is en-US and
+// these assertions cover the stock (Chinese) UI. The English path is probed
+// by scripts/self-check-i18n.mjs.
+dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
 // 1. Bundle arrival: the file registers its factory through the loader facade.
 const registrations = []
@@ -1801,4 +1805,60 @@ ctx.sessionListFail = undefined
 await act(async () => { commandHookRoot.unmount() })
 host.remove()
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes')
+/* ======== 16. i18n: English-mode smoke on a fresh factory evaluation ======== *
+ * I18N_LANG is evaluated once per factory EXECUTION (it lives in the module
+ * scope the factory body creates), so re-running the bundle under an 'en'
+ * locale yields a scope where every dshT() resolves through I18N_EN. These
+ * mounts prove the English chrome; data values (plugin names, session
+ * titles, provider labels) legitimately stay as the mocks return them, so
+ * nothing here sweeps ALL text for Chinese — targeted chrome assertions only.
+ */
+dom.window.localStorage.setItem('dsh-admin-lang', 'en')
+const registrationsEn = []
+globalThis.window.__ModuleLoader__ = { load: (registration) => registrationsEn.push(registration) }
+new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
+const exportsEn = registrationsEn[0].factory((spec) => {
+  if (spec === 'react') return React
+  if (spec === 'react-dom/client') return { createRoot }
+  throw new Error(`require("${spec}") missed the platform table`)
+})
+const injectedEn = []
+const registeredEn = []
+exportsEn.apply({
+  logger: ctx.logger,
+  effect: (fn) => { fn() },
+  inject: undefined,
+  connection: ctx.connection,
+  slots: {
+    inject: (key, callback) => { injectedEn.push({ key, callback }) },
+    register: (options, component) => { registeredEn.push({ options, component }); return () => {} },
+  },
+})
+injectedEn.forEach((i) => i.callback())
+assert.equal(registeredEn.length, 10, 'en mode also registers ten sections')
+const byIdEn = {}
+for (const entry of registeredEn) byIdEn[entry.options.id] = entry
+assert.equal(byIdEn.extensions.options.label, 'Extensions', 'en nav label for the extensions tab')
+assert.equal(byIdEn['mcp-servers'].options.label, 'MCP Servers', 'en nav label for MCP')
+assert.equal(byIdEn['cron-tasks'].options.label, 'Scheduled Tasks', 'en nav label for cron')
+
+const enRoot = await mountSection(byIdEn.extensions)
+const enSearch = document.querySelector('.toolbar .search-wrap .input')
+assert.ok(enSearch && enSearch.placeholder === 'Search plugins (name/version/path)...', 'en search placeholder')
+assert.ok(document.body.textContent.includes('All (3)'), 'en filter pill with count')
+assert.ok([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Check updates')), 'en check-updates button')
+const langSelect = document.querySelector('select[title="Panel language (all admin panels)"]')
+assert.ok(langSelect && langSelect.value === 'en', 'language switch rendered with en selected')
+await act(async () => { enRoot.unmount() })
+host.remove()
+
+const mcpEn = await mountSection(byIdEn['mcp-servers'])
+await new Promise((resolve) => setTimeout(resolve, 120))
+assert.ok([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Add server')), 'en add-server button')
+assert.ok([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('🔌 Test')), 'en probe button keeps its glyph')
+assert.ok(document.body.textContent.includes('No MCP servers configured') === false, 'the mock MCP entry renders even in en mode')
+await act(async () => { mcpEn.unmount() })
+host.remove()
+dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
+
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch)')

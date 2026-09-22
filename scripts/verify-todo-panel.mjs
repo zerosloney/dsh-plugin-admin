@@ -497,6 +497,9 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 const registrations = []
 await checkAsync('registers exactly one bundle factory under the package id', async () => {
   globalThis.window.__ModuleLoader__ = { load: (registration) => registrations.push(registration) }
+// Pin the panel language: jsdom's navigator.language is en-US; these
+// assertions cover the stock Chinese chrome.
+dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
   assert.equal(registrations.length, 1)
   assert.equal(registrations[0].id, 'dsh-plugin-admin')

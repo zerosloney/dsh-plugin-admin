@@ -38,7 +38,7 @@ const { createRoot } = harnessReq ? req(`${harnessWeb}/react-dom/client`) : req(
 const act = React.act ?? (harnessReq ? req(`${harnessWeb}/react-dom/test-utils`).act : req('react-dom/test-utils').act)
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
+const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'https://dsh.local/' })
 globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.MutationObserver = dom.window.MutationObserver
@@ -60,6 +60,9 @@ const check = async (name, fn) => {
 const registrations = []
 await check('registers exactly one bundle factory under the package id', () => {
   globalThis.window.__ModuleLoader__ = { load: (registration) => registrations.push(registration) }
+// Pin the panel language: jsdom's navigator.language is en-US; these
+// assertions cover the stock Chinese chrome.
+dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
   assert.equal(registrations.length, 1)
   assert.equal(registrations[0].id, 'dsh-plugin-admin')

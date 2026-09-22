@@ -48,6 +48,9 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 
 const registrations = []
 globalThis.window.__ModuleLoader__ = { load: (r) => registrations.push(r) }
+// Pin the panel language: jsdom's navigator.language is en-US; these
+// assertions cover the stock Chinese chrome.
+dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
 const bundle = registrations[0].factory((spec) => {
   if (spec === 'react') return React

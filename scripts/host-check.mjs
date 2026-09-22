@@ -690,6 +690,13 @@ const mcpProfile = join(here, '../.host-check-tmp/mcp-profile')
 mkdirSync(mcpProfile, { recursive: true })
 writeFileSync(join(mcpProfile, 'package.json'), JSON.stringify({ name: 'mcp-test-profile', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.1.1-rc.2' } }))
 writeFileSync(join(mcpProfile, 'cordis.patch.yml'), '[]\n')
+// Live dsh-mcp-client fiber stand-in: update() records every hot-apply so
+// the upsert path can be asserted to restart the server in place.
+const mcpFiberUpdates = []
+const mcpLiveFiber = {
+  entry: { options: { config: { transport: 'stdio', serverName: 'github', command: 'npx' } } },
+  update: async (config, noSave) => { mcpFiberUpdates.push({ config, noSave }) },
+}
 const mcpCtx = {
   logger: { info: () => {}, warn: () => {}, error: () => {} },
   baseUrl: pathToFileURL(mcpProfile).href,
@@ -699,6 +706,11 @@ const mcpCtx = {
   get: () => undefined,
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
+  registry: {
+    entries: function* () {
+      yield ['dsh-mcp-client', { name: '@deepseek-ai/dsh-mcp-client', fibers: [mcpLiveFiber] }]
+    },
+  },
   workspaceRegistry: {
     list: () => [],
     archivedSessionIds: [],
@@ -714,7 +726,7 @@ apply(mcpCtx)
 const mcp = mcpCtx.provided.mcpAdmin
 assert.ok(mcp, 'mcpAdmin service provided')
 assert.equal((await mcp.list()).entries.length, 0, 'fresh profile has no MCP entries')
-await mcp.upsert({
+const created = await mcp.upsert({
   id: 'mcp-github',
   config: {
     transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: 'tok' },
@@ -722,6 +734,8 @@ await mcp.upsert({
     reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
   },
 })
+assert.equal(created.hotApplied, false, 'a NEW entry cannot hot-apply (mounting is the loader boot job)')
+assert.ok(/新增/.test(created.hotReason ?? ''), 'create-mode hotReason names the restart requirement')
 await mcp.upsert({
   id: 'mcp-web',
   config: { transport: 'streamable-http', serverName: 'web', url: 'http://localhost:3000/mcp' },
@@ -736,14 +750,19 @@ assert.deepEqual(afterUpsert[0].config, {
   reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
 }, 'list returns complete editable stdio config')
 assert.equal(afterUpsert[1].serverName, 'web', 'http serverName preserved')
-// Update in place.
-await mcp.upsert({
+// Update in place — and the live fiber must be hot-restarted with the new
+// config (matched by the PREVIOUS serverName, so renames still find it).
+const updated = await mcp.upsert({
   id: 'mcp-github',
   config: { transport: 'stdio', serverName: 'github2', command: 'npx', args: ['-y', 'other'] },
 })
 const afterUpdate = (await mcp.list()).entries
 assert.equal(afterUpdate.length, 2, 'upsert replaces in place')
 assert.equal(afterUpdate.find(e => e.id === 'mcp-github').serverName, 'github2', 'updated serverName applied')
+assert.equal(updated.hotApplied, true, 'updating an entry hot-applies to the live fiber')
+assert.equal(mcpFiberUpdates.length, 1, 'exactly one fiber.update issued')
+assert.equal(mcpFiberUpdates[0].config.serverName, 'github2', 'fiber restarted with the NEW config')
+assert.equal(mcpFiberUpdates[0].noSave, true, 'fiber.update runs noSave (the plugin owns the patch file)')
 // Remove one.
 await mcp.remove('mcp-web')
 const afterRemove = (await mcp.list()).entries
