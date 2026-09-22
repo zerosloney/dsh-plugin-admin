@@ -778,7 +778,7 @@ assert.ok(text.includes('取消归档'), 'unarchive button for archived session'
 assert.ok(text.includes('未分组'), 'ungrouped bucket header for orphan sessions')
 assert.ok(text.includes('独立会话'), 'ungrouped session card rendered')
 assert.ok(text.includes('摘要读取失败：event log unreadable'), 'session summary read failure is visible')
-assert.ok(text.includes('全部 (3)'), 'session filter pill count')
+assert.ok(text.includes('全部(3)'), 'session filter pill count')
 assert.ok(text.includes('会话修改即时同步到侧边栏'), 'session hint footer')
 
 // 7b. Session export: the ⬇ 导出 button pulls sessionAdmin/exportSession and
@@ -804,7 +804,7 @@ await act(async () => {
   pinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   await new Promise((resolve) => setTimeout(resolve, 30))
 })
-assert.ok(document.body.textContent.includes('📌 已置顶 (1)'), 'pinned pill count updates')
+assert.ok(document.body.textContent.includes('已置顶(1)'), 'pinned pill count updates')
 assert.ok(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/pinned-sessions')).length === 1, 'pin persisted to localStorage')
 await act(async () => {
   const unpinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 已置顶') && b.className.includes('btn'))
@@ -812,7 +812,7 @@ await act(async () => {
   unpinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   await new Promise((resolve) => setTimeout(resolve, 30))
 })
-assert.ok(document.body.textContent.includes('📌 已置顶 (0)'), 'unpin restores the count')
+assert.ok(document.body.textContent.includes('已置顶(0)'), 'unpin restores the count')
 
 // 7d. Token usage: the card tag and the totals strip fold the host tokens.
 assert.ok(document.body.textContent.includes('↑12.3k ↓3.4k'), 'per-session usage tag rendered')
