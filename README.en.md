@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — ten standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands & Hooks**, **Cron Tasks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** panel injected into dsh's own **已归档会话 (Archived Sessions)** page (collapsible directories + bulk delete) instead of occupying another sidebar row. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — eleven standalone panels (**Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Workflows**, **Commands & Hooks**, **Cron Tasks**, **Webhook Triggers**, **Web Search**, **Usage Dashboard**, **Todo Dock**) inside dsh's built-in settings UI, plus the **session-history** panel injected into dsh's own **已归档会话 (Archived Sessions)** page (collapsible directories + bulk delete) instead of occupying another sidebar row. Zero dsh imports — everything rides the live Cordis Context; all writes are atomic + serialized, and missing services degrade per-panel instead of failing the plugin mount.
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
@@ -16,6 +16,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 | 📚 Skills | full skill roster (global layer + every agent preset's standing scope + per-session scope merge), strictly read-only |
 | 🔌 MCP Servers | row-level CRUD + real handshake probes + try-call console |
 | 🛰️ Subagents | managed subagent rows CRUD + running monitor / follow-up + CLI backends |
+| 🧵 Workflows | dynamic-workflow console: agent-written TS/JS scripts orchestrate subagents in parallel (amend/resume step cache, ask/answer loop, dual-scope script library) + the model-side `workflow_admin` tool |
 | ⌨️ Commands & Hooks | file-backed prompt commands (live) + Claude / Codex hooks bridges + read-only `.agents/` inspector |
 | ⏰ Cron Tasks | host-level cron (`*/5 * * * *` five-field expressions) → steer a live session / create a session at fire time; local timezone, runs while the dsh process is alive |
 | 🪝 Webhook Triggers | inbound endpoint → steer a live session / create a session; signature check + idempotent dedup |
@@ -70,6 +71,15 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 2. Create: fill in name (`toolName`) / persona (supports `{{model}}`/`{{cwd}}`) / tool allow-deny / model / backend / delegation depth / background mode; advanced settings expand.
 3. Running: the tab lists children live in this process (live timers + event counts); **Interrupt** needs a double confirm; continuable cards take an inline message — **Queue** for the next turn, **Steer** at the nearest step boundary.
 4. CLI backends: the tab detects the codex / claude-code provider packages → mount → configure → unmount; **generic CLI backends** scan PATH for other agent CLIs (gemini / qwen / opencode, …) for one-click mounting or a custom command.
+
+### 🧵 Workflows
+1. Open: Settings → Workflows (工作流).
+2. New run: a TypeScript/JavaScript script (**a top-level `return` is the run result**) + optional label + JSON args → **🚀 Start**. Parent session: workflow subagents derive from a live session — auto-selected when exactly one is live (no control shown), a dropdown when several (title · cwd), a hint when none.
+3. Script facade: `agent(prompt, opts?)` delegates one subagent (fails to `null` without killing the run; `opts` takes `{ label, provider, model, schema }` — with `schema` the step returns structured data); `parallel(thunks)` runs behind a semaphore; `pipeline(items, ...stages)` streams items (a throwing stage records `null` for that item); `phase / log / report` record progress; `ask(question)` blocks until answered (inline answer box in the run detail; stopping the run rejects it); `shell(cmd)` rides the host shell (throws on failure — catch it in the script). **No require / import / fs / network inside the sandbox** — scripts orchestrate; heavy work goes through `agent()` / `shell()`.
+4. Lifecycle: **⏹ Stop** a running card; stopped / errored runs offer **▶ Resume** and **✏️ Rebuild** (rewrite the script — finished steps hit the fingerprint cache and cost no subagent calls); run details poll live (2s). Resume/rebuild re-resolve the run's **original parent session** (a clear error names the session id when it is offline; pass another live session to override); stopped / errored runs stay listed and resumable after a host restart (orphans marked `orphaned`).
+5. Library: **Save** scripts to the library — global `$DSH_HOME/workflows/saved/` or per-project `<workspace>/.dsh/workflows/` (travels with the repo; project overrides global on a name clash); **🚀 Run** launches a saved script in one click.
+6. Agent tool: the model-invocable `workflow_admin` (one tool + an action enum) — create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved; `eval` dry-runs synchronously with a stubbed agent (zero subagent cost) so the model can validate syntax and control flow first; `wait: true` blocks until the run settles and returns a summary. The name deliberately avoids dsh's builtin `workflow` tool (duplicate registration in the global layer throws).
+7. Dependency & persistence: TS scripts need esbuild (declared as a peer dependency, installed with the plugin; plain JS needs nothing). Runs and the library live under `$DSH_HOME/workflows/{runs,saved}/`.
 
 ### ⌨️ Commands & Hooks
 1. Commands tab: create/edit (incl. rename) / enable-disable / delete; saving registers live (fs.watch) — use it in a session as `/name <input>`; **⬇ Export / ⬆ Import** migrates JSON in bulk (same-name entries skipped).
@@ -128,7 +138,8 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
   2. **Physical session-log layout** — the delete path derives the JSONL backend's directory (`projectKey` / `encodeSegment`); layout drift or a custom backend **refuses the delete** with a loud error;
   3. **Hooks-bridge hot restart** — `fiber.update(config, true)` (cordis-internal); on failure the panel reports "saved — restart dsh to apply";
   4. **Transparent wrap of `ctx.agents.create/resume`** — online-session delete needs the captured AgentHandle; an unwrappable member degrades to "restart dsh, then delete";
-  5. **Private readers** — `locate()` / `snapshotEvents()` / projection-cache table name; drift degrades to empty values / lists.
+  5. **Private readers** — `locate()` / `snapshotEvents()` / projection-cache table name; drift degrades to empty values / lists;
+  6. **Workflow seams** — the `subagents.start(name, request)` signature and request shape, `SubagentRun`, jobs `JobOutcome`, and the tool-registry duplicate-name throw (pinned by integration-check's 10 workflow probes; a drift fails loud by name).
 
 ## Install
 
@@ -140,10 +151,10 @@ pnpm dsh --profile web                               # restart to load
 ## Tests
 
 ```sh
-npm test   # 19 scripts: self-check / host-check / verify-* / integration-check
+npm test   # 26 scripts: self-check / host-check / verify-* / integration-check
 ```
 
-- `integration-check.mjs` probes real dsh checkout source for contract drift (thirteen unified RPC namespaces).
+- `integration-check.mjs` probes the real dsh checkout source for contract drift (77 assertions across every admin RPC namespace and the workflow engine seams).
 - Diagnostics (not in npm test): `node scripts/repro-delete-session.mjs` reproduces every session-delete failure mode (uncaptured live handle / layout drift / concurrent resume) to match panel errors; `node scripts/smoke-cron-panel.mjs` really mounts the Cron Tasks panel in jsdom (list / toggle / editor / preset / save).
 
 ## Security posture
@@ -154,6 +165,7 @@ npm test   # 19 scripts: self-check / host-check / verify-* / integration-check
 - Webhook inbound: timing-safe secret compare (SHA-256 both sides), empty secret rejects all, secret verified **before** the body is read, bounded 1MiB payloads, uniform 401 (no rule enumeration).
 - Provider secrets are write-only — never echoed back to the browser.
 - Dangerous deletes require double confirmation; same-name session deletion is refused by design.
+- Workflow script bodies come from the model or the panel and can run host commands through `shell()` (via the host's `ctx.shell`, subject to its approval and sandbox policy) — operators should be aware of this surface.
 
 ## License
 

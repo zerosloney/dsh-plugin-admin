@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**命令与钩子**、**定时任务**、**Webhook 触发**、**Web 搜索**、**用量仪表盘**、**待办清单**十个独立面板，并把**历史会话**面板注入 dsh 官方的**已归档会话**页（目录可折叠 + 批量删除，不再单独占侧边栏入口）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
+dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**工作流**、**命令与钩子**、**定时任务**、**Webhook 触发**、**Web 搜索**、**用量仪表盘**、**待办清单**十一个独立面板，并把**历史会话**面板注入 dsh 官方的**已归档会话**页（目录可折叠 + 批量删除，不再单独占侧边栏入口）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
 
 > 面板文案内置简体/English 双语（扩展插件面板工具栏 🌐 切换，跟随浏览器语言，回退中文原文，永不出坏）。
 
@@ -15,6 +15,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 | 📚 技能 | 全量技能清单（全局层 + 每个 Agent 预设的 standing 作用域 + 会话作用域合并），严格只读、不加载正文 |
 | 🔌 MCP 服务器 | 行级 CRUD + 真实握手探测 + 工具试调用台；**已挂载条目的配置修改热应用至运行中的 server（无需重启）** |
 | 🛰️ 子智能体 | 受管子代理 CRUD + 运行中监控 / 续接 + CLI 后端挂载 |
+| 🧵 工作流 | 动态工作流控制台：agent 写 TS/JS 脚本并行编排子代理（amend/resume 步骤缓存、ask 问答回路、saved 库双作用域）+ 模型侧 `workflow_admin` 工具 |
 | ⌨️ 命令与钩子 | 提示词命令（实时生效）+ Claude / Codex hooks 桥 + 项目 `.agents` 只读视图 |
 | ⏰ 定时任务 | 宿主级 cron（`*/5 * * * *` 五字段表达式）→ 到点 steer 在线会话 / 新建会话；本地时区，进程存活即运行 |
 | 🪝 Webhook 触发 | 入站端点 → steer 在线会话 / 新建会话；验签 + 幂等去重 |
@@ -70,6 +71,15 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 2. 新建：表单填名称（toolName）/ 提示词（persona，支持 `{{model}}`/`{{cwd}}`）/ 工具约束（allow/deny）/ 模型 / 执行后端 / 委托深度 / 后台模式；高级设置可展开。
 3. 运行中：页签列出当前进程运行中的子智能体（实时计时 + 事件数）；「中断」二次确认；可续接的卡片行内输入消息，「排队」进下一轮 /「插队」在最近步骤边界进入。
 4. CLI 后端：页签——检测 codex / claude-code provider 包 → 挂载 → 配置 → 卸载；「通用命令行后端」扫描 PATH 上其他 agent CLI（gemini / qwen / opencode 等）一键挂载或手填自定义命令。
+
+### 🧵 工作流
+1. 打开：设置 → 工作流。
+2. 新建：脚本（TypeScript / JavaScript，**顶层 `return` 即运行结果**）+ 名称（可选）+ args（JSON）→ 🚀 启动。父会话：工作流的子代理从某个在线会话派生——恰有一个在线会话时自动选中不出控件，多个时下拉选择（标题 · 工作目录），零个时提示先开会话。
+3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ label, provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd)` 走宿主 shell（失败抛出，脚本自行 try/catch）。**沙箱内无 require / import / fs / network**——脚本只编排，重活交给 `agent()` / `shell()`。
+4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用）；详情 2s 轮询实时刷新。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（孤儿运行标记 orphaned）。
+5. 工作库：「保存」脚本入库——全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）；卡片「🚀 运行」一键启动。
+6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 同步干跑（agent 桩化，零调用成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
+7. 依赖与安全：TS 脚本需要 esbuild（已声明 peerDependencies，随插件安装；纯 JS 无需）。运行与工作库落 `$DSH_HOME/workflows/{runs,saved}/`。
 
 ### ⌨️ 命令与钩子
 1. 命令页签：新建/编辑（含改名）/启停/删除；保存即实时注册（fs.watch），会话里输入 `/名称 <输入>` 使用；「⬇ 导出 / ⬆ 导入」JSON 批量迁移（同名跳过）。
@@ -129,7 +139,8 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
   2. **会话日志物理布局**——删除路径按 `dsh-session-persistence-jsonl` 的 `projectKey` / `encodeSegment` 推导目录，布局漂移或自定义后端时**拒绝删除并报错**；
   3. **hooks 桥热重启**——`fiber.update(config, true)`（cordis 内部 API），失败降级「已保存，需重启 dsh 生效」；
   4. **`ctx.agents.create/resume` 透明包装**——在线会话删除依赖捕获的 AgentHandle，包装不可写时降级「重启后再删」；
-  5. **私有读取器**——`locate()` / `snapshotEvents()` / 投影缓存表名，漂移降级为空值 / 空列表。
+  5. **私有读取器**——`locate()` / `snapshotEvents()` / 投影缓存表名，漂移降级为空值 / 空列表；
+  6. **workflow 接缝**——`subagents.start(name, request)` 签名与请求形状、`SubagentRun`、jobs `JobOutcome`、工具注册表重名抛错（integration-check 的 10 条 workflow probe 钉住，漂移即点名失败）。
 
 ## 安装与启用
 
@@ -148,10 +159,10 @@ pnpm dsh --profile web
 ## 自动化自检
 
 ```sh
-npm test   # 20 个脚本：self-check / host-check / verify-* / integration-check
+npm test   # 26 个脚本：self-check / host-check / verify-* / integration-check
 ```
 
-- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（含统一描述符的十三个命名空间）。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（77 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 / 布局漂移 / 并发竞态），用于把面板报错对号入座；`node scripts/smoke-cron-panel.mjs` 在 jsdom 里真实挂载定时任务面板（列表 / 开关 / 编辑器 / 预设 / 保存）。
@@ -168,4 +179,4 @@ npm test   # 20 个脚本：self-check / host-check / verify-* / integration-che
 
 ## 信任边界
 
-浏览器端可触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。暴露到非本机前请务必评估权限范围。
+浏览器端可触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令（走宿主 `ctx.shell`，受宿主审批与沙箱策略约束）——暴露到非本机前请务必评估权限范围。
