@@ -81,6 +81,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 同步干跑（agent 桩化，零调用成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
 7. 保存作用域自动识别（对齐 ZCode SaveWorkflow）：会话内经工具保存且未指定 scope 时，调用会话有 cwd → 存**项目** `.dsh/workflows/`；识别不了（无调用会话 / 会话无 cwd）→ 工具回 `needsScopeChoice`，由模型转问用户「存项目还是全局」，带选择重调。`delete_saved` 对称识别（项目优先、回退全局并回报实际删除的一级）。
 8. 斜杠命令：`/workflow` 随插件挂载**自动注册**（无需配置；与既有命令重名时只降级告警）——
+   - `/workflow create <任务描述>`：**按描述自动创建**——任务 steer 给当前会话的模型，经 `workflow_admin` 生成工作流脚本 → `eval` 干跑验证 → `create` 后台启动并回报 run id（值得复用再 `save`，scope 自动识别）；并行编排由脚本内的 `parallel()` 承担；
    - `/workflow`（或 `list`）：列出工作库（当前会话的项目 `.dsh` 优先，其次全局）与活跃运行；
    - `/workflow run <名称> [argsJSON]`：在当前会话启动一个已保存的工作流（后台运行，`/workflow runs` 查进度）；
    - `/workflow runs`：列出运行（最新在前）；`/workflow stop <runId>`：停止。

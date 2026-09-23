@@ -73,7 +73,8 @@ function fakeLibrary() {
   }
 }
 
-const AGENT = { id: 'sess-1', session: { header: { cwd: '/proj' } } }
+const steered = []
+const AGENT = { id: 'sess-1', session: { header: { cwd: '/proj' } }, steer(msg) { steered.push(msg) } }
 const inv = (rawInput, agent = AGENT) => ({ commandId: 'c1', agent, rawInput, attachments: [], signal: undefined })
 
 console.log('applyWorkflowCommand:')
@@ -181,6 +182,37 @@ await check('runs lists newest first; stop validates and reports', async () => {
   assert.match(dead.text, /不在运行中/)
 })
 
+await check('create steers the session model with the task and workflow guidance', async () => {
+  const commands = makeCommands()
+  const { ctx } = makeCtx({ commands })
+  applyWorkflowCommand(ctx, { registry: fakeRegistry(), library: fakeLibrary() })
+  steered.length = 0
+  const out = await commands.registered[0].handler(inv('create   每天汇总 github trending 到 markdown'))
+  assert.equal(out.kind, 'success')
+  assert.match(out.text, /已交给当前会话/)
+  assert.equal(steered.length, 1, 'exactly one steer message')
+  assert.equal(steered[0].role, 'user')
+  const text = steered[0].content[0].text
+  assert.match(text, /每天汇总 github trending/, 'task description injected verbatim')
+  assert.match(text, /workflow_admin/, 'points the model at the tool chain')
+  assert.match(text, /action=eval/, 'dry-run before starting')
+  assert.match(text, /action=create/, 'start via create')
+})
+
+await check('create validates task presence and session context', async () => {
+  const commands = makeCommands()
+  const { ctx } = makeCtx({ commands })
+  applyWorkflowCommand(ctx, { registry: fakeRegistry(), library: fakeLibrary() })
+  const empty = await commands.registered[0].handler(inv('create'))
+  assert.equal(empty.kind, 'error')
+  assert.match(empty.text, /create <任务描述>/)
+  steered.length = 0
+  const noAgent = await commands.registered[0].handler({ commandId: 'c1', agent: undefined, rawInput: 'create 汇总', attachments: [], signal: undefined })
+  assert.equal(noAgent.kind, 'error')
+  assert.match(noAgent.text, /需要在会话中使用/)
+  assert.equal(steered.length, 0, 'nothing steered without a session')
+})
+
 await check('unknown subcommand returns usage', async () => {
   const commands = makeCommands()
   const { ctx } = makeCtx({ commands })
@@ -189,6 +221,8 @@ await check('unknown subcommand returns usage', async () => {
   assert.equal(out.kind, 'error')
   assert.match(out.text, /未知子命令「bogus」/)
   assert.match(out.text, /\/workflow run/)
+  const upper = await commands.registered[0].handler(inv('LIST'))
+  assert.equal(upper.kind, 'success', 'subcommands are case-insensitive')
 })
 
 // ─── 结果 ─────────────────────────────────────────────────────────────────────
