@@ -99,8 +99,8 @@ await check('apply() injects styles and registers the 子智能体 settings sect
   assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the eight settings sections + the todo dock',
+    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+    'unified apply injects the nine settings sections + the todo dock',
   )
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')

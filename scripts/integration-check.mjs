@@ -383,6 +383,53 @@ const PROBES = [
       ['perplexity does not install a settings section (row editor is the only surface)', t => !t.includes('installSection(')],
     ],
   },
+  {
+    id: 'subagents.start seam (workflow engine)',
+    file: 'packages/subagent/subagent/src/index.ts',
+    checks: [
+      // workflow-engine spawns children through this exact shape; a signature
+      // drift here silently breaks every workflow agent() call.
+      ['start takes the provider name positionally: start(name, request)', t => t.includes('async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>')],
+    ],
+  },
+  {
+    id: 'SubagentStartRequest / SubagentRun shape (workflow engine)',
+    file: 'packages/subagent/subagent/src/types.ts',
+    checks: [
+      // There is NO provider field on the request — the plugin passes it as the
+      // positional start() name. If a provider key ever appears here, reconcile
+      // lib/workflow-engine.js runAgent() before shipping.
+      ['request.prompt is a ContentBlock array; request.parent is the caller Agent', t => has('readonly prompt: ContentBlock[]', 'readonly parent: Agent')(blockOf(t, 'export interface SubagentStartRequest'))],
+      ['request carries outputSchema + agentOptions (facade opts.schema / opts.model)', t => has('readonly outputSchema?: ObjectJsonSchema', 'readonly agentOptions?: AgentOptions')(blockOf(t, 'export interface SubagentStartRequest'))],
+      ['SubagentRun exposes result + dispose()', t => has('readonly result: Promise<SubagentResult>', 'dispose(): Promise<void>')(blockOf(t, 'export interface SubagentRun {'))],
+      ["stopReason map keeps 'completed' (non-completed maps to a null step outcome)", t => /completed: 'completed'/.test(blockOf(t, 'export interface SubagentStopReasonMap'))],
+    ],
+  },
+  {
+    id: 'jobs.start hook contract (workflow run bridging)',
+    file: 'packages/jobs/jobs/src/types.ts',
+    checks: [
+      ['JobStart.run() returns JobHooks synchronously', t => t.includes('run(): JobHooks')],
+      ['JobHooks.cancel is sync + done is Promise<JobOutcome>', t => has('cancel(reason?: string): void', 'done: Promise<JobOutcome>')(blockOf(t, 'export interface JobHooks'))],
+      ["JobOutcome.status is 'completed' | 'killed' | 'failed' (workflow-runs maps run status onto these)", t => t.includes("status: 'completed' | 'killed' | 'failed'")],
+    ],
+  },
+  {
+    id: 'tool registry duplicate-name throw (workflow_admin naming)',
+    file: 'packages/core/tools/src/index.ts',
+    checks: [
+      // register() rejects duplicates within the global layer — the plugin's
+      // tool must never collide with the builtin tool-workflow default name.
+      ['register() rejects duplicate tool names', t => t.includes('is already registered')],
+    ],
+  },
+  {
+    id: 'scope layer duplicate insert (NamedEntries)',
+    file: 'packages/core/scope/src/store.ts',
+    checks: [
+      ['NamedEntries.insert throws instead of shadowing', t => t.includes('if (data.has(name)) throw this.duplicateError(name)')],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */

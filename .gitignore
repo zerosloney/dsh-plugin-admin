@@ -9,6 +9,7 @@ pnpm-debug.log*
 .host-check-tmp/
 out.txt
 .probe/
+*.tmp
 
 # cbx local tool state
 .cbx/

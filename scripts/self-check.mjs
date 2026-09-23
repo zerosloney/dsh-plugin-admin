@@ -428,25 +428,25 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Ten slot contributions: the 扩展插件 tab inside the shell-owned 插件
+// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
 // section, the standalone 技能 / Web 搜索 / MCP服务器 / 子智能体 /
-// 命令与钩子 / 用量仪表盘 / 定时任务 / Webhook 触发 settings sections, and
-// the 待办清单 dock above the composer. Neither the Codex bridge (a banner
-// inside the 命令与钩子 钩子 tab) nor the Agent preset editor (the shell's own
-// ui-agent-preset section owns that roster) gets a section of its own — and
-// 工作区 / 历史会话 are DOM-merged into dsh's own 已归档会话 page instead of
-// registering nav rows of their own.
-assert.equal(injectedSections.length, 10, 'ten slot contributions injected')
+// 命令与钩子 / 用量仪表盘 / 定时任务 / Webhook 触发 / 工作流 settings
+// sections, and the 待办清单 dock above the composer. Neither the Codex bridge
+// (a banner inside the 命令与钩子 钩子 tab) nor the Agent preset editor (the
+// shell's own ui-agent-preset section owns that roster) gets a section of its
+// own — and 工作区 / 历史会话 are DOM-merged into dsh's own 已归档会话 page
+// instead of registering nav rows of their own.
+assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×8), settings.plugins.tab, and conversation.input.dock',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×9), settings.plugins.tab, and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 10, 'ten registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + cron tasks + webhook triggers + todo dock')
+assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + cron tasks + webhook triggers + workflow engine + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'] && byId['cron-tasks'], 'expected registration ids present')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'] && byId['cron-tasks'] && byId['workflow-engine'], 'expected registration ids present')
 assert.equal(byId['session-history'], undefined, '历史会话 no longer registers a settings section of its own')
 assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
 
@@ -1145,7 +1145,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length + 1, 'every plugin settings section plus the official 已归档会话 row got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 8, `eight settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
+assert.ok(pluginSectionLabels.length === 9, `nine settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
 assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
 assert.equal(archivedNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), '已归档会话', 'the official archived-sessions row carries the clock icon')
@@ -1227,17 +1227,17 @@ fallbackDialog.appendChild(document.createElement('div'))
 document.body.appendChild(fallbackDialog)
 await new Promise((resolve) => setTimeout(resolve, 120))
 
-assert.equal(injectedSections.length, 12, 'the fallback injects the two retired sections')
-const fallbackInjections = injectedSections.slice(10)
+assert.equal(injectedSections.length, 13, 'the fallback injects the two retired sections on top of the eleven live ones')
+const fallbackInjections = injectedSections.slice(11)
 assert.deepEqual(fallbackInjections.map((i) => i.key), ['settings.section', 'settings.section'], 'fallback waits on settings.section')
 fallbackInjections.forEach((i) => i.callback())
-const fallbackIds = registeredSections.slice(10).map((e) => e.options.id).sort()
+const fallbackIds = registeredSections.slice(11).map((e) => e.options.id).sort()
 assert.deepEqual(fallbackIds, ['session-history', 'workspaces'], 'fallback registers 历史会话 + 工作区')
 assert.ok(registeredSections.some((e) => e.options.id === 'session-history' && e.options.order === 100), 'fallback 历史会话 keeps order 100')
 assert.ok(registeredSections.some((e) => e.options.id === 'workspaces' && e.options.order === 22), 'fallback 工作区 keeps order 22')
 // One-shot: further dialog churn never re-registers the same ids.
 await new Promise((resolve) => setTimeout(resolve, 80))
-assert.equal(injectedSections.length, 12, 'the fallback fires once')
+assert.equal(injectedSections.length, 13, 'the fallback fires once')
 document.body.removeChild(fallbackDialog)
 
 // 12. MCP editor: edit an existing server, fill it via the React onChange
@@ -1835,7 +1835,7 @@ exportsEn.apply({
   },
 })
 injectedEn.forEach((i) => i.callback())
-assert.equal(registeredEn.length, 10, 'en mode also registers ten sections')
+assert.equal(registeredEn.length, 11, 'en mode also registers eleven sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
 assert.equal(byIdEn.extensions.options.label, 'Extensions', 'en nav label for the extensions tab')
