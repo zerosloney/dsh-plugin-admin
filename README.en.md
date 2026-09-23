@@ -79,6 +79,11 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 4. Lifecycle: **⏹ Stop** a running card; stopped / errored runs offer **▶ Resume** and **✏️ Rebuild** (rewrite the script — finished steps hit the fingerprint cache and cost no subagent calls); run details poll live (2s). Resume/rebuild re-resolve the run's **original parent session** (a clear error names the session id when it is offline; pass another live session to override); stopped / errored runs stay listed and resumable after a host restart (orphans marked `orphaned`).
 5. Library: **Save** scripts to the library — global `$DSH_HOME/workflows/saved/` or per-project `<workspace>/.dsh/workflows/` (travels with the repo; project overrides global on a name clash); **🚀 Run** launches a saved script in one click.
 6. Agent tool: the model-invocable `workflow_admin` (one tool + an action enum) — create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved; `eval` dry-runs synchronously with a stubbed agent (zero subagent cost) so the model can validate syntax and control flow first; `wait: true` blocks until the run settles and returns a summary. The name deliberately avoids dsh's builtin `workflow` tool (duplicate registration in the global layer throws).
+7. Save-scope auto-detection (mirrors ZCode's SaveWorkflow): when a session saves through the tool without an explicit scope, a calling session with a cwd saves to the **project** `.dsh/workflows/`; when undetectable (no calling session / no cwd) the tool replies `needsScopeChoice` so the model relays the question — project or global — and retries with the user's choice. `delete_saved` mirrors the same detection (project first, then global) and reports which scope it actually deleted.
+8. Slash command: `/workflow` registers **automatically on plugin mount** (zero config; a name clash only degrades with a warning) —
+   - `/workflow` (or `list`): list the library (the current session's project `.dsh` first, then global) and live runs;
+   - `/workflow run <name> [argsJSON]`: start a saved workflow in the current session (background; check `/workflow runs`);
+   - `/workflow runs`: list runs (newest first); `/workflow stop <runId>`: stop one.
 7. Dependency & persistence: TS scripts need esbuild (declared as a peer dependency, installed with the plugin; plain JS needs nothing). Runs and the library live under `$DSH_HOME/workflows/{runs,saved}/`.
 
 ### ⌨️ Commands & Hooks
@@ -151,7 +156,7 @@ pnpm dsh --profile web                               # restart to load
 ## Tests
 
 ```sh
-npm test   # 26 scripts: self-check / host-check / verify-* / integration-check
+npm test   # 27 scripts: self-check / host-check / verify-* / integration-check
 ```
 
 - `integration-check.mjs` probes the real dsh checkout source for contract drift (77 assertions across every admin RPC namespace and the workflow engine seams).

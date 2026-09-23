@@ -68,13 +68,20 @@ function fakeRegistry(overrides = {}) {
 
 function fakeLibrary() {
   const calls = []
+  // scope-aware：项目 / 全局是两个命名空间（与真实库一致），getSaved 项目优先。
   const store = new Map()
+  const keyOf = (scope, name) => `${scope === 'project' ? 'project' : 'global'}:${name}`
   return {
     calls,
-    listSaved(ws) { calls.push({ op: 'listSaved', ws }); return [...store.values()] },
-    getSaved(name, ws) { calls.push({ op: 'getSaved', name, ws }); return store.get(name) || null },
-    async saveSaved(spec) { calls.push({ op: 'saveSaved', spec }); store.set(spec.name, { ...spec, updatedAt: 1 }); return store.get(spec.name) },
-    deleteSaved(name, scope, ws) { calls.push({ op: 'deleteSaved', name, scope, ws }); return store.delete(name) },
+    listSaved(ws) { calls.push({ op: 'listSaved', ws }); return [...store.values()].map((r) => ({ ...r, scope: ws ? r.scope : 'global' })) },
+    getSaved(name, ws) {
+      calls.push({ op: 'getSaved', name, ws })
+      if (ws) { const p = store.get(keyOf('project', name)); if (p) return { ...p, scope: 'project' } }
+      const g = store.get(keyOf('global', name))
+      return g ? { ...g, scope: 'global' } : null
+    },
+    async saveSaved(spec) { calls.push({ op: 'saveSaved', spec }); const rec = { ...spec, updatedAt: 1 }; store.set(keyOf(spec.scope, spec.name), rec); return { ...rec } },
+    deleteSaved(name, scope, ws) { calls.push({ op: 'deleteSaved', name, scope, ws }); return store.delete(keyOf(scope, name)) },
   }
 }
 
@@ -217,10 +224,10 @@ await check('get returns the run or an error', async () => {
   assert.match(miss.error, /run not found/)
 })
 
-await check('save defaults to global scope, project uses the session cwd', async () => {
+await check('save honours explicit scope; project takes the session cwd', async () => {
   const library = fakeLibrary()
   const { tool } = mount(fakeRegistry(), library)
-  const g = JSON.parse(await tool.execute({ action: 'save', name: 'g1', script: 'return 1' }, exec))
+  const g = JSON.parse(await tool.execute({ action: 'save', name: 'g1', script: 'return 1', scope: 'global' }, exec))
   assert.equal(g.ok, true)
   assert.equal(g.record.scope, 'global')
   assert.equal(library.calls.find((c) => c.op === 'saveSaved' && c.spec.name === 'g1').spec.workspacePath, undefined, 'global needs no workspace')
@@ -234,6 +241,27 @@ await check('save defaults to global scope, project uses the session cwd', async
 
   const bad = JSON.parse(await tool.execute({ action: 'save', name: 'no script' }, exec))
   assert.match(bad.error, /requires a script/)
+})
+
+await check('save auto-detects project scope from the session cwd', async () => {
+  const library = fakeLibrary()
+  const { tool } = mount(fakeRegistry(), library)
+  // 未指定 scope + 会话有 cwd → 项目 .dsh（对齐 ZCode SaveWorkflow 的识别语义）。
+  const out = JSON.parse(await tool.execute({ action: 'save', name: 'auto', script: 'return 1' }, exec))
+  assert.equal(out.ok, true)
+  const call = library.calls.find((c) => c.op === 'saveSaved' && c.spec.name === 'auto')
+  assert.equal(call.spec.scope, 'project', 'cwd present → project scope')
+  assert.equal(call.spec.workspacePath, '/proj')
+})
+
+await check('save without a detectable cwd asks the user to choose', async () => {
+  const library = fakeLibrary()
+  const { tool } = mount(fakeRegistry(), library)
+  // 识别不了（无调用会话 / 会话无 cwd）→ 不瞎猜，回 needsScopeChoice 让模型转问用户。
+  const out = JSON.parse(await tool.execute({ action: 'save', name: 'g1', script: 'return 1' }, { agent: { id: 's1' } }))
+  assert.equal(out.needsScopeChoice, true)
+  assert.match(out.error, /ask the user/)
+  assert.equal(library.calls.length, 0, 'nothing saved')
 })
 
 await check('run_saved resolves from the library and starts', async () => {
@@ -259,9 +287,21 @@ await check('list_saved and delete_saved ride the library', async () => {
   const listed = JSON.parse(await tool.execute({ action: 'list_saved' }, exec))
   assert.deepEqual(listed.saved.map((r) => r.name), ['s1'])
 
+  // 无 scope 的删除与读取同序：项目优先、回退全局，并回报实际删掉的一级。
   const del = JSON.parse(await tool.execute({ action: 'delete_saved', name: 's1' }, exec))
   assert.equal(del.ok, true)
-  assert.equal(library.calls.find((c) => c.op === 'deleteSaved').scope, 'global')
+  assert.equal(del.scope, 'global', 'project missed → global fallback reports the deleted scope')
+  assert.deepEqual(
+    library.calls.filter((c) => c.op === 'deleteSaved').map((c) => c.scope),
+    ['project', 'global'],
+    'project-first detection order',
+  )
+
+  // 显式 scope 只删那一级。
+  await library.saveSaved({ name: 's2', scope: 'global', script: 'x' })
+  const del2 = JSON.parse(await tool.execute({ action: 'delete_saved', name: 's2', scope: 'global' }, exec))
+  assert.deepEqual(del2, { ok: true, scope: 'global' })
+  assert.equal(library.calls.filter((c) => c.op === 'deleteSaved' && c.name === 's2').length, 1, 'explicit scope deletes only that scope')
 })
 
 await check('answer action forwards to registry.answer', async () => {
