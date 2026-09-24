@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.22.0 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.23.0 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 
 ## Feature overview
@@ -133,8 +133,8 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 
 | Plugin | dsh | Status |
 |---|---|---|
-| v1.22.0 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; no official 已归档会话 page → 历史会话 / 工作区 fall back to their own rows |
-| v1.22.0 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (`unarchiveSession` + the official 已归档会话 page the session-history panel merges into) |
+| v1.23.0 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; no official 已归档会话 page → 历史会话 / 工作区 fall back to their own rows |
+| v1.23.0 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (`unarchiveSession` + the official 已归档会话 page the session-history panel merges into) |
 
 - **Newest dsh release: 0.1.6-alpha.2** (alpha pre-release; the `latest` tag is still 0.1.5-rc.2). Upgrade: `npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`.
 - **The official 已归档会话 page needs dsh ≥ 0.1.6-alpha.2** (it arrived with `dsh-client-ui-settings-unarchive-sessions`): 0.1.5-rc.2 and earlier ship no such page, so the plugin detects that and falls back — registering 历史会话 / 工作区 as their own sidebar sections again, keeping both panels reachable.
