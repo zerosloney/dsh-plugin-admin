@@ -4,7 +4,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 > 面板文案内置简体/English 双语（扩展插件面板工具栏 🌐 切换，跟随浏览器语言，回退中文原文，永不出坏）。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.23.0 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.23.1 · MIT
 
 ## 功能总览
 
@@ -134,8 +134,8 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 | 插件版本 | dsh 版本 | 状态 |
 |---|---|---|
-| v1.23.0 | **0.1.5-rc.2**（`latest` 标签，验证基线） | ✅ 全功能；无官方「已归档会话」页 → 历史会话 / 工作区 回退为独立入口 |
-| v1.23.0 | **0.1.6-alpha.2**（`alpha` 标签，最新发布） | ✅ 全功能（含 `unarchiveSession` + 官方「已归档会话」页，历史会话面板注入其中） |
+| v1.23.1 | **0.1.5-rc.2**（`latest` 标签，验证基线） | ✅ 全功能；无官方「已归档会话」页 → 历史会话 / 工作区 回退为独立入口 |
+| v1.23.1 | **0.1.6-alpha.2**（`alpha` 标签，最新发布） | ✅ 全功能（含 `unarchiveSession` + 官方「已归档会话」页，历史会话面板注入其中） |
 
 - **dsh 最新发布：0.1.6-alpha.2**（alpha 预发布；`latest` 标签仍为 0.1.5-rc.2）。升级命令：`npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`。
 - **「已归档会话」官方页需要 dsh ≥ 0.1.6-alpha.2**（随 `dsh-client-ui-settings-unarchive-sessions` 引入）：0.1.5-rc.2 及更早**没有该页**，插件检测到后自动回退——把「历史会话」「工作区」注册回独立侧边栏入口，面板照常可用。
