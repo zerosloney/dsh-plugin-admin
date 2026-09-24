@@ -206,6 +206,14 @@ await check('validation rejects: unknown provider / capability gaps / unknown to
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, toolFilter: { allow: ['read'], deny: ['read'] } }), envFor()), /同时出现在/)
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, toolFilter: {} }), envFor()), /不能为空对象/)
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, toolFilter: { deny: ['run_code'] } }), envFor()), /run_code/)
+  // 空名单不构成约束（{} 由上面的「不能为空对象」覆盖；空数组同样拒绝）。
+  assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, toolFilter: { allow: [] } }), envFor()), /空名单/)
+  assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, toolFilter: { deny: [] } }), envFor()), /空名单/)
+  // agentOptions 能力门：显式声明 agentOptions: false 的后端，模型指定与
+  // modelSelectionSettings（选择 UI 依赖 agentOptions）都拒绝。
+  const noAgentOptions = new Map([['spawn', { ...SPAWN, capabilities: { ...SPAWN.capabilities, agentOptions: false } }]])
+  assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, agentOptions: { model: 'x' } }), { ...envFor(), providers: noAgentOptions }), /不支持 agentOptions/)
+  assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, modelSelectionSettings: true }), { ...envFor(), modelSelectionAvailable: true, providers: noAgentOptions }), /不支持 agentOptions/)
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, unknownField: 1 }), envFor()), /未知字段/)
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, agentOptions: { maxTokens: -5 } }), envFor()), /maxTokens/)
   assert.throws(() => validateEntryInput(entryOf('ok1', { ...good, maxDepth: 'nope' }), envFor()), /maxDepth/)
@@ -426,6 +434,11 @@ await check('validateCliConfig: shape, enums, env keys', () => {
   assert.throws(() => validateCliConfig(codex, { nope: 1 }), /未知字段/)
   assert.throws(() => validateCliConfig(codex, { permissionMode: 'yolo' }), /permissionMode/)
   assert.throws(() => validateCliConfig(codex, { disposeGraceMs: -1 }), /disposeGraceMs/)
+  // Node 定时器上限契约（对齐 dsh assertPositiveFinite + MAX_TIMER_DELAY_MS）：
+  // 0 与超上限都拒绝，恰好上限收货。
+  assert.throws(() => validateCliConfig(codex, { disposeGraceMs: 0 }), /disposeGraceMs/)
+  assert.throws(() => validateCliConfig(codex, { disposeGraceMs: 2147483648 }), /disposeGraceMs/)
+  assert.doesNotThrow(() => validateCliConfig(codex, { disposeGraceMs: 2147483647 }))
   assert.throws(() => validateCliConfig(codex, { providerName: 'Bad Name' }), /providerName/)
   assert.throws(() => validateCliConfig(codex, { env: { 'BAD KEY': 'v' } }), /env 键名/)
   assert.throws(() => validateCliConfig(codex, { env: { OK: 5 } }), /必须是字符串/)
@@ -586,15 +599,19 @@ await check('apply(): generic cliUpsert/cliRemove persist cli.json and register 
   try {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
     const registered = { provided: null, providers: [] }
+    const spawnedArgv = []
     const fakeSubprocess = {
-      spawn: () => ({
-        collected: {
-          stdout: { readFrom: () => ({ text: 'ok' }) },
-          stderr: { readFrom: () => ({ text: '' }) },
-        },
-        done: Promise.resolve({ exitCode: 0 }),
-        terminate: async () => {},
-      }),
+      spawn: (spec) => {
+        spawnedArgv.push(spec.argv)
+        return {
+          collected: {
+            stdout: { readFrom: () => ({ text: 'ok' }) },
+            stderr: { readFrom: () => ({ text: '' }) },
+          },
+          done: Promise.resolve({ exitCode: 0 }),
+          terminate: async () => {},
+        }
+      },
     }
     const ctx = {
       baseUrl: dir,
@@ -622,6 +639,16 @@ await check('apply(): generic cliUpsert/cliRemove persist cli.json and register 
     assert.equal(registered.providers.length, 1)
     assert.equal(registered.providers[0].name, 'cli-gemini')
     assert.ok(existsSync(join(dir, 'subagent-admin.cli.json')), 'cli.json persisted')
+
+    // 同一 backendId 的配置更新必须重建活动 provider：旧实现 ensureGenericProvider
+    // 对已挂 id 早退——文件已改，活动 provider 仍跑首挂的 argv，重启前不生效。
+    const updated = await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-gemini', config: { command: 'gemini', args: ['-m', 'x', '{prompt}'] } } })
+    assert.equal(updated.ok, true)
+    assert.equal(registered.providers.length, 2, 'update remounted the live provider')
+    const cliHandle = await registered.providers[1].start({ prompt: [{ type: 'text', text: 'hi' }], signal: new AbortController().signal })
+    const cliOutcome = await cliHandle.result
+    assert.equal(cliOutcome.stopReason, 'completed')
+    assert.deepEqual(spawnedArgv.at(-1), ['gemini', '-m', 'x', 'hi'], 'the remounted provider runs the NEW argv template')
 
     await assert.rejects(
       () => service.cliUpsert({ payload: { kind: 'generic', config: { command: 'qwen', providerName: 'spawn' } } }),

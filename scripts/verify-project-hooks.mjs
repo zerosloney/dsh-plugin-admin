@@ -247,6 +247,19 @@ try {
     assert.equal(entered.messages[1].content[0].text, 'ctx-for-model')
   })
 
+  await check('UserPromptSubmit: an empty message batch delegates without running hooks', async () => {
+    // 镜像官方桥 hooks-claude-code 的空批次守卫：后台 step（无用户提交）不跑
+    // hook、不注入、不消费 shell 队列——直接透传 downstream 决定。
+    writeHooks({ UserPromptSubmit: [{ hooks: [{ command: 'p.sh' }] }] })
+    ctx.shell.queue({ exitCode: 2, stdout: { text: '' }, stderr: { text: 'hook must not run' } })
+    const downstreamMessage = { id: 'm0', role: 'user', content: [] }
+    const passed = await ctx.listeners.get('agent/pre-step')({ agent, messages: [], signal: signalOf() }, async () => ({ kind: 'enter', messages: [downstreamMessage] }))
+    assert.deepEqual(passed, { kind: 'enter', messages: [downstreamMessage] }, 'downstream decision forwarded untouched')
+    // 显式消费掉脚本条目：既证明空批次没碰它，也不让残留泄漏进后续用例。
+    const leftover = await ctx.shell.run({ argv: ['drain'] })
+    assert.equal(leftover.stderr.text, 'hook must not run', 'the queued hook command was never executed by the empty batch')
+  })
+
   await check('PostToolUse: deny blocks with feedback; context prepends downstream', async () => {
     writeHooks({ PostToolUse: [{ hooks: [{ command: 'q.sh' }] }] })
     ctx.shell.queue({ exitCode: 2, stdout: { text: '' }, stderr: { text: 'undo that' } })

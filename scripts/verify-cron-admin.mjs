@@ -381,6 +381,32 @@ try {
     const listed = await ctx.provided.cronAdmin.list()
     assert.ok(listed.history.some(h => h.taskId === 'every-minute' && h.ok === true), 'fire recorded in history')
   })
+
+  check('runNow on an armed task leaves no orphan timer (no double fire)', async () => {
+    await ctx.provided.cronAdmin.upsert({
+      id: 'no-orphan',
+      cron: '* * * * *',
+      action: { mode: 'steer', sessionId: 'live' },
+      promptTemplate: 'no-orphan tick',
+    })
+    // 定时器仍在途时手动触发：旧实现 fire() 只删记录不清 setTimeout，边界到点
+    // 时孤儿定时器与重排的新定时器同时执行 → 本任务 fired 三次（runNow + 双发）。
+    // 修复后恰好两次：runNow 一次 + 边界自然触发一次。
+    await ctx.provided.cronAdmin.runNow('no-orphan')
+    const countOf = () => fired.filter(m => String(m.content?.[0]?.text || m).includes('no-orphan')).length
+    assert.equal(countOf(), 1, 'runNow fired exactly once')
+    const deadline = Date.now() + 70_000
+    while (countOf() < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    assert.equal(countOf(), 2, 'the boundary fire landed, and only one')
+    // 边界双发会在同一 tick 内落地——留一小段窗口确认没有第二发。
+    await new Promise(resolve => setTimeout(resolve, 3_000))
+    assert.equal(countOf(), 2, 'no orphan-timer double fire at the boundary')
+    const listed = await ctx.provided.cronAdmin.list()
+    const entries = listed.history.filter(h => h.taskId === 'no-orphan' && h.ok === true)
+    assert.equal(entries.length, 2, 'history records runNow + the single boundary fire')
+  })
 } finally {
   await settle()
   rmSync(fireHome, { recursive: true, force: true })

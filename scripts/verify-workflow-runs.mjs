@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRunRegistry } from '../lib/workflow-runs.js'
@@ -66,7 +66,7 @@ function makeCtx({ slow = false } = {}) {
   }
 }
 
-function makeRegistry(ctx, dshHome) {
+function makeRegistry(ctx, dshHome, opts = {}) {
   let seq = 0
   const queue = []
   let tail = Promise.resolve()
@@ -75,7 +75,7 @@ function makeRegistry(ctx, dshHome) {
     tail = run.catch(() => {})
     return run
   }
-  return createRunRegistry({ ctx, enqueue, dshHome, maxConcurrency: 4 })
+  return createRunRegistry({ ctx, enqueue, dshHome, maxConcurrency: 4, ...opts })
 }
 
 // ─── 运行 ─────────────────────────────────────────────────────────────────────
@@ -347,6 +347,43 @@ await check('get returns journal log for live run', async () => {
   assert.ok(Array.isArray(rec.log), 'log present')
   assert.ok(rec.log.some((l) => l.message === 'starting'), 'log has start entry')
   assert.ok(rec.log.some((l) => l.message === 'done'), 'log has done entry')
+})
+
+await check('traversal-shaped runIds read as absent, not as arbitrary files', async () => {
+  const home = join(tmpBase, 'trav')
+  // 在 runs 目录外放一个诱饵：无守卫时 `../../secret` 恰好读到它。
+  mkdirSync(join(home, 'workflows', 'runs'), { recursive: true })
+  writeFileSync(join(home, 'workflows', 'secret.json'), JSON.stringify({ id: 'stolen', script: 'stolen' }), 'utf8')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  assert.equal(r.get('../../secret'), null, 'relative traversal must read as absent')
+  assert.equal(r.get('..\\..\\secret'), null, 'backslash traversal must read as absent')
+  assert.equal(r.get('C:\\tmp\\secret'), null, 'absolute path reset must read as absent')
+  assert.equal(r.get('wf_1_abc/../../secret'), null, 'suffixed escape must read as absent')
+  assert.equal(r.get(['proto', 'array']), null, 'non-string runId must read as absent')
+  await assert.rejects(() => r.amend('../../secret', 'return 1'), /not found/, 'amend refuses traversal id')
+  await assert.rejects(() => r.resume('..\\..\\secret'), /not found/, 'resume refuses traversal id')
+})
+
+await check('stop gives up waiting on an abort-ignoring script (abandoned, not hung); amend refuses', async () => {
+  const home = join(tmpBase, 'stop-hang')
+  const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
+  const { id } = await r.start({
+    // 永不观察取消信号：abort 传不进这个 await。
+    script: `await new Promise(() => {})`,
+    parent: { id: 'sess-hang' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const started = Date.now()
+  const result = await r.stop(id, 'test')
+  const elapsed = Date.now() - started
+  assert.equal(result.stopped, true)
+  assert.equal(result.abandoned, true, 'non-interruptible run reports abandoned instead of hanging stop')
+  assert.ok(elapsed < 5000, `stop should return at the budget, took ${elapsed}ms`)
+  await assert.rejects(
+    () => r.amend(id, 'return 1'),
+    /did not settle/,
+    'amend refuses a run that never settled (double-run guard)',
+  )
 })
 
 // ─── P4b：ask / answer 提问链路 ───────────────────────────────────────────────

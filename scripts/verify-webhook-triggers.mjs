@@ -23,7 +23,7 @@
  * Run: node scripts/verify-webhook-triggers.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -362,6 +362,39 @@ await checkAsync('HTTP handler: create-mode without runtime fails 503', async ()
   const res = mockRes()
   await handler(jsonRequest({ ruleId: 'nightly' }), res)
   assert.equal(res.statusCode, 503)
+})
+
+await checkAsync('HTTP handler: mismatched x-webhook-event skips without steering and does not consume the delivery id', async () => {
+  const before = steered.length
+  // ci-fail listens on event 'push'; a different event name must not steer.
+  const res = mockRes()
+  await handler(jsonRequest({ event: 'other', delivery: 'evt-mismatch-1' }), res)
+  assert.equal(res.statusCode, 202, 'a routing decision, not a sender-retryable failure')
+  const payload = JSON.parse(res.body)
+  assert.equal(payload.skipped, 'event-mismatch')
+  assert.equal(payload.expected, 'push')
+  assert.equal(steered.length, before, 'no steer on event mismatch')
+  // The skipped delivery id must NOT be consumed by the dedup claim: the same
+  // id arriving later with the matching event still executes.
+  const ok = mockRes()
+  await handler(jsonRequest({ delivery: 'evt-mismatch-1' }), ok)
+  assert.equal(ok.statusCode, 202)
+  assert.ok(!ok.body.includes('duplicate'), 'same delivery id after a skipped mismatch still executes')
+  assert.equal(steered.length, before + 1, 'matching event steers')
+  // The mismatch is recorded in history as a failed entry naming the expectation.
+  const listed = await ctx.provided.webhookAdmin.list()
+  const mismatch = listed.history.find(h => h.deliveryId === 'evt-mismatch-1')
+  assert.ok(mismatch, 'mismatch recorded in history')
+  assert.equal(mismatch.ok, false)
+  assert.match(mismatch.error, /事件名不匹配/)
+})
+
+await checkAsync('rules file is written 0600 on POSIX (secret is the only direct-path credential)', async () => {
+  if (process.platform === 'win32') return   // mode is a no-op under Windows ACLs
+  await ctx.provided.webhookAdmin.saveRule({ id: 'perm-probe', secret: 'topsecret-key-16chars', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+  assert.equal(existsSync(storagePath), true, 'rules file persisted')
+  const mode = statSync(storagePath).mode & 0o777
+  assert.equal(mode, 0o600, 'writeFileSync mode must survive the temp+rename round-trip')
 })
 
 await checkAsync('HTTP handler: endpointOnline flips true with webServer present', async () => {

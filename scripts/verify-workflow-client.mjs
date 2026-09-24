@@ -229,10 +229,10 @@ await checkAsync('compile diagnostics surface in editor', async () => {
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    // 网关形状：宿主载荷包在 { ok, value } 里（真实 rpc.call 的返回即此形状）。
     'workflowAdmin/startRun': (spec) => ({
-      id: null,
-      status: 'errored',
-      diagnostics: [{ category: 'error', message: 'Unexpected token' }],
+      ok: true,
+      value: { id: null, status: 'errored', diagnostics: [{ category: 'error', message: 'Unexpected token' }] },
     }),
   }
   const call = makeCall(rpc)
@@ -245,6 +245,44 @@ await checkAsync('compile diagnostics surface in editor', async () => {
   submit.click()
   await new Promise((r) => setTimeout(r, 50))
   assert.ok(panel.text().includes('Unexpected token'), 'diagnostic shown in editor')
+  panel.unmount()
+})
+
+await checkAsync('successful start switches to runs tab via the gateway envelope', async () => {
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [{ id: 'wf_1_abc', label: 'w', status: 'running' }] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_9_xyz', status: 'running', diagnostics: [] } }),
+  }
+  const call = makeCall(rpc)
+  const panel = renderPanel(call)
+  await new Promise((r) => setTimeout(r, 30))
+  const newBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('新建工作流'))
+  newBtn.click()
+  await new Promise((r) => setTimeout(r, 30))
+  const submit = [...panel.queryAll('button')].find((b) => b.textContent.includes('🚀 启动'))
+  submit.click()
+  await new Promise((r) => setTimeout(r, 50))
+  // toast 渲染在 document.body 单例上，不在面板容器内。
+  assert.ok(document.body.textContent.includes('🚀 工作流已启动'), 'success toast shown')
+  assert.ok(panel.text().includes('w'), 'switched to the runs tab (run row visible)')
+  panel.unmount()
+})
+
+await checkAsync('stop surfaces the abandoned warning from the envelope', async () => {
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [{ id: 'wf_1_abc', label: 'w', status: 'running' }] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/stopRun': () => ({ ok: true, value: { stopped: true, reason: 'panel', abandoned: true } }),
+  }
+  const call = makeCall(rpc)
+  const panel = renderPanel(call)
+  await new Promise((r) => setTimeout(r, 30))
+  const stopBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('⏹'))
+  assert.ok(stopBtn, 'stop button rendered for the active run')
+  stopBtn.click()
+  await new Promise((r) => setTimeout(r, 50))
+  assert.ok(document.body.textContent.includes('未在预算内落定'), 'abandoned warning shown')
   panel.unmount()
 })
 

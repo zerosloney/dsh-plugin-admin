@@ -315,7 +315,9 @@ await checkAsync('5. a throwing scope read is reported per scope and the roster 
   const scope = view.scopes.find((s) => s.kind === 'session')
   assert.equal(scope.error, 'provider blew up')
   assert.equal(scope.count, 0)
-  assert.equal(view.complete, true, 'a thrown read is a scope fault, not an incomplete observation')
+  // #14 诚实语义：抛错的读 = 该作用域一整个技能层缺失。错误仍按作用域展示，
+  // 但聚合 complete 必须翻 false——「名册完整」与「有层没读到」不能同时成立。
+  assert.equal(view.complete, false, 'a thrown read drops a whole layer, so the roster is not complete')
 })
 
 await checkAsync('6. complete:false propagates and the session cap warns', async () => {

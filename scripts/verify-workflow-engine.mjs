@@ -244,6 +244,72 @@ await checkAsync('require / import are blocked in sandbox', async () => {
   await assert.rejects(() => compileScript(`return import_('node:fs')`).then(({ code }) => run(code, {})), /import\(\) is not available/)
 })
 
+await checkAsync('vm realm hides host globals (process/fetch unreachable, realm eval stays inside)', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`
+    const realmEval = ({}).constructor.constructor
+    // realm 内求值 return process：要么 undefined（未泄漏），要么直接抛
+    // ReferenceError——唯一算失败的结果是拿到一个宿主对象。
+    let escaped
+    try { escaped = typeof realmEval('return process')() } catch { escaped = 'threw' }
+    return {
+      process: typeof process,
+      fetch: typeof fetch,
+      // require / import_ 是 FACADE_PARAMS 注入的 realm 内抛错桩（typeof 为
+      // function 属预期）；「调用即抛」由上面的 block 用例覆盖。
+      escaped,
+    }
+  `)
+  const value = await run(code, {})
+  assert.equal(value.process, 'undefined', 'process must be unreachable')
+  assert.equal(value.fetch, 'undefined', 'fetch must be unreachable')
+  assert.ok(value.escaped === 'undefined' || value.escaped === 'threw', `realm-Function escape probe must not reach host process (got ${value.escaped})`)
+})
+
+await checkAsync('dynamic import() does not reach host modules', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`return (await import('node:fs')).existsSync`)
+  await assert.rejects(() => run(code, {}), /import/i)
+})
+
+await checkAsync('unserializable result rejects instead of poisoning persistence', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`const a = {}; a.self = a; return a`)
+  await assert.rejects(() => run(code, {}), /JSON-serializable/)
+})
+
+await checkAsync('result crosses the realm as a plain host object', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`return { nested: { ok: true, miss: undefined }, list: [1, 'two'] }`)
+  const value = await run(code, {})
+  assert.deepEqual(value, { nested: { ok: true }, list: [1, 'two'] })
+  assert.equal(Object.getPrototypeOf(value), Object.prototype, 'must be a host plain object, not a realm object')
+})
+
+await checkAsync('report() degrades unserializable values but the run continues', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const logs = []
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+    onLog: (e) => logs.push(e),
+  })
+  const { code } = await compileScript(`const a = {}; a.self = a; report('boom', a); return 'done'`)
+  const value = await run(code, {})
+  assert.equal(value, 'done', 'unserializable report must not kill the run')
+  const entry = logs.find((l) => l.kind === 'report' && l.key === 'boom')
+  assert.ok(entry, 'report entry logged')
+  assert.match(String(entry.value), /unserializable report value/)
+})
+
 await checkAsync('args are passed through', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
@@ -351,6 +417,18 @@ await checkAsync('a hung script is cut off by the timeout', async () => {
   )
   const elapsed = Date.now() - start
   assert.ok(elapsed < 2000, `timeout should fire near timeoutMs, took ${elapsed}ms`)
+})
+
+await checkAsync('caller abort cuts eval well before the hard timeout', async () => {
+  const controller = new AbortController()
+  const start = Date.now()
+  setTimeout(() => controller.abort('test'), 80)
+  await assert.rejects(
+    () => evalSnippet(`await new Promise(() => {})`, { timeoutMs: 10_000, signal: controller.signal }),
+    /eval aborted/,
+  )
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 5000, `caller abort should cut eval promptly, took ${elapsed}ms`)
 })
 
 // ─── 结果 ─────────────────────────────────────────────────────────────────────

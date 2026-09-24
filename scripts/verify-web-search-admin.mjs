@@ -369,6 +369,46 @@ assert.ok(/searchProvider: deepseek-official/.test(after12),
   'inline config: uninstalling the active provider still repairs the dangling id')
 console.log('scenario 12 OK: an inline config row is read and repaired')
 
+// ---------- Scenario 12b: a line-end comment must not break flow configs ---
+// `config: {...} # note` — the trailing comment used to make the flow-map
+// regex miss: the reader saw an unset row, and the rewriter dropped every
+// sibling key on the next save (both the web row and the per-provider
+// config-editor row).
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  "  config: { searchProvider: exa, fetchProvider: http, timeoutMs: 30000 } # prod values",
+  '',
+].join('\n'), 'utf8')
+const active12b = await service.active()
+assert.equal(active12b.searchProvider, 'exa', 'commented flow config: searchProvider is read')
+assert.equal(active12b.fetchProvider, 'http', 'commented flow config: fetchProvider is read')
+await service.setActive('perplexity')
+const after12b = readFileSync(patchPath, 'utf8')
+assert.ok(/^ {4}timeoutMs: 30000$/m.test(after12b), 'commented flow config: sibling key survives the rewrite')
+assert.ok(/^ {4}searchProvider: perplexity$/m.test(after12b), 'commented flow config: the new provider lands')
+console.log('scenario 12b OK: a line-end comment does not break the web-row flow config')
+
+writeFileSync(patchPath, [
+  '# test patch',
+  '- insert:',
+  "    - id: web-search-perplexity",
+  "      name: '@deepseek-ai/dsh-web-search-perplexity'",
+  '      config: { searchRecency: month, customKept: keep-me } # tuned',
+  '',
+].join('\n'), 'utf8')
+const cfg12b = await service.config('perplexity')
+const fields12b = Object.fromEntries(cfg12b.fields.map((f) => [f.key, f]))
+assert.equal(fields12b.searchRecency.value, 'month', 'commented entry config: keys are read')
+const saved12b = await service.saveConfig('perplexity', { model: 'sonar-pro' }, [])
+assert.deepEqual(saved12b.changed, ['model'], 'commented entry config: only the requested key changed')
+const after12b2 = readFileSync(patchPath, 'utf8')
+assert.ok(/^ {8}customKept: keep-me$/m.test(after12b2), 'commented entry config: sibling key survives the rewrite')
+assert.ok(/^ {8}searchRecency: month$/m.test(after12b2), 'commented entry config: untouched keys keep their values')
+assert.ok(/^ {8}model: "sonar-pro"$/m.test(after12b2), 'commented entry config: the new key lands')
+console.log('scenario 12b OK: the config-editor path tolerates a line-end comment too')
+
 // ---------- Scenario 13: config() reads a provider's own Config keys --------
 // Exa / Perplexity register NO dsh settings section, so their `cordis.patch.yml`
 // row is the only configuration surface there is. The read pairs the row's
