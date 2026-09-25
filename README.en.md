@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 > 🇨🇳 完整中文文档（本文件为同步摘要）: [README.md](./README.md)
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.23.1 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.24.0 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 
 ## Feature overview
@@ -129,24 +129,6 @@ All panels live in the dsh settings dialog → the matching nav item (each panel
 2. Use: check items off (strikethrough + progress bar), per-item live timers, collapse the done section; the bell (top-right) fires a desktop notification when backgrounded work completes.
 3. Git file-change footer: branch badge + per-file ±lines; **⧉ Copy diff**; click a file row to reveal it in the system file manager.
 
-## Version compatibility (pinned)
-
-| Plugin | dsh | Status |
-|---|---|---|
-| v1.23.1 | **0.1.5-rc.2** (`latest` tag, verified baseline) | ✅ full; no official 已归档会话 page → 历史会话 / 工作区 fall back to their own rows |
-| v1.23.1 | **0.1.6-alpha.2** (`alpha` tag, newest published) | ✅ full (`unarchiveSession` + the official 已归档会话 page the session-history panel merges into) |
-
-- **Newest dsh release: 0.1.6-alpha.2** (alpha pre-release; the `latest` tag is still 0.1.5-rc.2). Upgrade: `npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`.
-- **The official 已归档会话 page needs dsh ≥ 0.1.6-alpha.2** (it arrived with `dsh-client-ui-settings-unarchive-sessions`): 0.1.5-rc.2 and earlier ship no such page, so the plugin detects that and falls back — registering 历史会话 / 工作区 as their own sidebar sections again, keeping both panels reachable.
-- **dsh-workspace in 0.1.5-rc.2 lacks `unarchiveSession`** (added in 0.1.6-alpha.2): the plugin still mounts (mount-time warning), deleting an archived session skips the archived-set cleanup, and the explicit unarchive gesture reports a clear error; upgrading to 0.1.6-alpha.2 restores full behavior.
-- Version-sensitive seams (re-run `npm test` after upgrading dsh/cordis — the verify scripts assert these against real contracts):
-  1. **workspaceRegistry verb surface** — `archiveSession` / `unarchiveSession` / `archivedSessionIds` (public verbs only, never the TS-private `requireState` / `setState`);
-  2. **Physical session-log layout** — the delete path derives the JSONL backend's directory (`projectKey` / `encodeSegment`); layout drift or a custom backend **refuses the delete** with a loud error;
-  3. **Hooks-bridge hot restart** — `fiber.update(config, true)` (cordis-internal); on failure the panel reports "saved — restart dsh to apply";
-  4. **Transparent wrap of `ctx.agents.create/resume`** — online-session delete needs the captured AgentHandle; an unwrappable member degrades to "restart dsh, then delete";
-  5. **Private readers** — `locate()` / `snapshotEvents()` / projection-cache table name; drift degrades to empty values / lists;
-  6. **Workflow seams** — the `subagents.start(name, request)` signature and request shape, `SubagentRun`, jobs `JobOutcome`, and the tool-registry duplicate-name throw (pinned by integration-check's 10 workflow probes; a drift fails loud by name).
-
 ## Install
 
 ```sh
@@ -160,7 +142,7 @@ pnpm dsh --profile web                               # restart to load
 npm test   # 27 scripts: self-check / host-check / verify-* / integration-check
 ```
 
-- `integration-check.mjs` probes the real dsh checkout source for contract drift (77 assertions across every admin RPC namespace and the workflow engine seams).
+- `integration-check.mjs` probes the real dsh checkout source for contract drift (78 assertions across every admin RPC namespace and the workflow engine seams).
 - Diagnostics (not in npm test): `node scripts/repro-delete-session.mjs` reproduces every session-delete failure mode (uncaptured live handle / layout drift / concurrent resume) to match panel errors; `node scripts/smoke-cron-panel.mjs` really mounts the Cron Tasks panel in jsdom (list / toggle / editor / preset / save).
 
 ## Security posture
