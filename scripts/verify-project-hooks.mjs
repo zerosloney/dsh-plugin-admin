@@ -299,6 +299,9 @@ try {
     await sleep(80)
     assert.equal(agent.injected.length, 1)
     assert.equal(agent.injected[0].content[0].text, 'boot ctx')
+    // dsh 0.1.7 (V4) refuses the retired `kind: 'plugin'` wrapper at session
+    // admission — the bridge must ride its own producer-owned kind instead.
+    assert.equal(agent.injected[0].source?.kind, 'plugin-admin', 'the injected message carries the producer-owned plugin-admin source kind')
   })
 
   await check('execution shape: stdin payload, workdir, env, substitution, timeout', async () => {

@@ -99,14 +99,14 @@ await check('apply() injects styles and registers the 子智能体 settings sect
   assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the nine settings sections + the todo dock',
+    ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
+    'unified apply injects the three settings sections + six plugins-page tabs + the todo dock',
   )
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')
   assert.ok(registration, 'subagent-admin registration present')
   assert.equal(registration.declaration.label, '子智能体')
-  assert.equal(registration.declaration.order, 26)
+  assert.equal(registration.declaration.order, 50)
 })
 
 /* 4 ── mock host: in-memory subagentAdmin remote with the real semantics.
@@ -277,15 +277,16 @@ const container = document.createElement('div')
 document.body.appendChild(container)
 const root = createRoot(container)
 
-await check('renders the tabbed section and the empty state after list()', async () => {
+await check('renders the two-tab section (子智能体 default) and the empty state after list()', async () => {
   await act(async () => { root.render(React.createElement(Section, { ...props, key: 'section' })) })
   assert.ok(container.querySelector('[data-dsh-sa-section]'), 'section root rendered')
-  assert.ok(container.textContent.includes('运行中'), 'runtime tab label rendered')
   assert.ok(container.textContent.includes('子智能体'), 'tab label rendered')
-  assert.ok(container.textContent.includes('检查变更'), 'running child rendered')
+  assert.ok(container.textContent.includes('CLI 后端'), 'CLI tab label rendered')
+  // v1.24.0: the 运行中 and 变更记录 tabs are gone from the panel.
+  assert.ok(!container.textContent.includes('变更记录'), 'history tab is gone')
+  assert.ok(!container.querySelector('[role="tablist"]').textContent.includes('运行中'), 'runtime tab is gone')
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
-  assert.ok(container.textContent.includes('⏱'), 'live elapsed counter rendered on the running card')
-  assert.ok(container.textContent.includes('17 事件'), 'activity count tag rendered from runtimeList')
+  assert.ok(container.textContent.includes('还没有受管子智能体'), 'empty state rendered on the default 子智能体 tab')
 })
 
 const clickButton = async (matcher) => {
@@ -302,18 +303,9 @@ const flush = async (ms = 30) => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) })
 }
 
-/* 6 ── runtime tab: displays actual children and requires confirmation to stop. */
-await check('运行中 tab lists a child and interrupts it only after confirmation', async () => {
-  assert.ok(container.textContent.includes('父会话：parent-session'), 'parent session displayed')
-  const before = rpcCalls.length
-  await clickButton(button => button.textContent.trim() === '中断')
-  assert.equal(rpcCalls.length, before, 'first click only arms')
-  await clickButton(button => button.textContent.includes('确认中断'))
-  assert.equal(rpcCalls.length, before + 1)
-  assert.deepEqual(rpcCalls[rpcCalls.length - 1], { method: 'runtimeInterrupt', childId: 'child-running', parentSessionId: 'parent-session' })
-  assert.ok(container.textContent.includes('当前没有运行中的子智能体'), 'list refreshes after interrupt')
-  await clickButton(button => button.textContent.trim() === '子智能体')
-})
+/* 6 ── (removed) the 运行中 tab was retired in v1.24.0 — dsh's own surfaces
+ * cover live children; the interrupt-confirmation flow it exercised is gone
+ * with the view. */
 
 // jsdom 29 + React 18.3 event delegation does not deliver input/keydown events
 // in this environment, so drive the exact handlers through the element's React
@@ -447,13 +439,7 @@ await check('delete requires two clicks and posts remove(id)', async () => {
   assert.ok(container.textContent.includes('还没有受管子智能体'), 'back to empty state')
 })
 
-/* 10 ── history tab */
-await check('变更记录 tab fetches and renders the journal', async () => {
-  await clickButton(button => button.textContent.includes('变更记录'))
-  assert.ok(container.textContent.includes('配置台账'), 'history toolbar rendered')
-  assert.ok(container.textContent.includes('seeded'), 'journal record rendered')
-  assert.ok(container.textContent.includes('subagent-admin.history.jsonl'), 'journal path rendered')
-})
+/* 10 ── (removed) the 变更记录 tab was retired in v1.24.0 alongside 运行中. */
 
 /* 11 ── model/provider picker pulls the configured LLM catalog */
 await check('model/provider picker lists configured LLM providers', async () => {

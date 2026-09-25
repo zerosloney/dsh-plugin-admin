@@ -384,9 +384,9 @@ const searchCtx = {
     },
   },
   projectionCache: {
-    cachedSnapshot(header, offset) {
-      searchCtx.snapshotCalls.push([header, offset])
-      return header.id === 'hit-1' ? { values: { title: '分析与重构插件系统架构' } } : undefined
+    cachedSnapshot(...call) {
+      searchCtx.snapshotCalls.push(call)
+      return call[0]?.id === 'hit-1' ? { values: { title: '分析与重构插件系统架构' } } : undefined
     },
   },
   workspaceRegistry: {
@@ -408,7 +408,9 @@ await checkAsync('searchSessions maps the core SessionSearchHit contract', async
   const out = await admin.searchSessions('  合并  ')
   assert.deepEqual(searchCtx.searchRequest, { query: '合并', limit: 30 }, 'request rides the core { query, limit } shape')
   assert.equal(searchCtx.snapshotCalls.length, 2, 'every hit consults the projection checkpoint')
-  assert.equal(searchCtx.snapshotCalls[0][1], 0, 'checkpoint queried with the persisted cut 0')
+  // dsh 0.1.7 removed the inheritedEventCount cut parameter — the lookup
+  // passes NO second argument (an argument would bind to the keys filter).
+  assert.equal(searchCtx.snapshotCalls[0].length, 1, 'checkpoint queried without a cut/keys argument')
   assert.equal(out.hits.length, 2)
   assert.equal(out.hits[0].sessionId, 'hit-1')
   assert.equal(out.hits[0].title, '分析与重构插件系统架构', 'projection-cache title wins')

@@ -300,6 +300,13 @@ const ctx = {
             runtimePackageInstalled: true,
           } }
         }
+        // The 工作流 tab inside 自动化: reads active runs + saved scripts on mount.
+        if (method === 'workflowAdmin/listRuns') {
+          return { ok: true, value: { active: ctx.workflowRuns ?? [] } }
+        }
+        if (method === 'workflowAdmin/listSaved') {
+          return { ok: true, value: ctx.workflowSaved ?? [] }
+        }
         if (method === 'sessionAdmin/usageReport') {
           const now = Date.now()
           return { ok: true, value: { generatedAt: now, retained: 2, storagePath: 'C:/Users/demo/.dsh/usage-ledger.json', snapshotIntervalMs: 3_600_000, lastSnapshotAt: now - 60_000, rows: [
@@ -428,27 +435,29 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Eleven slot contributions: the 扩展插件 tab inside the shell-owned 插件
-// section, the standalone 技能 / Web 搜索 / MCP服务器 / 子智能体 /
-// 命令与钩子 / 用量仪表盘 / 定时任务 / Webhook 触发 / 工作流 settings
-// sections, and the 待办清单 dock above the composer. Neither the Codex bridge
-// (a banner inside the 命令与钩子 钩子 tab) nor the Agent preset editor (the
-// shell's own ui-agent-preset section owns that roster) gets a section of its
-// own — and 工作区 / 历史会话 are DOM-merged into dsh's own 已归档会话 page
-// instead of registering nav rows of their own.
-assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
+// Twelve slot contributions: the SIX plugins-page tabs inside the shell-owned
+// 插件 section (扩展插件 20, 技能 30, MCP服务器 40, 子智能体 50, 命令 60,
+// 钩子 70), the standalone Web 搜索 / 用量仪表盘 / 定时任务 / Webhook 触发 /
+// 工作流 settings sections, and the 待办清单 dock above the composer. Neither
+// the Codex bridge (a banner inside the 钩子 tab) nor the Agent preset editor
+// (the shell's own ui-agent-preset section owns that roster) gets a section of
+// its own — and 历史会话 + Web 搜索 share ONE standalone nav entry, Web 与会话
+// (工作区 has no plugin surface anywhere any more: dsh covers it natively).
+assert.equal(injectedSections.length, 10, 'ten slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×9), settings.plugins.tab, and conversation.input.dock',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
+  'injections wait on settings.section (×3), settings.plugins.tab (×6), and conversation.input.dock',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 11, 'eleven registrations: extensions tab + skills + web search + MCP + subagents + command hooks + usage dashboard + cron tasks + webhook triggers + workflow engine + todo dock')
+assert.equal(registeredSections.length, 10, 'ten registrations: extensions + skills + MCP + subagents + commands + hooks + automation tabs + web search + usage dashboard + todo dock')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['subagent-admin'] && byId['command-hook-admin'] && byId['todo-admin'] && byId['skills-admin'] && byId['web-search-admin'] && byId['cron-tasks'] && byId['workflow-engine'], 'expected registration ids present')
-assert.equal(byId['session-history'], undefined, '历史会话 no longer registers a settings section of its own')
+assert.ok(byId.extensions && byId.skills && byId['mcp-servers'] && byId['subagent-admin'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['web-sessions'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化, 历史会话 + Web 搜索 inside Web 与会话)')
+assert.equal(byId['session-history'], undefined, '历史会话 rides the Web 与会话 tab — no section of its own')
+assert.equal(byId['web-search-admin'], undefined, 'the standalone Web 搜索 section merged into Web 与会话')
 assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
+assert.equal(byId['command-hook-admin'], undefined, 'the standalone 命令与钩子 settings section is split into 命令/钩子 tabs')
 
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
@@ -457,28 +466,41 @@ assert.equal(extensions.options.label, '扩展插件', 'extensions tab label')
 const extensionsFace = extensions.options.inject()
 assert.equal(typeof extensionsFace.call, 'function', 'extensions tab inject face carries the RPC call')
 
+const skillsTab = byId.skills
+assert.equal(skillsTab.options.name, 'settings.plugins.tab', '技能 is a plugins-page tab, not a settings nav section')
+assert.equal(skillsTab.options.order, 30, '技能 tab sorts right after 扩展插件 (order 20)')
+assert.equal(skillsTab.options.label, '技能', 'skills tab label')
+assert.equal(byId['skills-admin'], undefined, 'the standalone 技能 settings nav section is gone')
+assert.equal(typeof skillsTab.options.inject().call, 'function', 'skills tab inject face carries the RPC call')
+
 const mcpSection = byId['mcp-servers']
-assert.equal(mcpSection.options.name, 'settings.section')
-assert.equal(mcpSection.options.order, 25, 'MCP服务器 sits right after Agent 预设 (order 20)')
+assert.equal(mcpSection.options.name, 'settings.plugins.tab', 'MCP服务器 is a plugins-page tab, not a settings nav section')
+assert.equal(mcpSection.options.order, 40, 'MCP服务器 tab sorts right after 技能 (order 30)')
 assert.equal(mcpSection.options.label, 'MCP服务器', 'MCP section label')
 
 const subagentSection = byId['subagent-admin']
-assert.equal(subagentSection.options.name, 'settings.section')
-assert.equal(subagentSection.options.order, 26, '子智能体 sits right after MCP服务器 (order 25)')
+assert.equal(subagentSection.options.name, 'settings.plugins.tab', '子智能体 is a plugins-page tab, not a settings nav section')
+assert.equal(subagentSection.options.order, 50, '子智能体 tab sorts right after MCP服务器 (order 40)')
 assert.equal(subagentSection.options.label, '子智能体', 'subagent section label')
 
-const commandHookSection = byId['command-hook-admin']
-const webhookSection = byId['webhook-triggers']
-assert.equal(commandHookSection.options.name, 'settings.section')
-assert.equal(commandHookSection.options.order, 27, '命令与钩子 sits right after 子智能体 (order 26)')
-assert.equal(commandHookSection.options.label, '命令与钩子', 'command hooks section label')
-const commandHookFace = commandHookSection.options.inject()
-assert.equal(typeof commandHookFace.call, 'function', 'command hooks inject face carries the RPC call')
+const chCommandsTab = byId['ch-commands']
+const automationSectionRef = byId['automation']
+assert.equal(chCommandsTab.options.name, 'settings.plugins.tab', '命令 is a plugins-page tab, not a settings nav section')
+assert.equal(chCommandsTab.options.order, 60, '命令 tab sorts right after 子智能体 (order 50)')
+assert.equal(chCommandsTab.options.label, '命令', 'commands tab label')
+assert.equal(typeof chCommandsTab.options.inject().call, 'function', 'commands tab inject face carries the RPC call')
+const chHooksTab = byId['ch-hooks']
+assert.equal(chHooksTab.options.name, 'settings.plugins.tab', '钩子 is a plugins-page tab, not a settings nav section')
+assert.equal(chHooksTab.options.order, 70, '钩子 tab sorts right after 命令 (order 60)')
+assert.equal(chHooksTab.options.label, '钩子', 'hooks tab label')
+assert.equal(typeof chHooksTab.options.inject().call, 'function', 'hooks tab inject face carries the RPC call')
+assert.equal(byId['command-hook-admin'], undefined, 'the merged 命令与钩子 section is gone')
 
-// 工作区 / 历史会话 no longer register sections: the panels are merged into
-// dsh's own 已归档会话 page by DOM. The bundle exports both components so the
-// harness can mount them directly and keep exercising the panel contracts
-// (the merge itself is covered by the archived-sessions test below).
+// 历史会话 registers no section of its own any more — it is the default tab
+// of the Web 与会话 entry (below); 工作区 registers NOWHERE — retired, because
+// dsh covers workspaces natively. The bundle still exports both components so
+// the harness can mount them directly and keep exercising the panel contracts
+// (the workspace panel below exercises its own contracts directly).
 const rpcCall = (method, args) => ctx.connection.rpc.call('/api', method, { args: args })
 const sessionsSection = {
   options: { id: 'session-history', inject: () => ({ call: rpcCall, refreshSessions: null }) },
@@ -499,17 +521,27 @@ assert.equal(todoDock.options.name, 'conversation.input.dock', 'todo dock mounts
 assert.equal(todoDock.options.order, 5, 'todo dock sorts just after the shell todo strip (order 0)')
 assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock inject face carries the RPC call')
 
+const webSessionsSection = byId['web-sessions']
+assert.equal(webSessionsSection.options.name, 'settings.section', 'Web 与会话 is one standalone settings page')
+assert.equal(webSessionsSection.options.order, 27, 'Web 与会话 sorts BEFORE 用量仪表盘 (order 28)')
+assert.equal(webSessionsSection.options.label, 'Web 与会话', 'web-sessions section label')
+const webSessionsFace = webSessionsSection.options.inject()
+assert.equal(typeof webSessionsFace.call, 'function', 'web-sessions inject face carries the RPC call')
+assert.ok('refreshSessions' in webSessionsFace, 'web-sessions inject face carries the sidebar refresh hook for the history tab')
+
 const usageSection = byId['usage-dashboard']
 assert.equal(usageSection.options.name, 'settings.section', 'usage dashboard is a standalone settings page')
-assert.equal(usageSection.options.order, 28, 'usage dashboard sorts after 命令与钩子 (order 27)')
+assert.equal(usageSection.options.order, 28, 'usage dashboard sorts right after Web 与会话 (order 27)')
 assert.equal(usageSection.options.label, '用量仪表盘', 'usage dashboard label')
 assert.equal(typeof usageSection.options.inject().call, 'function', 'usage dashboard inject face carries the RPC call')
 
-const cronSection = byId['cron-tasks']
-assert.equal(cronSection.options.name, 'settings.section', 'cron tasks is a standalone settings page')
-assert.equal(cronSection.options.order, 29, '定时任务 sorts between 用量仪表盘 (28) and Webhook 触发 (30)')
-assert.equal(cronSection.options.label, '定时任务', 'cron tasks section label')
-assert.equal(typeof cronSection.options.inject().call, 'function', 'cron tasks inject face carries the RPC call')
+const automationSection = byId['automation']
+assert.equal(automationSection.options.name, 'settings.section', '自动化 is one standalone settings page')
+assert.equal(automationSection.options.order, 29, '自动化 keeps the former 定时任务 slot (29)')
+assert.equal(automationSection.options.label, '自动化', 'automation section label')
+assert.equal(typeof automationSection.options.inject().call, 'function', 'automation inject face carries the RPC call')
+assert.equal(byId['cron-tasks'], undefined, 'the standalone 定时任务 section merged into 自动化')
+assert.equal(byId['webhook-triggers'], undefined, 'the standalone Webhook 触发 section merged into 自动化')
 
 // 4. Style injection: the section stylesheets land in <head>.
 assert.ok(
@@ -1126,119 +1158,32 @@ const mkNavRow = (label) => {
   settingsNav.appendChild(row)
   return row
 }
-const mcpNavRow = mkNavRow('MCP服务器')
 // Every plugin settings.section gets a nav row (the fixture derives the labels
 // from the registrations above, so a new page without an icon fails here), plus
 // the shell's own rows — including 'Agent 预设', the label this plugin must NOT
 // reuse (the official ui-agent-preset page owns it, and the icon injector can
-// only key off the label text). '已归档会话' is dsh's OWN page that the plugin
-// merges its panels into, so it gets the clock icon too.
+// only key off the label text). The 扩展插件 / 技能 / MCP服务器 tabs live
+// INSIDE the 内置插件 page, not the settings nav, so they have no nav rows here.
 const pluginSectionLabels = registeredSections
  .filter((entry) => entry.options.name === 'settings.section')
  .map((entry) => entry.options.label)
-for (const label of pluginSectionLabels) if (label !== 'MCP服务器') mkNavRow(label)
-const officialRows = ['Agent 预设', '模型', '内置插件'].map((label) => mkNavRow(label))
-const archivedNavRow = mkNavRow('已归档会话')
+for (const label of pluginSectionLabels) mkNavRow(label)
+const officialRows = ['Agent 预设', '模型', '内置插件', '已归档会话'].map((label) => mkNavRow(label))
 settingsDialog.appendChild(settingsNav)
 document.body.appendChild(settingsDialog)
 await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
-assert.equal(repainted.length, pluginSectionLabels.length + 1, 'every plugin settings section plus the official 已归档会话 row got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 9, `nine settings.section pages carry an icon (got ${pluginSectionLabels.length})`)
-assert.equal(mcpNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), 'MCP服务器')
-assert.equal(mcpNavRow.querySelector('svg').getAttribute('class'), 'stock-gear', 'replacement inherits the stock icon css class')
-assert.equal(archivedNavRow.querySelector('svg').getAttribute('data-dsh-admin-nav-icon'), '已归档会话', 'the official archived-sessions row carries the clock icon')
+assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
+assert.ok(pluginSectionLabels.length === 3, `three settings.section pages carry an icon (got ${pluginSectionLabels.length}); 技能 / MCP服务器 / 子智能体 / 命令 / 钩子 / 工作流 are plugins-page tabs, 历史会话 + Web 搜索 share the Web 与会话 row`)
 for (const row of officialRows) {
- assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows keep their own icon')
+ assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows (incl. dsh\'s own 已归档会话 page) keep their own icon')
 }
+
 await new Promise((resolve) => setTimeout(resolve, 60))
-assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, pluginSectionLabels.length + 1, 'repaint is idempotent across observer fires')
+assert.equal(settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]').length, pluginSectionLabels.length, 'repaint is idempotent across observer fires')
 settingsDialog.remove()
 
-// 11.6 Archived-sessions merge: while dsh's OWN 已归档会话 section is the
-// active settings page, the plugin's session-history + workspace panels are
-// DOM-mounted into that section's scroll container (the content column's last
-// unmarked child) instead of registering nav rows of their own; switching
-// away, closing the dialog, or the shell re-rendering the container away all
-// unmount them.
-const mergeDialog = document.createElement('div')
-mergeDialog.setAttribute('role', 'dialog')
-mergeDialog.setAttribute('aria-modal', 'true')
-const mergeNav = document.createElement('nav')
-const mkMergeRow = (label, active) => {
-  const row = document.createElement('button')
-  if (active) row.setAttribute('aria-current', 'true')
-  const text = document.createElement('span')
-  text.textContent = label
-  row.appendChild(text)
-  mergeNav.appendChild(row)
-  return row
-}
-mkMergeRow('Agent 预设', false)
-const archivedRow = mkMergeRow('已归档会话', true)
-const mergeContent = document.createElement('div')
-mergeContent.appendChild(document.createElement('div')) // shell header
-const mergeOptions = document.createElement('div') // shell scroll container
-mergeContent.appendChild(mergeOptions)
-mergeDialog.appendChild(mergeNav)
-mergeDialog.appendChild(mergeContent)
-document.body.appendChild(mergeDialog)
-await new Promise((resolve) => setTimeout(resolve, 120))
-
-const mergeContainer = mergeOptions.querySelector('[data-dsh-admin-archived-merge]')
-assert.ok(mergeContainer !== null, 'merge container injected into the official section scroll container')
-assert.ok(mergeContainer.textContent.includes('分析与重构插件系统架构'), 'session-history panel mounted inside the official page')
-assert.equal(mergeContainer.querySelectorAll('[data-dsh-admin-section]').length, 1, 'only the session-history panel merges (the workspace manager is not merged)')
-assert.ok(!mergeContainer.textContent.includes('新建工作区'), 'the workspace manager is absent from the merged page')
-
-// Switching to another section unmounts the merged panels.
-archivedRow.removeAttribute('aria-current')
-mkMergeRow('模型', true)
-await new Promise((resolve) => setTimeout(resolve, 120))
-assert.equal(mergeOptions.querySelector('[data-dsh-admin-archived-merge]'), null, 'switching away unmounts the merged panels')
-
-// Re-activating the official page re-injects them.
-archivedRow.setAttribute('aria-current', 'true')
-await new Promise((resolve) => setTimeout(resolve, 120))
-assert.ok(mergeOptions.querySelector('[data-dsh-admin-archived-merge]') !== null, 're-activating the official page re-injects the panels')
-
-// Closing the dialog unmounts them.
-document.body.removeChild(mergeDialog)
-await new Promise((resolve) => setTimeout(resolve, 120))
-assert.equal(document.querySelector('[data-dsh-admin-archived-merge]'), null, 'closing the dialog unmounts the merged panels')
-
-// 11.7 Fallback: a deployment WITHOUT dsh's own 已归档会话 page (0.1.5-rc.2 and
-// earlier ship no dsh-client-ui-settings-unarchive-sessions) has no host for
-// the merged panels — the injector registers the two sections the plugin used
-// to own, once, so the panels stay reachable.
-const fallbackDialog = document.createElement('div')
-fallbackDialog.setAttribute('role', 'dialog')
-fallbackDialog.setAttribute('aria-modal', 'true')
-const fallbackNav = document.createElement('nav')
-const fallbackRow = document.createElement('button')
-fallbackRow.setAttribute('aria-current', 'true')
-const fallbackLabel = document.createElement('span')
-fallbackLabel.textContent = '模型'
-fallbackRow.appendChild(fallbackLabel)
-fallbackNav.appendChild(fallbackRow)
-fallbackDialog.appendChild(fallbackNav)
-fallbackDialog.appendChild(document.createElement('div'))
-document.body.appendChild(fallbackDialog)
-await new Promise((resolve) => setTimeout(resolve, 120))
-
-assert.equal(injectedSections.length, 13, 'the fallback injects the two retired sections on top of the eleven live ones')
-const fallbackInjections = injectedSections.slice(11)
-assert.deepEqual(fallbackInjections.map((i) => i.key), ['settings.section', 'settings.section'], 'fallback waits on settings.section')
-fallbackInjections.forEach((i) => i.callback())
-const fallbackIds = registeredSections.slice(11).map((e) => e.options.id).sort()
-assert.deepEqual(fallbackIds, ['session-history', 'workspaces'], 'fallback registers 历史会话 + 工作区')
-assert.ok(registeredSections.some((e) => e.options.id === 'session-history' && e.options.order === 100), 'fallback 历史会话 keeps order 100')
-assert.ok(registeredSections.some((e) => e.options.id === 'workspaces' && e.options.order === 22), 'fallback 工作区 keeps order 22')
-// One-shot: further dialog churn never re-registers the same ids.
-await new Promise((resolve) => setTimeout(resolve, 80))
-assert.equal(injectedSections.length, 13, 'the fallback fires once')
-document.body.removeChild(fallbackDialog)
 
 // 12. MCP editor: edit an existing server, fill it via the React onChange
 // props (jsdom synthetic input events do not reach React 18's controlled
@@ -1502,6 +1447,28 @@ assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env val
 // assertion, which is exactly how a duplicated usage block hid in this file.
 await act(async () => { mcpRoot.unmount() })
 host.remove()
+// 11.6 Web 与会话: ONE nav entry with two internal tabs — 历史会话 (default,
+// the panel that used to be DOM-merged into dsh's official 已归档会话 page)
+// and Web 搜索 (the former standalone section). Tab switches swap the panels;
+// each keeps its own [data-dsh-admin-section] CSS scope.
+const webSessionsRoot = await mountSection(webSessionsSection)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('分析与重构插件系统架构'), '历史会话 tab renders the session panel by default')
+assert.ok(text.includes('alpha-project'), 'the history panel is fully live inside the merged entry')
+const wsTabs = [...host.querySelectorAll('[role="tab"]')].map((b) => b.textContent)
+assert.deepEqual(wsTabs, ['历史会话', 'Web 搜索'], 'exactly two internal tabs: 历史会话 then Web 搜索')
+await act(async () => {
+  const wsTab = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent === 'Web 搜索')
+  wsTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('DeepSeek 官方搜索'), 'Web 搜索 tab renders the provider list')
+assert.ok(!text.includes('分析与重构插件系统架构'), 'switching tabs unmounts the history panel')
+await act(async () => { webSessionsRoot.unmount() })
+host.remove()
+
 
 // 15p. The standalone 用量仪表盘 page: mounts, auto-loads rows, renders the
 // VibeUsage form (range pills, KPI cards, heatmap).
@@ -1509,6 +1476,12 @@ const usageRoot = await mountSection(usageSection)
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = host.textContent
 assert.ok(text.includes('📊 用量仪表盘') && text.includes('📈 每日趋势'), 'usage dashboard page renders')
+// The dashboard stacks far more content than one dialog height: the section
+// root must SCROLL (overflow-y:auto) instead of the old overflow:hidden clip,
+// which left the tail (project bars / highest-usage hint) unreachable.
+const adminSheet = document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]')
+assert.ok(/\[data-dsh-admin-section\]\s*\{[^}]*overflow-y:\s*auto/.test(adminSheet.textContent), 'section root scrolls tall panels instead of clipping (用量仪表盘 tail reachable)')
+assert.ok(!/\[data-dsh-admin-section\]\s*\{[^}]*overflow:\s*hidden/.test(adminSheet.textContent), 'no overflow:hidden left on the section root')
 assert.ok(text.includes('⏱ 日期'), 'range pills row rendered')
 for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
   assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
@@ -1553,20 +1526,64 @@ assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textC
 await act(async () => { usageRoot.unmount() })
 host.remove()
 
-// 15y. The Webhook 触发 page: mounts, renders rules from webhookAdmin/list.
-const webhookRoot = await mountSection(webhookSection)
+// 15y. The 自动化 page's Webhook tab: mounts on 定时任务, clicks the internal
+// Webhook tab, then renders rules from webhookAdmin/list.
+const automationRoot = await mountSection(automationSectionRef)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+await act(async () => {
+  const webhookTab = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent?.includes('Webhook'))
+  assert.ok(webhookTab, 'internal Webhook tab rendered beside 定时任务')
+  webhookTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = document.body.textContent
 assert.ok(text.includes('ci-fail'), 'webhook rule card rendered from webhookAdmin/list')
 assert.ok(text.includes('POST'), 'endpoint hint rendered')
 assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner rendered')
-await act(async () => { webhookRoot.unmount() })
+await act(async () => { automationRoot.unmount() })
 host.remove()
 
+// 15y2. The 自动化 page's 工作流 tab: the redesigned panel lands inside 自动化
+// as the third internal tab, and a first-time user sees the guide banner plus
+// the template cards before any run exists.
+ctx.workflowRuns = []
+ctx.workflowSaved = []
+const automationRoot2 = await mountSection(automationSectionRef)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+await act(async () => {
+  const wfTab = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent?.includes('工作流'))
+  assert.ok(wfTab, 'internal 工作流 tab rendered after 定时任务 / Webhook')
+  wfTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)) })
+text = document.body.textContent
+assert.ok(text.includes('工作流 = 把多步任务写成小脚本'), 'the one-line guide explains what a workflow is')
+assert.ok(text.includes('从模板开始'), 'the template row header shows the one-click entry')
+assert.ok(text.includes('总结一个主题') && text.includes('并行双角度分析') && text.includes('分步润色流水线'), 'all three template cards render')
+assert.ok(text.includes('三步上手'), 'the empty-runs hint walks through the three steps')
+// Clicking a template card prefills the editor with its script, label and args.
+await act(async () => {
+  const tplCard = [...host.querySelectorAll('div')].find((el) => el.textContent?.includes('总结一个主题') && !el.textContent.includes('并行双角度分析'))
+  assert.ok(tplCard, 'the first template card is in the document')
+  tplCard.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+const wfEditor = host.querySelector('textarea')
+assert.ok(wfEditor !== null, 'the script editor textarea opened with the template loaded')
+assert.ok(wfEditor.value.includes('args.topic'), 'the template script body lands in the editor')
+assert.ok(wfEditor.value.includes('var summary = await agent('), 'the template script is the one-step summarize workflow')
+await act(async () => { automationRoot2.unmount() })
+host.remove()
 
 // 15z-websearch-loop. Same closure hazard in the provider list: click the FIRST
 // opt-in provider's install button and assert ITS id travels over the RPC.
-const webSearchRoot = await mountSection(byId['web-search-admin'])
+const webSearchRoot = await mountSection(byId['web-sessions'])
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+await act(async () => {
+  const wsTab2 = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent === 'Web 搜索')
+  assert.ok(wsTab2, 'the merged entry exposes the Web 搜索 tab')
+  wsTab2.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 const wsInstallBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('📥 安装'))
 assert.ok(wsInstallBtn !== undefined, 'an opt-in provider install button renders')
@@ -1623,7 +1640,7 @@ host.remove()
 // preset standing scope and one per session scope) and filters it locally —
 // the previous revision could only ever show ONE session's user-invocable
 // subset.
-const skillsRoot = await mountSection(byId['skills-admin'])
+const skillsRoot = await mountSection(byId.skills)
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = host.textContent
 assert.equal(ctx.skillsRequests.length, 1, 'the panel asks the host once for the whole roster')
@@ -1703,9 +1720,9 @@ host.remove()
 URL.createObjectURL = () => { throw new Error("stubbed out after the export test") }
 URL.revokeObjectURL = () => {}
 
-// 15. The 命令与钩子 section, mounted here so its assertions below run against
-// their own panel (15a-15f).
-const commandHookRoot = await mountSection(commandHookSection)
+// 15. The 命令 and 钩子 tabs, mounted here so their assertions below run against
+// their own panels (15a-15f) — separate pages since the v1.24.0 split.
+const chCommandsRoot = await mountSection(chCommandsTab)
 
 text = host.textContent
 assert.ok(text.includes('提示词命令'), 'commands tab renders')
@@ -1720,11 +1737,11 @@ URL.revokeObjectURL = () => {}
 let exportedCommandsBlob = null
 assert.ok(button('⬆ 导入') !== undefined, '⬆ 导入 button present (import panel covered by renderer surface)')
 
-// 15b. The 钩子 tab: rows + bridge banner with the install affordance while
+// 15b. The 钩子 page: rows + bridge banner with the install affordance while
 // the stock bridge is neither installed nor mounted.
-await act(async () => {
-  button('钩子').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
+await act(async () => { chCommandsRoot.unmount() })
+host.remove()
+const chHooksRoot = await mountSection(chHooksTab)
 await new Promise((resolve) => setTimeout(resolve, 60))
 text = document.body.textContent
 assert.ok(text.includes('node guard.js'), 'hook command row rendered')
@@ -1792,17 +1809,10 @@ assert.equal((ctx.codexBridgeRemoves ?? []).length, 1, 'second click fires codex
 assert.ok(document.body.textContent.includes('Codex 钩子桥已卸载'), 'codex remove note rendered')
 assert.ok(document.body.textContent.includes('当前未安装 Codex 钩子桥'), 'codex banner back to the missing state')
 
-// 15f. The 项目 tab: an initial sessionAdmin/list failure must surface in
-// the tab. The mount-time list call used to swallow every error with an
-// empty .catch, leaving the session dropdown silently unpopulated.
-ctx.sessionListFail = '注入：列表服务不可用'
-await act(async () => {
-  button('项目').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await new Promise((resolve) => setTimeout(resolve, 60))
-assert.ok(document.body.textContent.includes('注入：列表服务不可用'), 'project tab surfaces the session-list load error')
+// 15f. (removed) The 项目 tab was retired in the v1.24.0 split — its
+// session-list error-surfacing contract went with it.
 ctx.sessionListFail = undefined
-await act(async () => { commandHookRoot.unmount() })
+await act(async () => { chHooksRoot.unmount() })
 host.remove()
 
 /* ======== 16. i18n: English-mode smoke on a fresh factory evaluation ======== *
@@ -1835,12 +1845,12 @@ exportsEn.apply({
   },
 })
 injectedEn.forEach((i) => i.callback())
-assert.equal(registeredEn.length, 11, 'en mode also registers eleven sections')
+assert.equal(registeredEn.length, 10, 'en mode also registers ten sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
 assert.equal(byIdEn.extensions.options.label, 'Extensions', 'en nav label for the extensions tab')
-assert.equal(byIdEn['mcp-servers'].options.label, 'MCP Servers', 'en nav label for MCP')
-assert.equal(byIdEn['cron-tasks'].options.label, 'Scheduled Tasks', 'en nav label for cron')
+assert.equal(byIdEn['mcp-servers'].options.label, 'MCP Servers', 'en tab label for MCP')
+assert.equal(byIdEn['automation'].options.label, 'Automation', 'en nav label for automation')
 
 const enRoot = await mountSection(byIdEn.extensions)
 const enSearch = document.querySelector('.toolbar .search-wrap .input')
@@ -1861,4 +1871,4 @@ await act(async () => { mcpEn.unmount() })
 host.remove()
 dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, archived-sessions merge (inject/switch-away/close) + no-official-page fallback, MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch)')

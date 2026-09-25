@@ -155,13 +155,16 @@ const PROBES = [
     id: 'projection-cache checkpoint',
     file: 'packages/session/session-projection-cache/src/index.ts',
     checks: [
-      ['cachedSnapshot(meta, inheritedEventCount, keys?) signature', t => /cachedSnapshot\(\s*\n\s*meta: SessionHeader,\s*\n\s*inheritedEventCount: SessionLogOffset,/.test(t)],
+      // dsh 0.1.7 dropped the inheritedEventCount cut parameter: the second
+      // argument is now the optional projection-keys filter. The plugin's
+      // title lookup calls cachedSnapshot(header) with NO second argument.
+      ['cachedSnapshot(meta, keys?) signature (inheritedEventCount removed)', t => /cachedSnapshot\(\s*\n\s*meta: SessionHeader,\s*\n\s*keys\?: readonly/.test(t)],
       ['identityOf only rejects non-zero cut on unseeded headers', t => /!header\.isSeeded && cut !== 0/.test(t)],
     ],
   },
   {
     id: 'agentPresets catalog',
-    file: 'packages/preset/agent-presets/src/index.ts',
+    file: 'packages/preset/agent-preset-registry/src/index.ts',
     checks: [
       ['list() is async (the webhook panel awaits it)', t => /async list\(\): Promise<AgentPreset\[\]>/.test(t)],
     ],
@@ -186,7 +189,11 @@ const PROBES = [
     id: 'MessageSourceMap',
     file: 'packages/llm/llm/src/message.ts',
     checks: [
-      ['user/plugin sources exist (plugin source = project hooks steer shape)', t => has("user: { kind: 'user' }", "plugin: { kind: 'plugin'; plugin: string }")(blockOf(t, 'export interface MessageSourceMap'))],
+      // dsh 0.1.7 (V4 sessions) retired the shared `kind: 'plugin'` wrapper:
+      // every producer owns its kind. The session admission REFUSES
+      // kind:'plugin' outright, so the plugin's project-hooks bridge must
+      // write its own `plugin-admin` kind (see lib/project-hooks.js).
+      ['user source exists, the shared plugin wrapper is gone', t => has("user: { kind: 'user' }")(blockOf(t, 'export interface MessageSourceMap')) && !/plugin: \{ kind: 'plugin'/.test(t)],
       ['ContextFormed keeps the notice form', t => /readonly form: 'notice'/.test(t)],
     ],
   },
@@ -246,10 +253,14 @@ const PROBES = [
     checks: [
       ['describe(options?: SettingsDescribeOptions): SettingsDescriptor[] exists (settings-section read)', t => /describe\(options\?: SettingsDescribeOptions\): SettingsDescriptor\[\]/.test(t)],
       ['descriptor carries ns + serialized schema', t => has('ns: SettingsNamespace', 'schema: unknown')(blockOf(t, 'export interface SettingsDescriptor'))],
-      ['descriptor carries value/revision/user/applies/secrets (config read + write-only secrets)', t => has('value: unknown', 'revision: number', 'user?: unknown', 'applies: SettingsApplies', 'secrets?: RedactedSecret[]')(blockOf(t, 'export interface SettingsDescriptor'))],
+      // dsh 0.1.7 narrowed `applies` to the literal 'live' (the former
+      // SettingsApplies union) — the plugin treats anything !== 'restart'
+      // as live, so the narrowing is behavior-compatible.
+      ['descriptor carries value/revision/user/applies/secrets (config read + write-only secrets)', t => has('value: unknown', 'revision: number', 'user?: unknown', "applies: 'live'", 'secrets?: RedactedSecret[]')(blockOf(t, 'export interface SettingsDescriptor'))],
       // webSearchAdmin.saveConfig rides mutate() with PATH ops so a redacted
       // view can be written without restating (or deleting) other fields.
-      ['mutate(ns, ops, expectedRevision?) exists for path-addressed writes', t => /mutate<const Namespace extends string>\(/.test(t) && has('ops: readonly SettingsPathOp[]', 'expectedRevision?: number')(t)],
+      // dsh 0.1.7 dropped the <const Namespace> generic (plain ns: string).
+      ['mutate(ns, ops, expectedRevision?) exists for path-addressed writes', t => /mutate\(ns: string, ops: readonly SettingsPathOp\[\], expectedRevision\?: number\)/.test(t) || /mutate<const Namespace extends string>\(/.test(t) && has('ops: readonly SettingsPathOp[]', 'expectedRevision?: number')(t)],
       ['SettingsPathOp keeps set/unset', t => has("op: 'set'", "op: 'unset'")(t)],
     ],
   },
@@ -343,12 +354,14 @@ const PROBES = [
     ],
   },
   {
-    id: 'agent preset scope seam (standing key + scoped services)',
-    file: 'packages/preset/agent-presets/src/index.ts',
+    id: 'agent preset scope seam (scoped lease + scoped services)',
+    file: 'packages/preset/agent-preset-registry/src/index.ts',
     checks: [
-      // A cold session scopes by the preset's standing key; a live session
-      // reads its preset-scoped registries through serviceFor(agent, name).
-      ['standingKeyFor(id?) returns the preset scope key', t => /standingKeyFor\(id\?: string\): Promise<ScopeKey>/.test(t)],
+      // dsh 0.1.7 replaced standingKeyFor with the acquireScope revision
+      // lease ({ key, [Symbol.asyncDispose] }): a cold session's scope is
+      // pinned only while the lease is held. A live session still reads its
+      // preset-scoped registries through serviceFor(agent, name).
+      ['acquireScope(id?) returns a disposable { key } lease', t => /acquireScope\(id\?: string\): Promise<\{ key: ScopeKey \} & AsyncDisposable>/.test(t)],
       ['serviceFor(agent, name) exposes the preset-scoped service', t => /serviceFor<K extends string & keyof Context>\(agent: \{ ctx: Context \}, name: K\): Context\[K\] \| undefined/.test(t)],
     ],
   },
@@ -409,7 +422,11 @@ const PROBES = [
     id: 'jobs.start hook contract (workflow run bridging)',
     file: 'packages/jobs/jobs/src/types.ts',
     checks: [
-      ['JobStart.run() returns JobHooks synchronously', t => t.includes('run(): JobHooks')],
+      // dsh 0.1.7 renamed JobStart to JobSpec, the producer's run() now
+      // receives the JobHandle face, and `owner` is a SessionId (the plugin
+      // passes parent.id, no longer the Agent object).
+      ['JobSpec.run(job) returns JobHooks synchronously', t => t.includes('run(job: JobHandle): JobHooks')],
+      ['JobSpec.owner is a SessionId (not the 0.1.6 Agent instance)', t => /owner\?: SessionId/.test(blockOf(t, 'export interface JobSpec'))],
       ['JobHooks.cancel is sync + done is Promise<JobOutcome>', t => has('cancel(reason?: string): void', 'done: Promise<JobOutcome>')(blockOf(t, 'export interface JobHooks'))],
       ["JobOutcome.status is 'completed' | 'killed' | 'failed' (workflow-runs maps run status onto these)", t => t.includes("status: 'completed' | 'killed' | 'failed'")],
     ],

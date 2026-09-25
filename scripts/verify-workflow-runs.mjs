@@ -25,6 +25,7 @@ function makeCtx({ slow = false } = {}) {
   let agentCalls = 0
   const started = []
   const jobsHooks = []
+  const jobSpecs = []
   return {
     ctx: {
       get: (key) => {
@@ -49,6 +50,7 @@ function makeCtx({ slow = false } = {}) {
         if (key === 'jobs') return {
           start: (spec) => {
             const id = `job_${Math.random().toString(36).slice(2, 6)}`
+            jobSpecs.push(spec)
             // 立即跑 run()，拿 hooks
             const hooks = spec.run()
             jobsHooks.push(hooks)
@@ -63,6 +65,7 @@ function makeCtx({ slow = false } = {}) {
     agentCalls: () => agentCalls,
     started: () => started,
     jobsHooks: () => jobsHooks,
+    jobSpecs: () => jobSpecs,
   }
 }
 
@@ -122,6 +125,9 @@ await check('simple run completes with results', async () => {
   const outcome = await hooks.done
   assert.equal(outcome.status, 'completed')
   assert.match(outcome.output, /completed in 2 steps/)
+  // dsh 0.1.7 起 owner 是 SessionId（字符串），不再是 Agent 实例。
+  const jobSpec = ctxBundle.jobSpecs()[0]
+  assert.equal(jobSpec.owner, 'sess-parent', 'owner passes the session id, not the Agent object')
 })
 
 await check('record persists to disk', async () => {

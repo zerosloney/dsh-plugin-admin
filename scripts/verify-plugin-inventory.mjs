@@ -346,6 +346,7 @@ const rawSvc = mountHost(() => ({
         null,
       ] },
       { id: 'p2', trust: 'system', rows: [] },
+      { id: 'p3', name: 'No Trust Since 0.1.7', rows: [] },
       null,
     ],
   }),
@@ -357,10 +358,11 @@ assert.deepEqual(projected.entries, [
   { entryId: 'beta', moduleName: '@scope/beta', enabled: false, fiberPhase: null },
 ], 'entries project leaf fields only; unknown phase collapses to null; malformed rows drop')
 assert.equal(projected.entries[0].extra, undefined, 'unknown host fields are not forwarded')
-assert.equal(projected.agentPresets.length, 2, 'malformed presets drop, valid ones survive')
+assert.equal(projected.agentPresets.length, 3, 'malformed presets drop, valid ones survive')
 assert.equal(projected.agentPresets[0].broken, 'parse failed', 'broken reason is forwarded')
 assert.equal(projected.agentPresets[0].trust, 'user', 'user trust is preserved')
-assert.equal(projected.agentPresets[1].trust, 'system', 'non-user trust normalizes to system')
+assert.equal(projected.agentPresets[1].trust, 'system', 'system trust is preserved')
+assert.equal(projected.agentPresets[2].trust, null, 'an absent trust (dsh 0.1.7 dropped the field) projects as null, not a guessed system')
 assert.equal(projected.agentPresets[0].rows.length, 2, 'malformed preset rows drop')
 assert.equal(projected.agentPresets[0].rows[0].enabled, 'conditional', 'conditional enablement is preserved')
 assert.equal(JSON.stringify(projected).includes('!!js'), false, 'raw !!js condition never crosses the boundary')

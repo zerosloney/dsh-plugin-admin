@@ -331,9 +331,8 @@ function mountPanel(container) {
   }
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
-  // 工作区 no longer registers a settings section of its own: the panel is
-  // DOM-merged into dsh's own 已归档会话 page, and the bundle exports the
-  // component for direct mounting.
+  // 工作区 registers no section anywhere (retired — dsh covers workspaces
+  // natively), and the bundle exports the component for direct mounting.
   const component = bundle.WorkspacesSection
   if (typeof component !== 'function') throw new Error('bundle does not export WorkspacesSection')
   const face = { call: (method, args) => ctx.connection.rpc.call('/api', method, { args: args }) }

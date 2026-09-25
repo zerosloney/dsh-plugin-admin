@@ -1438,7 +1438,9 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 assert.ok(!readLedger().some((entry) => entry.id === 'session-resumed'), 'a resumed session stays read-owned')
 
 // A compaction checkpoint is not a user turn; the next turn accumulates.
-emitSession('session/event', liveSession, { type: 'user/message', seq: 2, data: { source: { kind: 'plugin', plugin: 'compact' }, content: [] } })
+// Both source shapes must be excluded: dsh 0.1.7 writes the producer-owned
+// `compact-checkpoint` kind, older hosts the retired generic wrapper.
+emitSession('session/event', liveSession, { type: 'user/message', seq: 2, data: { source: { kind: 'compact-checkpoint', compactionId: 'c1' }, content: [] } })
 emitSession('session/event', liveSession, { type: 'assistant/message', seq: 3, data: { usage: { inputTokens: 1000 } } })
 emitSession('session/disposed', liveSession)
 await new Promise((resolve) => setTimeout(resolve, 60))

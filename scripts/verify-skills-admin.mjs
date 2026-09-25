@@ -9,7 +9,12 @@
  *     source, provider, resourceBase → path|url, invocation flags), malformed
  *     rows drop, and `get()` — the body loader — is never called.
  *  3. Per-session scopes resolve through `sessionQuery.observeSession` +
- *     `agentPresets.standingKeyFor`, and the observation is disposed.
+ *     `agentPresets.acquireScope` (dsh 0.1.7 lease) or the legacy
+ *     `standingKeyFor`, and the observation is disposed.
+ *  3b. A preset that no longer resolves is REPORTED, never silently downgraded;
+ *     a preset-less deployment degrades to the cwd-only read as before.
+ *  3c. The acquireScope lease is released after the read (and on a throwing
+ *     read); a preset service with NEITHER route fails loud.
  *  4. A live session uses its Agent as the scope key AND its preset-scoped
  *     registry (`agentPresets.serviceFor(live, 'skills')`).
  *  5. Sessions sharing one (cwd, preset) collapse into a single registry read;
@@ -22,7 +27,10 @@
  *     missing description / path fill in, the two invocation flags OR together.
  * 10. Every agent preset's STANDING scope is read with no session at all (the
  *     web deployment shape: host-plane skill-filesystem disabled, local
- *     discovery preset-owned), default preset first, one read per preset.
+ *     discovery preset-owned), default preset first, one read per preset; the
+ *     default id comes from the 0.1.7 `defaultId` getter (legacy
+ *     `selectionPolicy()` still honored).
+ * 10b. The preset cap is enforced with a warning.
  * 11. An unusable preset (broken composition, throwing standing mount) is
  *     reported per scope, never mounted, never sinks the roster; the preset cap
  *     is enforced with a warning.
@@ -273,6 +281,71 @@ await checkAsync('3b. a preset that no longer resolves is REPORTED, never silent
   assert.deepEqual(view.skills.map((s) => s.name), ['global-only'], 'the global layer still renders')
 })
 
+await checkAsync('3c. the acquireScope lease is released after the read; a host with neither route fails loud', async () => {
+  const hostCalls = []
+  const acquired = []
+  const released = []
+  const registry = registryStub((options) => ({
+    complete: true,
+    skills: options.scope === undefined
+      ? [{ name: 'global-skill', description: 'g', source: 'bundled', provider: 'r', invocation: { modelInvocable: true, userInvocable: true } }]
+      : [{ name: 'preset-skill', description: 'p', source: 'user-agents', provider: 'f', invocation: { modelInvocable: true, userInvocable: true } }],
+  }), hostCalls)
+  const { service } = mountHost({
+    skills: registry,
+    sessionQuery: { observeSession: async () => observationFor('/w/leased', 'build') },
+    agents: { get: () => undefined },
+    agentPresets: {
+      acquireScope: async (id) => {
+        acquired.push(id)
+        return { key: { generation: id }, [Symbol.asyncDispose]: async () => { released.push(id) } }
+      },
+    },
+  })
+  const view = await service.list(['leased-1'])
+  assert.deepEqual(acquired, ['build'], 'the lease is acquired once for the preset scope')
+  assert.deepEqual(hostCalls[1], { cwd: '/w/leased', scope: { generation: 'build' } }, 'the read uses the lease key, not the lease object')
+  assert.deepEqual(released, ['build'], 'the lease is disposed once the read finished')
+  assert.equal(view.scopes.find((s) => s.kind === 'session').error, null)
+
+  // A throwing read still releases the lease.
+  const throwing = mountHost({
+    skills: registryStub(() => { throw new Error('provider blew up') }),
+    sessionQuery: { observeSession: async () => observationFor('/w/leased', 'build') },
+    agents: { get: () => undefined },
+    agentPresets: {
+      acquireScope: async (id) => ({ key: { generation: id }, [Symbol.asyncDispose]: async () => { released.push(id) } }),
+    },
+  })
+  const thrownView = await throwing.service.list(['leased-1'])
+  assert.equal(thrownView.scopes.find((s) => s.kind === 'session').error, 'provider blew up')
+  assert.deepEqual(released, ['build', 'build'], 'the lease is disposed even when the read throws')
+
+  // The service is mounted but exposes neither route: fail loud instead of a
+  // silent cwd-only downgrade that would hide the preset layer.
+  const routeless = mountHost({
+    skills: registry,
+    sessionQuery: { observeSession: async () => observationFor('/w/leased', 'build') },
+    agents: { get: () => undefined },
+    agentPresets: { list: async () => [{ id: 'build' }] },
+  })
+  const routelessView = await routeless.service.list(['leased-1'])
+  const failed = routelessView.scopes.find((s) => s.kind === 'session')
+  assert.ok(failed.error.includes('acquireScope') && failed.error.includes('standingKeyFor'), 'the missing routes are named')
+  assert.equal(routelessView.complete, false, 'a lost preset layer is never reported as complete')
+
+  // No preset plane at all (CLI bundle): the cwd-only read stays the answer.
+  const presetless = mountHost({
+    skills: registryStub((options) => ({ complete: true, skills: [
+      { name: 'cwd-only', description: '', source: 'project-agents', provider: 'f', invocation: { modelInvocable: true, userInvocable: true } },
+    ] })),
+    sessionQuery: { observeSession: async () => observationFor('/w/plain', 'build') },
+    agents: { get: () => undefined },
+  })
+  const plainView = await presetless.service.list(['plain-1'])
+  assert.deepEqual(plainView.scopes.find((s) => s.kind === 'session').error, null, 'a preset-less deployment is not a scope failure')
+})
+
 await checkAsync('4. a cold session scopes by the preset standing key against the host registry', async () => {
   const hostCalls = []
   const hostRegistry = registryStub((options) => ({
@@ -441,6 +514,36 @@ await checkAsync('8b. an unusable preset is REPORTED, the roster survives, and t
   assert.ok(cappedView.warnings.includes('仅读取前 8 个预设（共 11 个）'), 'the preset cap is reported')
 })
 
+await checkAsync('8c. the 0.1.7 defaultId getter drives the default-first roster (legacy policy still honored)', async () => {
+  const calls = []
+  const registry = registryStub(() => ({ complete: true, skills: [
+    { name: 'any', description: '', source: 'user-agents', provider: 'f', invocation: { modelInvocable: true, userInvocable: true } },
+  ] }), calls)
+  const { service } = mountHost({
+    skills: registry,
+    agentPresets: {
+      list: async () => [{ id: 'standard' }, { id: 'cordis' }],
+      // dsh 0.1.7's public getter (class field, read defensively by the panel).
+      defaultId: 'cordis',
+      acquireScope: async (id) => ({ key: { generation: id }, [Symbol.asyncDispose]: async () => {} }),
+    },
+  })
+  const view = await service.list()
+  assert.deepEqual(view.scopes.filter((s) => s.kind === 'preset').map((s) => s.label), ['预设 cordis（默认）', '预设 standard'], 'the getter marks the default and sorts it first')
+
+  // A legacy host without the getter still finds the default via selectionPolicy.
+  const legacy = mountHost({
+    skills: registry,
+    agentPresets: {
+      list: async () => [{ id: 'standard' }, { id: 'cordis' }],
+      selectionPolicy: () => ({ enabled: true, defaultId: 'cordis' }),
+      acquireScope: async (id) => ({ key: { generation: id }, [Symbol.asyncDispose]: async () => {} }),
+    },
+  })
+  const legacyView = await legacy.service.list()
+  assert.equal(legacyView.scopes.find((s) => s.kind === 'preset').label, '预设 cordis（默认）', 'the legacy policy fallback works')
+})
+
 /* ============================= Client half ============================= */
 
 const registrations = []
@@ -509,8 +612,8 @@ async function mountPanel(container) {
   }
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
-  const section = registered.find((r) => r.options.id === 'skills-admin')
-  if (section === undefined) throw new Error('skills-admin settings section not registered')
+  const section = registered.find((r) => r.options.id === 'skills')
+  if (section === undefined) throw new Error('skills plugins-page tab not registered')
   const face = section.options.inject()
   const root = createRoot(container)
   await act(async () => { root.render(React.createElement(section.component, face)) })
@@ -637,7 +740,7 @@ await checkAsync('15. a failed roster read surfaces inline instead of a blank pa
   }
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
-  const section = registered.find((r) => r.options.id === 'skills-admin')
+  const section = registered.find((r) => r.options.id === 'skills')
   const host = document.body.appendChild(document.createElement('div'))
   const root = createRoot(host)
   await act(async () => {
@@ -708,7 +811,7 @@ await checkAsync('17. an empty roster surfaces the cause (global count + scope f
   }
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
-  const section = registered.find((r) => r.options.id === 'skills-admin')
+  const section = registered.find((r) => r.options.id === 'skills')
   const host = document.body.appendChild(document.createElement('div'))
   const root = createRoot(host)
   await act(async () => {
