@@ -154,8 +154,8 @@ assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'pluginInventoryAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all fourteen namespaces',
+  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all thirteen namespaces',
 )
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)

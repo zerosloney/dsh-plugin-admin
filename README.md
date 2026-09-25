@@ -10,7 +10,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 | 面板 | 重点 |
 |---|---|
-| 🔌 扩展插件 | 安装 / 卸载 / 更新 / 启停 profile 插件（pnpm 编排 + bundles 清单同步），Loader 运行时快照 |
+| 🔌 扩展插件 | 安装 / 卸载 / 更新 / 启停 profile 插件（pnpm 编排 + bundles 清单同步） |
 | 📚 技能 | 全量技能清单（全局层 + 每个 Agent 预设的 standing 作用域 + 会话作用域合并），严格只读、不加载正文 |
 | 🔌 MCP 服务器 | 行级 CRUD + 真实握手探测 + 工具试调用台；**已挂载条目的配置修改热应用至运行中的 server（无需重启）** |
 | 🛰️ 子智能体 | 受管子代理 CRUD + 运行中监控 / 续接 + CLI 后端挂载 |
@@ -35,10 +35,9 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 4. 启停：卡片「⏸ 停用 / ▶ 启用」（仅自带 bundle patch 的扩展插件）→ 重启生效；已停用插件跳过更新检测。
 5. 卸载：卡片「卸载」→ 行内二次确认。
 6. 搜索/筛选：搜索框按名称/版本/路径模糊过滤 + 「全部 / 扩展插件 / 系统内置」胶囊。
-7. Loader 快照：页底只读子面板，展开看各条目 fiber 阶段与 Agent 预设。
 
 ### 🕘 历史会话（Web 与会话 · 默认页签）
-历史会话面板挂在设置 → **Web 与会话** 的第一个页签里（v1.25.0 与「Web 搜索」合并为一个侧边栏入口；再往前它曾被 DOM 注入 dsh 官方的「已归档会话」页——该页 0.1.7 起移除，注入机制随之退役，历史会话自 v1.25.0 起在**所有 dsh 版本**都有稳定的侧边栏入口。「工作区」面板自 v1.24.0 起退役——各版本 dsh 均原生覆盖工作区管理）。
+历史会话面板挂在设置 → **Web 与会话** 的第一个页签里（v1.24.0 与「Web 搜索」合并为一个侧边栏入口；再往前它曾被 DOM 注入 dsh 官方的「已归档会话」页——该页 0.1.7 起移除，注入机制随之退役，历史会话自 v1.24.0 起在**所有 dsh 版本**都有稳定的侧边栏入口。「工作区」面板自 v1.24.0 起退役——各版本 dsh 均原生覆盖工作区管理）。
 
 1. 打开：设置 → Web 与会话（默认落在「历史会话」页签，点「Web 搜索」页签切换）。
 2. 历史会话：搜索框同时匹配标题/摘要/工作目录/会话 ID；状态胶囊「全部 / 在线 / 已归档 / 已结束 / 已置顶」；卡片「📌 置顶」（localStorage 持久化）；「删除」二次确认（在线会话显示「关停并删除」，先 dispose 再删日志，免重启）；「⬇ 导出」下载 Markdown 对话稿；「🩺 体检」折叠工具调用/失败/重试报告；切换「全文搜索」检索全部会话内容（部署默认关闭时点「⚡ 一键启用」→ 重启 dsh）。
@@ -91,20 +90,17 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 ### 🤖 自动化（定时任务 + Webhook）
 1. 打开：设置 → 自动化——侧边栏一个入口，页内三个页签「定时任务」「Webhook」「工作流」（v1.24.0 由定时任务与 Webhook 两个独立入口合并，工作流同时并入成为第三页签；Webhook 去掉「触发」二字）。
-2. 新建任务：id（小写字母开头）+ cron 表达式（标准五字段「分 时 日 月 周」，本地时区；支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`）+ 内置常用预设下拉（每 5 分钟 / 每小时 / 每天 09:00 / 工作日 09:00 / 每周日 00:00）+ 动作——与 Webhook 同一套词：steer（选目标在线会话，插队/排队）或 create（workspacePath + agentPreset + permissionPreset）。
-3. 语义：**宿主级**——dsh 进程存活期间到点即触发，与任何会话无关（区别于 `dsh-schedule` 的会话级 every 语义与 300s 下限）。行内显示下次触发的实时倒计时与本地时刻；steer 目标不在线时标记「⚠ 目标会话离线」。
-4. 手动：「▶ 立即触发」走与定时触发完全相同的路径（注入消息 / 新建会话 + 记录历史）。
-5. 持久化与调度：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外部编辑即时生效）；调度器每任务一个 timer，触发前重读存储避免与面板编辑竞态；插件卸载 / dsh 退出清理全部 timer。**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。
-6. 注意：cron 的 create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时，需先在「Webhook」页签安装并挂载 → 重启。
-7. Webhook 规则：id（小写字母开头）+ secret（≥16 字符，留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
-8. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
-9. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
-10. 持久化：交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合落盘 `$DSH_HOME/webhook-history.json`（原子写），**重启 dsh 后历史保留、重发的同 delivery id 依旧去重**；容量可用插件 config 行 `webhookHistoryCap` 调整。
-11. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。2. 新建规则：id（小写字母开头）+ secret（≥16 字符，留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
-3. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
-4. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
-5. 持久化：交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合落盘 `$DSH_HOME/webhook-history.json`（原子写），**重启 dsh 后历史保留、重发的同 delivery id 依旧去重**；容量可用插件 config 行 `webhookHistoryCap` 调整。
-6. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
+2. **模板与新手引导**：三个页签顶部都有一句话说明 + 三步上手引导；「定时任务」「Webhook」各带 3 张模板卡片，点卡片自动填好编辑器（含 cron / 提示词 / 动作），改改参数就能用——定时任务：工作日早报（`0 9 * * 1-5`）/ 每周周报（`0 17 * * 5`）/ 每小时巡检（`0 * * * *`）；Webhook：CI 失败自动处理 / GitHub Issue 分诊 / 报警新建会话处理。
+3. 新建任务：id（小写字母开头）+ cron 表达式（标准五字段「分 时 日 月 周」，本地时区；支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`）+ 内置常用预设下拉（每 5 分钟 / 每小时 / 每天 09:00 / 工作日 09:00 / 每周日 00:00）+ 动作——与 Webhook 同一套词：steer（选目标在线会话，插队/排队）或 create（workspacePath + agentPreset + permissionPreset）。
+4. 语义：**宿主级**——dsh 进程存活期间到点即触发，与任何会话无关（区别于 `dsh-schedule` 的会话级 every 语义与 300s 下限）。行内显示下次触发的实时倒计时与本地时刻；steer 目标不在线时标记「⚠ 目标会话离线」。
+5. 手动：「▶ 立即触发」走与定时触发完全相同的路径（注入消息 / 新建会话 + 记录历史）。
+6. 持久化与调度：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外部编辑即时生效）；调度器每任务一个 timer，触发前重读存储避免与面板编辑竞态；插件卸载 / dsh 退出清理全部 timer。**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。
+7. 注意：cron 的 create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时，需先在「Webhook」页签安装并挂载 → 重启。
+8. Webhook 规则：id（小写字母开头）+ secret（新建规则自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑时留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
+9. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
+10. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
+11. 持久化：交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合落盘 `$DSH_HOME/webhook-history.json`（原子写），**重启 dsh 后历史保留、重发的同 delivery id 依旧去重**；容量可用插件 config 行 `webhookHistoryCap` 调整。
+12. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
 
 ### 🔍 Web 搜索（Web 与会话 · 第二页签）
 1. 打开：设置 → Web 与会话 → 「Web 搜索」页签。
@@ -137,7 +133,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 | v1.23.1 | **0.1.5-rc.2**（`latest` 标签） | ✅ 全功能；当时历史会话 / 工作区以独立入口回退 |
 
 - **dsh 最新发布：0.1.6-alpha.2**（alpha 预发布；`latest` 标签仍为 0.1.5-rc.2）。升级命令：`npm i -g @deepseek-ai/dsh@0.1.6-alpha.2`。
-- **历史会话入口**：v1.24.0 及之前，插件在检测到 dsh 官方「已归档会话」页（0.1.6-alpha.2 引入、0.1.7 移除）时把面板 DOM 注入其中，页面缺失时回退注册独立侧边栏入口。**v1.25.0 起注入机制退役**——历史会话固定作为「Web 与会话」入口的默认页签，所有 dsh 版本行为一致。「工作区」自 v1.24.0 起不再注册任何入口（各版本 dsh 均原生覆盖工作区管理）。
+- **历史会话入口**：v1.24.0 及之前，插件在检测到 dsh 官方「已归档会话」页（0.1.6-alpha.2 引入、0.1.7 移除）时把面板 DOM 注入其中，页面缺失时回退注册独立侧边栏入口。**v1.24.0 起注入机制退役**——历史会话固定作为「Web 与会话」入口的默认页签，所有 dsh 版本行为一致。「工作区」自 v1.24.0 起不再注册任何入口（各版本 dsh 均原生覆盖工作区管理）。
 - **0.1.5-rc.2 的 `dsh-workspace` 没有 `unarchiveSession`**（0.1.6-alpha.2 补上）：插件照常挂载（挂载时告警），删除已归档会话跳过归档清理、显式取消归档报清晰错误；升级到 0.1.6-alpha.2 后恢复完整。
 - 版本敏感接缝（升级 dsh / cordis 后重跑 `npm test` 验证，各 verify 脚本对下述接缝做真实契约断言）：
   1. **workspaceRegistry 动词面**——`archiveSession` / `unarchiveSession` / `archivedSessionIds`（只走公开动词，不碰 TS-private `requireState` / `setState`）；

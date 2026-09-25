@@ -300,6 +300,20 @@ const ctx = {
             runtimePackageInstalled: true,
           } }
         }
+        // The 定时任务 tab inside 自动化: one seeded task; upsert captured.
+        if (method === 'cronAdmin/list') {
+          return { ok: true, value: {
+            tasks: [{ id: 'daily-standup', enabled: true, cron: '0 9 * * 1-5', nextRun: Date.now() + 3600_000, nextRunISO: new Date(Date.now() + 3600_000).toISOString(), action: { mode: 'steer', sessionId: 'session-1', steer: true }, promptTemplate: '站会提醒' }],
+            history: [],
+            storagePath: 'C:/Users/demo/.dsh/cron-tasks.json',
+            schedulerActive: true,
+          } }
+        }
+        if (method === 'cronAdmin/upsert') {
+          ctx.cronUpserts = ctx.cronUpserts ?? []
+          ctx.cronUpserts.push(payload.args.entry)
+          return { ok: true, value: { tasks: [], history: [] } }
+        }
         // The 工作流 tab inside 自动化: reads active runs + saved scripts on mount.
         if (method === 'workflowAdmin/listRuns') {
           return { ok: true, value: { active: ctx.workflowRuns ?? [] } }
@@ -1537,10 +1551,73 @@ await act(async () => {
 })
 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 text = document.body.textContent
+assert.ok(text.includes('Webhook = 外部事件'), 'the webhook guide banner explains the concept')
+assert.ok(text.includes('从模板开始'), 'the webhook template row header shows the one-click entry')
+assert.ok(text.includes('CI 失败自动处理') && text.includes('GitHub Issue 分诊') && text.includes('报警新建会话处理'), 'all three webhook template cards render')
 assert.ok(text.includes('ci-fail'), 'webhook rule card rendered from webhookAdmin/list')
 assert.ok(text.includes('POST'), 'endpoint hint rendered')
 assert.ok(text.includes('已安装，需挂载'), 'runtime-not-mounted banner rendered')
+// Clicking a webhook template card prefills the rule editor: id + prompt land.
+await act(async () => {
+  const tplCard = [...host.querySelectorAll('div')].find((el) => el.textContent?.includes('CI 失败自动处理') && !el.textContent.includes('GitHub Issue'))
+  assert.ok(tplCard, 'the CI template card is in the document')
+  tplCard.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+const wsIdInput = [...host.querySelectorAll('input')].find((i) => i.value === 'ci-fail-fix')
+assert.ok(wsIdInput !== undefined, 'the webhook editor opened with the template id prefilled')
+// New rules carry a fresh 16-char secret (host requires >= 16) — the user
+// never has to invent one, and two rules never share a default.
+const wsSecretInput = [...host.querySelectorAll('input')].find((i) => i.type === 'password')
+assert.ok(wsSecretInput !== undefined, 'the webhook editor has the secret input')
+assert.ok(/^[A-Za-z0-9]{16}$/.test(wsSecretInput.value), 'a fresh 16-char alphanumeric secret is prefilled for the new rule (' + wsSecretInput.value.length + ' chars)')
+const firstSecret = wsSecretInput.value
+await act(async () => {
+  const regenBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === '🎲 换一个')
+  assert.ok(regenBtn !== undefined, 'the 🎲 regenerate button renders beside the secret input')
+  regenBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+assert.ok(/^[A-Za-z0-9]{16}$/.test(wsSecretInput.value), 'regenerating draws another 16-char secret')
+assert.notEqual(wsSecretInput.value, firstSecret, 'the regenerated secret differs from the prefilled one')
+const wsPromptArea = [...host.querySelectorAll('textarea')].find((t) => t.value.includes('$PAYLOAD'))
+assert.ok(wsPromptArea !== undefined, 'the template prompt template lands in the editor')
+await act(async () => {
+  const cancelBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === '取消')
+  cancelBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
 await act(async () => { automationRoot.unmount() })
+host.remove()
+
+// 15y1. The 自动化 page's default 定时任务 tab: guide banner, template cards,
+// the seeded task row, and a template click-through that prefills the editor.
+ctx.cronUpserts = []
+const automationRootCron = await mountSection(automationSectionRef)
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+text = document.body.textContent
+assert.ok(text.includes('定时任务 = 到点自动给 dsh 发一句话'), 'the cron guide banner explains the concept')
+assert.ok(text.includes('工作日早报') && text.includes('每周周报') && text.includes('每小时巡检'), 'all three cron template cards render')
+assert.ok(text.includes('daily-standup'), 'the seeded cron task row renders beside the templates')
+await act(async () => {
+  const tplCard = [...host.querySelectorAll('div')].find((el) => el.textContent?.includes('每周周报') && !el.textContent.includes('工作日早报'))
+  assert.ok(tplCard, 'the weekly-report template card is in the document')
+  tplCard.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+const cronIdInput = [...host.querySelectorAll('input')].find((i) => i.value === 'weekly-report')
+assert.ok(cronIdInput !== undefined, 'the cron editor opened with the template id prefilled')
+const cronPromptArea = [...host.querySelectorAll('textarea')].find((t) => t.value.includes('周报'))
+assert.ok(cronPromptArea !== undefined, 'the template prompt lands in the editor')
+// Save rides cronAdmin/upsert with the seeded cron expression intact.
+await act(async () => {
+  const saveBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === '创建')
+  saveBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+assert.equal(ctx.cronUpserts.length, 1, 'saving the template task calls cronAdmin/upsert once')
+assert.equal(ctx.cronUpserts[0].id, 'weekly-report', 'the upsert carries the template id')
+assert.equal(ctx.cronUpserts[0].cron, '0 17 * * 5', 'the template cron expression survives the schedule composer')
+await act(async () => { automationRootCron.unmount() })
 host.remove()
 
 // 15y2. The 自动化 page's 工作流 tab: the redesigned panel lands inside 自动化
