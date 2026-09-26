@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 > Panel copy ships in Simplified Chinese and English (the 🌐 button in the Extensions toolbar; it follows the browser language and falls back to the Chinese source text, so it never renders a broken string).
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.24.0 · MIT
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.24.1 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
 **🇨🇳 Full Chinese documentation (this file is the synchronized English mirror):** [README.md](./README.md)
 
