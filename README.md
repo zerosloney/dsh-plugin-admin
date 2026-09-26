@@ -1,6 +1,6 @@
 # dsh-plugin-admin
 
-dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**命令**、**钩子**、**自动化（定时任务 + Webhook + 工作流）**、**Web 与会话（历史会话 + Web 搜索）**、**用量仪表盘**、**待办清单**十个独立面板（历史会话与 Web 搜索共用一个侧边栏入口、页内双页签）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
+dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**命令**、**钩子**、**自动化（定时任务 + Webhook + 工作流）**、**Web 与会话（历史会话 + Web 搜索）**、**用量仪表盘**、**待办清单**——十个管理入口（3 个独立设置页：Web 与会话 27 / 用量仪表盘 28 / 自动化 29；6 个页签：扩展插件在「插件」页内，技能、MCP 服务器、子智能体、命令、钩子 在「内置插件」页内；1 个输入框上方浮层：待办清单）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
 
 > 面板文案内置简体/English 双语（扩展插件面板工具栏 🌐 切换，跟随浏览器语言，回退中文原文，永不出坏）。
 
@@ -37,7 +37,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 6. 搜索/筛选：搜索框按名称/版本/路径模糊过滤 + 「全部 / 扩展插件 / 系统内置」胶囊。
 
 ### 🕘 历史会话（Web 与会话 · 默认页签）
-历史会话面板挂在设置 → **Web 与会话** 的第一个页签里，与「Web 搜索」共用一个侧边栏入口、页内双页签，在所有 dsh 版本下行为一致。「工作区」面板已退役——各版本 dsh 均原生覆盖工作区管理。
+历史会话面板挂在设置 → **Web 与会话** 的第一个页签里，与「Web 搜索」共用一个侧边栏入口、页内双页签，在所有 dsh 版本下行为一致。「工作区」面板已退役，插件不再为它注册任何入口——各版本 dsh 均原生覆盖工作区管理（客户端那份 Web 工作区实现仅作为测试接缝保留）；宿主侧的 `workspaceAdmin` 命名空间仍随插件注册（历史兼容的 RPC 面，不是面板入口）。
 
 1. 打开：设置 → Web 与会话（默认落在「历史会话」页签，点「Web 搜索」页签切换）。
 2. 历史会话：搜索框同时匹配标题/摘要/工作目录/会话 ID；状态胶囊「全部 / 在线 / 已归档 / 已结束 / 已置顶」；卡片「📌 置顶」（localStorage 持久化）；「删除」二次确认（在线会话显示「关停并删除」，先 dispose 再删日志，免重启）；「⬇ 导出」下载 Markdown 对话稿；「🩺 体检」折叠工具调用/失败/重试报告；切换「全文搜索」检索全部会话内容（部署默认关闭时点「⚡ 一键启用」→ 重启 dsh）。
@@ -71,10 +71,10 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 ### 🧵 工作流
 1. 打开：设置 → 自动化 → 「工作流」页签（排在「Webhook」之后）。页首有通俗说明与三步引导；**「从模板开始」**提供三个开箱即用的模板卡片（主题总结 / 并行双角度分析 / 分步润色流水线）——点卡片自动填好脚本、名称与参数，改改参数点「🚀 启动」即可，不会写代码也能跑。
 2. 新建：脚本（TypeScript / JavaScript，**顶层 `return` 即运行结果**）+ 名称（可选）+ args（JSON）→ 🚀 启动。父会话：工作流的子代理从某个在线会话派生——恰有一个在线会话时自动选中不出控件，多个时下拉选择（标题 · 工作目录），零个时提示先开会话。
-3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ label, provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd)` 走宿主 shell（失败抛出，脚本自行 try/catch）。脚本跑在 **node:vm 独立 realm**：require / import / fs / network / process 均不可达——只编排，重活交给 `agent()` / `shell()`；realm 防的是意外访问，不是硬安全边界（与宿主同进程、同信任级别）。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 会让运行判 errored 而不是产出损坏记录）。
-4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用）；详情 2s 轮询实时刷新。停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」会被拒绝（防新旧双跑），等运行真正结束后用「续跑」。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（孤儿运行标记 orphaned）。
+3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**，只有宿主 `ctx.shell` 不可用或运行被中止才抛出（脚本自行 try/catch）。脚本跑在 **node:vm 独立 realm**：require / import / fs / network / process 均不可达——只编排，重活交给 `agent()` / `shell()`；realm 防的是意外访问，不是硬安全边界（与宿主同进程、同信任级别）。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 会让运行判 errored 而不是产出损坏记录）。
+4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用；**缓存键只含 `站点序号:kind:sha256(prompt)`——只改 `opts`/`args` 而脚本不变时该步仍命中缓存**）；详情 2s 轮询实时刷新。停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」会被拒绝（防新旧双跑），等运行真正结束后用「续跑」。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是**读取时按父会话是否在线派生的**，不落盘）。
 5. 工作库：「保存」脚本入库——全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）；卡片「🚀 运行」一键启动。
-6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 同步干跑（agent 桩化，零调用成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
+6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 干跑（同一次工具调用内 await 完成、**不起后台运行**，`agent()` 桩化、`shell()` 直接报错，零子代理成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
 7. 保存作用域自动识别（对齐 ZCode SaveWorkflow）：会话内经工具保存且未指定 scope 时，调用会话有 cwd → 存**项目** `.dsh/workflows/`；识别不了（无调用会话 / 会话无 cwd）→ 工具回 `needsScopeChoice`，由模型转问用户「存项目还是全局」，带选择重调。`delete_saved` 对称识别（项目优先、回退全局并回报实际删除的一级）。
 8. 斜杠命令：`/workflow` 随插件挂载**自动注册**（无需配置；与既有命令重名时只降级告警）——
    - `/workflow create <任务描述>`：**按描述自动创建**——任务 steer 给当前会话的模型，经 `workflow_admin` 生成工作流脚本 → `eval` 干跑验证 → `create` 后台启动并回报 run id（值得复用再 `save`，scope 自动识别）；并行编排由脚本内的 `parallel()` 承担；
@@ -91,10 +91,10 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 ### 🤖 自动化（定时任务 + Webhook）
 1. 打开：设置 → 自动化——侧边栏一个入口，页内三个页签「定时任务」「Webhook」「工作流」。
 2. **模板与新手引导**：三个页签顶部都有一句话说明 + 三步上手引导；「定时任务」「Webhook」各带 3 张模板卡片，点卡片自动填好编辑器（含 cron / 提示词 / 动作），改改参数就能用——定时任务：工作日早报（`0 9 * * 1-5`）/ 每周周报（`0 17 * * 5`）/ 每小时巡检（`0 * * * *`）；Webhook：CI 失败自动处理 / GitHub Issue 分诊 / 报警新建会话处理。
-3. 新建任务：id（小写字母开头）+ cron 表达式（标准五字段「分 时 日 月 周」，本地时区；支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`）+ 内置常用预设下拉（每 5 分钟 / 每小时 / 每天 09:00 / 工作日 09:00 / 每周日 00:00）+ 动作——与 Webhook 同一套词：steer（选目标在线会话，插队/排队）或 create（workspacePath + agentPreset + permissionPreset）。
+3. 新建任务：id（小写字母开头）+ **结构化频率编辑器**（每小时 / 每天 / 每周 / 自定义——每小时选分钟、每天与每周点时间与星期，自定义模式直接写五字段表达式）+ 动作——与 Webhook 同一套词：steer（选目标在线会话，插队/排队）或 create（workspacePath + agentPreset + permissionPreset）。编辑器下方实时回显合成后的表达式（本地时区，如 `0 * * * *`）与「进程重启期间到期的任务不补投」提示；五字段语法支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`（任务文件被外部直接编辑或沿用旧格式时按同一套解析器读入）。
 4. 语义：**宿主级**——dsh 进程存活期间到点即触发，与任何会话无关（区别于 `dsh-schedule` 的会话级 every 语义与 300s 下限）。行内显示下次触发的实时倒计时与本地时刻；steer 目标不在线时标记「⚠ 目标会话离线」。
 5. 手动：「▶ 立即触发」走与定时触发完全相同的路径（注入消息 / 新建会话 + 记录历史）。
-6. 持久化与调度：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外部编辑即时生效）；调度器每任务一个 timer，触发前重读存储避免与面板编辑竞态；插件卸载 / dsh 退出清理全部 timer。**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。
+6. 持久化与调度：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像）；调度器每任务一个 timer，触发前重读的是**内存镜像**（面板写入即时刷新它，外部文件编辑则等一次防抖），并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer。**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。
 7. 注意：cron 的 create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时，需先在「Webhook」页签安装并挂载 → 重启。
 8. Webhook 规则：id（小写字母开头）+ secret（新建规则自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑时留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
 9. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
@@ -141,23 +141,55 @@ pnpm dsh --profile web
 ## 自动化自检
 
 ```sh
-npm test   # 27 个脚本：self-check / host-check / verify-* / integration-check
+npm test   # 28 个脚本：self-check / host-check / verify-* / integration-check
 ```
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（78 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
-- 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 / 布局漂移 / 并发竞态），用于把面板报错对号入座；`node scripts/smoke-cron-panel.mjs` 在 jsdom 里真实挂载定时任务面板（列表 / 开关 / 编辑器 / 预设 / 保存）。
+- `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。
+- 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 / 布局漂移 / 并发竞态），用于把面板报错对号入座。
 
 ## 可调配置键（插件 config 行）
 
+`resolvePluginConfig` 认 **14 个受校验的键**（下面第一张表）与 **11 个直通键**（第二张表）。前者写错类型 / 范围会在**挂载期直接报错**（fail-loud，不会静默降级）；后者**不做任何校验**、也不在导出的 `Config` schema 里，写错类型会被静默忽略并回落默认值（例如 `commandsDir: 5` 不报错，只是不起作用）——这是已知的不对称。
+
+**受校验（14）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
+
+| 分组 | 键 | 默认 | 说明 |
+|---|---|---|---|
+| 插件与更新 | `pnpmTimeoutMs` | 300000 | pnpm 操作预算（ms，过期杀进程树） |
+| 插件与更新 | `updateCheckTimeoutMs` | 8000 | 单次 registry 检查预算（ms） |
+| 插件与更新 | `updateCheckConcurrency` | 4 | 并发检查条数（正整数） |
+| 插件与更新 | `updateCheckCacheTtlMs` | 300000 | 检查结果缓存 TTL（ms） |
+| git 与待办 | `gitTimeoutMs` | 5000 | 单条 git 命令预算（ms） |
+| git 与待办 | `gitStatsCacheTtlMs` | 3000 | 文件变更统计缓存 TTL（ms） |
+| git 与待办 | `gitDiffMaxChars` | 524288 | diff 最大字符数，超出截断并标注 |
+| 会话 | `sessionSummaryCacheTtlMs` | 60000 | 会话摘要缓存 TTL（ms） |
+| 会话 | `sessionListConcurrency` | 4 | 会话表并发读取数（正整数） |
+| 会话 | `sessionEventScanCap` | 20000 | 摘要回放的事件上限（正整数） |
+| 会话 | `sessionSearchLimit` | 30 | 全文搜索返回上限（正整数） |
+| 会话 | `sessionExportEventCap` | 200000 | 导出/体检整份读日志的事件上限，超出标记截断 |
+| 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
+| 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
+
+**直通（11）**——同一 config 行原样透传，由各子模块读；缺省即用下表默认值：
+
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `usageSnapshotIntervalMs` | 3600000 | 用量后台快照间隔，`0` 关闭 |
-| `usageLedgerCap` | 2000 | 用量台账保留行数（100–100000），超出按最后见到时间淘汰 |
-| `webhookHistoryCap` | 200 | Webhook 交付历史条数（1–10000），历史与去重集合同文件落盘 |
-| `webhookTriggersPath` / `webhookHistoryPath` | `$DSH_HOME` 下 | 规则 / 交付历史存储文件路径覆盖（测试与特殊部署用） |
-| `pnpmTimeoutMs` / `gitTimeoutMs` 等 | 见 `resolvePluginConfig` | pnpm / git / 更新检查预算 |
+| `commandsDir` | `$DSH_HOME/commands` | 命令目录（缺失自动创建） |
+| `hooksPath` | `$DSH_HOME/hooks.json` | hooks 存储 |
+| `disabledPath` | `$DSH_HOME/hooks.disabled.json` | 停用钩子 sidecar |
+| `codexHooksPath` | `$DSH_HOME/hooks.codex.json` | Codex 兄弟桥（手改文件） |
+| `cronTasksPath` | `$DSH_HOME/cron-tasks.json` | 定时任务存储 |
+| `webhookTriggersPath` | `$DSH_HOME/webhook-triggers.json` | Webhook 规则存储 |
+| `webhookHistoryPath` | `$DSH_HOME/webhook-history.json` | 交付历史存储（与去重集合同文件） |
+| `webhookHistoryCap` | 200 | 交付历史条数（1–10000，越界回落默认） |
+| `projectCommands` | 启用 | `false` 关闭项目 `.agents` 命令注册 |
+| `projectHooks` | 启用 | `false` 关闭项目 hooks 拦截 |
+| `projectHooksTrust` | `confirm` | 仅 `allow-all` 启用自动放行，其余值一律 `confirm` |
+
+> 路径类键（`commandsDir` / `hooksPath` / … / `cronTasksPath`）是测试与特殊部署用的覆盖点；只有 `usageLedgerCap` 额外受 `lib/usage-ledger.js` 自身预算钳制。
 
 ## 信任边界
 

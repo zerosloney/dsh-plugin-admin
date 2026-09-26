@@ -1,9 +1,16 @@
 /**
- * Throwaway render smoke test for the CronSection panel (not part of npm test):
- * mounts the registered component in jsdom against a mocked RPC gateway and
- * asserts list render + editor open/edit round-trip work without throwing.
+ * Client-side verification for the 定时任务 panel: mounts the 自动化 section in
+ * jsdom (the cron list is that page's default tab) against a mocked RPC gateway
+ * and asserts list render, row toggle, and the manual editor round-trip
+ * (typed id + hourly frequency → composed cron → cronAdmin/upsert).
  *
- * Run: node scripts/smoke-cron-panel.mjs
+ * Part of `npm test`. The template-card path of the same page is covered by
+ * self-check (case 15y1); this script keeps the manual editor path and the row
+ * toggle honest. Both exist because the panel used to be a standalone
+ * `cron-tasks` settings section — if that section ever comes back, these
+ * assertions and self-check's `byId['cron-tasks'] === undefined` disagree loudly.
+ *
+ * Run: node scripts/verify-cron-panel.mjs
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -44,6 +51,8 @@ let store = {
     { id: 'disabled-one', enabled: false, cron: '*/5 * * * *', action: { mode: 'create', workspacePath: 'C:/proj', agentPreset: 'cordis', permissionPreset: 'workspace-write' }, promptTemplate: '' },
   ],
 }
+/** Every cronAdmin/upsert payload the editor produced (asserted at the end). */
+const upserts = []
 
 const call = async (method, args) => {
   if (method === 'cronAdmin/list') {
@@ -61,6 +70,7 @@ const call = async (method, args) => {
     return { ok: true, value: { presets: [{ id: 'cordis', name: 'cordis' }], permissionPresetNames: ['workspace-write'] } }
   }
   if (method === 'cronAdmin/upsert') {
+    upserts.push(args.entry)
     store = { ...store, tasks: store.tasks.filter((t) => t.id !== args.entry.id).concat([args.entry]) }
     return { ok: true, value: { tasks: store.tasks, history: [] } }
   }
@@ -90,15 +100,25 @@ const ctx = {
   },
 }
 exports.apply(ctx)
-const cronReg = slotRegistrations.find((r) => r.declaration.id === 'cron-tasks')
-assert.ok(cronReg, 'cron-tasks section registered')
-assert.equal(cronReg.declaration.label, '定时任务')
+// The 定时任务 panel is no longer a standalone settings section: it merged into
+// the 自动化 page as that page's default internal tab (same shape self-check
+// asserts). Capture the SECTION registration and mount it; the cron list is what
+// the default tab renders.
+const automationReg = slotRegistrations.find((r) => r.declaration.id === 'automation')
+assert.ok(automationReg, 'automation section registered')
+assert.equal(automationReg.declaration.label, '自动化')
+assert.equal(
+  slotRegistrations.find((r) => r.declaration.id === 'cron-tasks'),
+  undefined,
+  'the standalone 定时任务 section stays merged into 自动化',
+)
 
 const container = document.getElementById('root')
 const root = createRoot(container)
 await act(async () => {
-  root.render(React.createElement(cronReg.component, cronReg.declaration.inject()))
+  root.render(React.createElement(automationReg.component, automationReg.declaration.inject()))
 })
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
 
 const text = () => container.textContent
 assert.ok(text().includes('morning-digest'), 'list renders the task id')
@@ -115,22 +135,34 @@ const checkbox = container.querySelector('input[type="checkbox"]')
 const propsOf = (el) => el[Object.keys(el).find((k) => k.startsWith('__reactProps$'))]
 await act(async () => { propsOf(checkbox).onChange({ target: { checked: false } }) })
 
-// Editor: open on new task, type an id, pick a preset, save.
+// Editor: open on a new task, type an id, pick the hourly frequency, save.
+// The schedule control is the structured frequency selector introduced with the
+// 自动化 page (option VALUES are hourly/daily/weekly/custom; the visible labels
+// are the zh chrome) — the old free-text `常用预设` cron dropdown is gone, and
+// the composed expression is what reaches cronAdmin/upsert.
 const button = (label) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(label))
 await act(async () => { button('新建任务').click() })
-assert.ok(text().includes('cron 表达式'), 'editor opened with the cron field')
 assert.ok(text().includes('推送到既有会话'), 'editor renders the action pills')
-assert.ok(text().includes('常用预设'), 'editor renders the preset dropdown')
+const freqSelect = [...container.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'hourly'))
+assert.ok(freqSelect, 'editor renders the frequency selector')
+assert.deepEqual(
+  [...freqSelect.options].map((o) => o.textContent),
+  ['每小时', '每天', '每周', '自定义'],
+  'frequency selector offers the four documented modes',
+)
 
 const idInput = [...container.querySelectorAll('input')].find((i) => i.placeholder && i.placeholder.includes('任务标识'))
 await act(async () => { propsOf(idInput).onChange({ target: { value: 'hourly-sync' } }) })
 
-const presetSelect = [...container.querySelectorAll('select')].pop()
-await act(async () => { propsOf(presetSelect).onChange({ target: { value: '*/5 * * * *' } }) })
+await act(async () => { propsOf(freqSelect).onChange({ target: { value: 'hourly' } }) })
 
 await act(async () => { button('创建').click() })
-assert.ok(!text().includes('cron 表达式'), 'editor closed after save')
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+assert.ok(!text().includes('推送到既有会话'), 'editor closed after save')
 assert.ok(text().includes('hourly-sync'), 'new task appears in the list')
+assert.equal(upserts.length, 1, 'saving the manual task rides cronAdmin/upsert once')
+assert.equal(upserts[0].id, 'hourly-sync', 'the upsert carries the typed id')
+assert.equal(upserts[0].cron, '0 * * * *', 'the hourly frequency composes the documented cron')
 
-console.log('smoke-cron-panel OK: CronSection renders, lists, toggles, opens editor, picks a preset, and saves')
+console.log('verify-cron-panel OK: CronSection renders inside 自动化, lists, toggles, opens the editor, picks the hourly frequency, and saves')
 process.exit(0)

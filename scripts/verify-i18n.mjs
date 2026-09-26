@@ -5,7 +5,7 @@
  * English surface silently degrades to mixed-language chrome.
  *
  * How the pieces fit (see the i18n block at the top of lib/client.js):
- *   - source strings are zh-CN literals wrapped by dshT(...) at ~1100 sites;
+ *   - source strings are zh-CN literals wrapped by dshT(...) at ~870 sites;
  *   - `var I18N_EN = { … }` holds the English table, one JSON-escaped pair
  *     per line (written by the injection tooling);
  *   - two exempt classes never get entries: the two aria-label CSS selector
@@ -25,9 +25,10 @@ const src = readFileSync(join(here, '../lib/client.js'), 'utf8')
 const CJK = /[\u4e00-\u9fff\u3400-\u4dbf]/
 
 // -- 1. every dshT('…') argument decodes to a dictionary key -----------------
-// All 888 call sites use single quotes (the migration preserved source
-// style); the body may contain escaped quotes and double quotes (the CSS
-// selector probes do).
+// All call sites use single quotes (the migration preserved source style); the
+// body may contain escaped quotes and double quotes (the CSS selector probes
+// do). Exact counts drift with every new string — the printed summary line is
+// the source of truth, and the assertions below only bound the magnitude.
 const decode = (raw) => raw.replace(/\\(['"\\nrt0])/g, (_, c) => ({ n: '\n', r: '\r', t: '\t', '0': '\0' }[c] ?? c))
 const callSites = new Set()
 for (const match of src.matchAll(/\bdshT\('((?:[^'\\]|\\.)*)'\)/g)) {

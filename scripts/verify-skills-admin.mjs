@@ -405,6 +405,13 @@ await checkAsync('6. complete:false propagates and the session cap warns', async
   const view = await service.list(many)
   assert.equal(view.complete, false, 'an incomplete observation is surfaced, never silently completed')
   assert.ok(view.warnings.includes('仅解析前 32 个会话（共 40 个）'), 'the session cap is reported')
+  // The aggregate boolean alone cannot tell a reader WHICH layer is short — the
+  // panel used to print a hard-coded provider name here. Every incomplete layer
+  // must be named in the warning channel the panel already renders.
+  const partial = view.warnings.find((w) => w.startsWith('以下技能层的源未报告完整发现'))
+  assert.ok(partial, 'the incomplete layers are named, not just the aggregate boolean')
+  assert.ok(partial.includes('全局'), 'the global layer is named')
+  assert.ok(partial.includes('/w/all @ build'), 'the incomplete session scope is named')
   assert.equal(view.sessions.length, 32, 'only the cap is resolved')
 })
 

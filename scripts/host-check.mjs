@@ -26,7 +26,7 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -99,6 +99,11 @@ const typertRegister = (descriptor) => {
   typertRegistrations.push(descriptor)
   return () => {}
 }
+// Minimal `subagents` service face for the workflow mount's gate. Only the
+// ctx.get() route is stubbed: subagent-admin reads the `ctx.subagents` PROPERTY
+// face, which stays absent on purpose so its existing "no live subagents"
+// degrade path in this harness is untouched.
+const subagentsStub = { list: () => [] }
 const fakeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -111,8 +116,15 @@ const fakeCtx = {
     if (typeof dispose === 'function') globalEffectDisposers.push(dispose)
   },
   // Real shape: services resolve through ctx.get(). `workspaceRegistry` is
-  // optional (web-app only) — this deployment has one.
-  get: (name) => (name === 'workspaceRegistry' ? fakeCtx.workspaceRegistry : undefined),
+  // optional (web-app only) — this deployment has one. `subagents` is the
+  // workflow mount's hard gate (applyWorkflowAdmin early-returns without it,
+  // taking all twelve workflow endpoints out of the descriptor), so it must
+  // resolve here or the workflow surface silently goes untested.
+  get: (name) => {
+    if (name === 'workspaceRegistry') return fakeCtx.workspaceRegistry
+    if (name === 'subagents') return subagentsStub
+    return undefined
+  },
   // project-agents / project-hooks listen on agent lifecycle events; the
   // host-check only needs the registration to be observable, the listeners
   // never fire.
@@ -147,6 +159,7 @@ assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
+assert.ok(fakeCtx.provided?.workflowAdmin, 'workflowAdmin service provided (merged)')
 // One unified descriptor per package: all fourteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
@@ -154,9 +167,21 @@ assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all thirteen namespaces',
+  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all fourteen namespaces',
 )
+// The workflow surface rides the same descriptor. What host-check uniquely
+// guards here is that the mount REACHES the descriptor at all: the workflow
+// mount reads `ctx.get('subagents')` and early-returns when it is missing, so
+// before the fake context resolved that key the plugin silently shipped
+// thirteen namespaces in this harness (and all twelve workflow endpoints went
+// unchecked). The engine/journal/tool wiring has its own verifiers
+// (verify-workflow-*.mjs) — this block only pins the wire surface.
+const wfIds = typertRegistrations[0].invocations.map((i) => i.id)
+for (const tail of ['workflow/listRuns', 'workflow/getRun', 'workflow/startRun', 'workflow/stopRun', 'workflow/amendRun', 'workflow/resumeRun', 'workflow/answerRun', 'workflow/listSaved', 'workflow/getSaved', 'workflow/saveSaved', 'workflow/deleteSaved', 'workflow/runSaved']) {
+  assert.ok(wfIds.includes(`dsh-plugin-admin/${tail}`), `unified descriptor carries ${tail}`)
+}
+
 // The overlay enablement invocations must all be present.
 const overlayIds = typertRegistrations[0].invocations.map((i) => i.id)
 for (const tail of ['overlay/status', 'overlay/searchEnable']) {
@@ -1109,7 +1134,20 @@ assert.ok(/failed|timed out|refused|ECONNREFUSED/.test(deadHttpProbe.error || ''
 await assert.rejects(() => mcp.test('mcp-does-not-exist'), /not found/, 'test on unknown id rejected')
 httpServer.close()
 
-rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
+// Housekeeping reset after the MCP section: drop the throwaway fixtures but
+// LEAVE dsh-home alone. The command-hook mount still holds an fs.watch on
+// <scratch>/dsh-home/commands until the final teardown, and on Windows deleting
+// a watched tree can throw EPERM or trip a libuv closing-handle assertion
+// (`!(handle->flags & UV_HANDLE_CLOSING)`) — observed once as a hard crash with
+// no output at all. The strict whole-root delete stays at the end, AFTER the
+// disposers run, where it doubles as a watcher-leak detector.
+const scratchRoot = join(here, '../.host-check-tmp')
+if (existsSync(scratchRoot)) {
+  for (const entry of readdirSync(scratchRoot)) {
+    if (entry === 'dsh-home') continue
+    rmSync(join(scratchRoot, entry), { recursive: true, force: true })
+  }
+}
 
 /* --------------- closeSession: dispose captured handle then delete ---------------
  * Online sessions are torn down through the captured AgentHandle (the handle
