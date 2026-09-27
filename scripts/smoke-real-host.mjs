@@ -83,10 +83,12 @@ console.log(`dsh ${dshVersion} | plugin ${join(PLUGIN_DIR, 'package.json')}`)
 const pluginVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-home-'))
-// Inherit the environment as-is: the profile install must use whatever registry
-// the machine/CI is configured for (injecting one here only made CI behave
-// differently from every local run).
+// Inherit the environment as-is EXCEPT NODE_OPTIONS: CI sets it to preload the
+// failure annotator for this script, and env inheritance would run that preload
+// inside every `dsh`/`pnpm` process too — polluting the very output this script
+// reports and perturbing the tools under test.
 const env = { ...process.env, DSH_HOME: home }
+delete env.NODE_OPTIONS
 let booted = null
 
 const teardown = () => {
@@ -116,14 +118,19 @@ try {
     // dsh FORWARDS pnpm's own output to its stdout while it writes its summary
     // ("plugin command failed; diagnostics: …") to stderr: both must be read, or
     // the actual pnpm error is exactly the half that gets dropped.
-    const forwarded = `${added.stdout ?? ''}${added.stderr ?? ''}`.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    const forwarded = `${added.stdout ?? ''}${added.stderr ?? ''}`
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      // Drop workflow-command noise (`::error::…` from a preload or a child) so the
+      // tool's own error survives the truncation below.
+      .filter((l) => l !== '' && !l.startsWith('::'))
     const logPath = /diagnostics: (\S+)/.exec(forwarded.join(' '))?.[1]
     let logTail = ''
     if (logPath !== undefined && existsSync(logPath)) {
       logTail = readFileSync(logPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-12).join(' | ')
     }
     const parts = []
-    if (forwarded.length > 0) parts.push('output: ' + forwarded.slice(-8).join(' | ').slice(-400))
+    if (forwarded.length > 0) parts.push('output: ' + forwarded.slice(-12).join(' | ').slice(-500))
     if (logTail !== '') parts.push('log: ' + logTail.slice(-300))
     fail('plugin install', parts.join(' :: ') || `exit ${added.status}`)
   } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
