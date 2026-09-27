@@ -22,6 +22,7 @@
 | B3e 复选框迁移 | ✅ 完成 | 11 个 checkbox 改官方 `Checkbox`（文案提升为 label；无 style/onClick/id 的三处用 span 包裹保留行为）；面板源码 checkbox 归零 |
 | B4b 输入类样式 | ✅ 收口 | 无规则可删：剩余的 `select.input` / `textarea.input` 服务刻意保留原生的控件；布局语义类经 `className` 继续生效 |
 | E1/E2 探测表 + 自动让位 | ✅ 完成 | `src/client/native-coverage.js`（11 行面板表 + 客户端信号探测）；命中即不注册；localStorage 强制开关；self-check 三用例覆盖 |
+| E3 面板级开关 | ✅ 完成 | `config.panels` 三态开关（fail-loud：未知 id/状态挂载即报错）；id 单一来源 `lib/panel-ids.js`（11 个，两半共用）；浏览器半经新 RPC `pluginAdmin/panels` 问一次，缓存答案后**立即注册**，新答案到达再对账（off 注销 / on 补注册）；优先级 off → on → localStorage 强制 → 自动让位 |
 | E4 COMPAT 同源 | ✅ 完成 | `docs/COMPAT.md` 的「官方覆盖与让位」表与探测表同源 |
 | F1 跨进程写锁 | ✅ 完成 | `withFileLock` 包住 `writePatch` 的备份+rename；失败开放/过期回收/同步睡眠；`verify-file-lock.mjs` 4 项 |
 | F3 审计日志 | ✅ 完成 | `lib/audit-log.js`（追加写 + 键名脱敏 + 上限压缩）+ 7 个命名空间接入 + `pluginAdmin/auditLog` RPC + 面板「操作审计」卡片 + 两个测试脚本 |
@@ -33,7 +34,7 @@
 | D1 RPC 单一真相表 | ✅ 完成 | `lib/rpc-manifest.js`（89 方法/14 命名空间）由挂载表面导出；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）；模块已改为从表生成（见 D1b），结构上不可能不一致 |
 | D1b 模块从表生成描述符 | ✅ 完成 | 14 个命名空间全部改用 `invocationsFor(namespace)`；89 条手写描述符与 4 处死常量删除；host-check 的挂载等值断言逐轮把关 |
 | D3 双向一致性测试 | ✅ 完成 | 见上；含负向验证 |
-| D2 描述符补 schemas | ⛔ 不采纳（有证据） | 网关只在 `codec.mode === 'strict'` 时校验，而 strict codec 需要 typert 生成器产出的 Zod 工厂（`{ typeSymbol, create }`，见 packages/typert/registry/src/service.ts 与 loader 测试）；对 89 个方法手写 schema 意味着引入 zod 运行时依赖 + 逐条匹配服务端可接受范围。插件坚持零运行时依赖，且每个写路径已在服务边界校验（validateMcpConfig / validateDraft / validateTaskEntry / normalizeRule），verify-* 覆盖这些路径。故线上契约保持"名字与线序"，校验留在解释数据的地方。**此项需要你确认是否接受该结论** |
+| D2 描述符补 schemas | ✅ 完成（用户点名实现） | **87 个参数**改挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验。校验器手写零依赖（`lib/rpc-schema.js`，7 个 schema）—— 注册表只要求 `typeSymbol` 非空 + `create()` 返回带 `parse` 的对象，**不必引入 zod、不必生成类型**（原先判断为不采纳正是卡在"必须用生成器的 Zod 工厂"这个前提上，实测不成立）。刻意不比服务更严（不枚举 entry 字段）、省略语义不变（`acceptsUndefined`）。`RPC_PARAM_SCHEMAS` 由 host-check 断言完整且忠实，`verify-rpc-schema.mjs` 5 项 |
 | C1 locale 运行时绑定 | ✅ 完成 | `installLocaleRuntime(ctx)`（软依赖 + 回落）；`dshT()` 读绑定翻译函数 |
 | C2 slot 标签 thunk + 实时重绘 | ✅ 完成 | 9 个 slot 标签改 thunk；10 个组件经 `withLocale()` 订阅重绘；🌐 开关驱动 shell `setLocale`（无 reload） |
 | C3 字典一致性 | ✅ 完成 | 运行时键集相等（self-check）+ zh 派生关系（verify-i18n） |
@@ -191,6 +192,5 @@
 
 ## 仍开放（不阻塞 A–G 的完成）
 
-1. **E3 面板级开关的配置通道**（需用户决策）：浏览器半读不到 profile 的 config 行，所以目前"要回面板"的开关是客户端 `localStorage['dsh-admin-panels']`。若要走配置行，需要一条挂载期配置传递通道（host 在 slot 注册前把配置写进页面，或客户端先 RPC 拿到再注册）。当前实现已满足"自动让位"的目标；这条是可选增强。
-2. **D2 strict codec 不采纳**（已有证据，待用户认可）：网关只在 `codec.mode === 'strict'` 时校验，而 strict codec 需要 typert 生成器产出的 Zod 工厂；本插件是运行时手写描述符，不生成类型，强行采用只会把校验变成摆设。
-3. **刻意保留原生的控件**（B3 的边界，非待办）：`select`（16 处）、`textarea`、`radio`、workflow 面板的 5 个内联样式输入、Picker 组合控件内的输入（官方 `Input` 不转发 `ref`，而该控件靠 ref 管键盘焦点）。官方没有对应原子，或原子的 API 覆盖不到它们的既有行为。
+1. **刻意保留原生的控件**（B3 的边界，非待办）：`select`（16 处）、`textarea`、`radio`、workflow 面板的 5 个内联样式输入、Picker 组合控件内的输入（官方 `Input` 不转发 `ref`，而该控件靠 ref 管键盘焦点）。官方没有对应原子，或原子的 API 覆盖不到它们的既有行为。
+2. **参数必填化**（D2 的后续）：当前每个 wire 都保留 `acceptsUndefined`（与 src-json 时代一致）。要把"该必填的必填"真正收紧，需要逐调用点审计（浏览器半的每个 `call(...)` 载荷），这是独立的一轮工作。

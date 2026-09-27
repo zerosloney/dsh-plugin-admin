@@ -3,6 +3,25 @@
 结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
 
 ## [Unreleased]
+### Added（D2 边界校验 + E3 面板开关，用户点名实现）
+
+**D2 — 每个 RPC 参数由网关做严格校验。** 参数此前一律 `codec: { mode: 'src-json' }`，网关原样透传：**类型错的载荷能直接进服务**。现在 87 个参数全部改挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验（`packages/api/gateway/src/index.ts` 的 `decode()`），失败即 `gateway/input-invalid`。
+
+- 校验器是**手写的、零依赖**（`lib/rpc-schema.js`，7 个 schema：`text` / `scalar` / `number` / `boolean` / `textList` / `entry` / `json`）。注册表只要求 `typeSymbol` 非空 + `create()` 返回带 `parse` 的对象，所以不必引入 zod，也不必生成类型。
+- **刻意不比服务更严**：id 是字符串、entry 是对象、sessionIds 是字符串数组 —— **不枚举 entry 的字段**。服务本来就接受调用方形状的 draft，猜一个字段集只会拒掉合法载荷。
+- **省略语义不变**：所有参数仍 `acceptsUndefined: true`（src-json 时代任何参数都可缺省）。收紧必填需要逐调用点审计，不能靠猜。
+- 单一真相表多一列：`RPC_PARAM_SCHEMAS`（66 个带参方法），host-check 断言它**完整**（每个 wire 都有 schema）且**忠实**（无孤儿行、wire 顺序一致）；`scripts/verify-rpc-schema.mjs` 另证每个 schema 接受自身样本、拒绝错误类型。
+
+**E3 — 面板级开关走 profile 配置行。** 新增 `config.panels`：`{ <面板 id>: 'auto' | 'on' | 'off' }`。
+
+- 键名与取值都 fail-loud（写错面板 id 或状态**挂载期报错**，不做静默失效的开关）。面板 id 单一来源 `lib/panel-ids.js`（11 个），宿主校验与浏览器半的覆盖表共用一份，两边不一致会在导入时直接抛错。
+- **浏览器半读不到 config 行**，所以挂载时经新增只读 RPC `pluginAdmin/panels` 问宿主一次；**注册是立即的**（用上次答案的 localStorage 缓存 `dsh-admin-panels-policy`，常见情况下无闪烁），新答案到达后再对账：`off` 的注销、`on` 的补注册。宿主没答（或没有连接）时按缓存、再退回自动让位。
+- 优先级（从高到低）：`config.panels.<id> = 'off'` → `= 'on'` → `dsh-admin-panels`（浏览器强制开启）→ 官方覆盖自动让位。
+- 注册表从十段内联 `ctx.slots.inject(...)` 改成 `SLOT_SPECS` 表 + `reconcileSlots()`，顺带让"晚到的配置"可以安装/卸载。
+
+### Verified（D2 + E3）
+
+- `npm test` 全绿：host-check 报 `87 parameters validated by strict codecs`、`91 methods / 73 client call targets`、`93 contracts probed`；verify-rpc-schema 5 项；self-check 的 E3 用例覆盖 自动让位 / localStorage 强制 / config off（压过强制）/ config on（压过官方覆盖）/ 缓存经失败询问仍生效 / 无缓存无宿主退回自动让位。
 ### Changed（Phase B3e：复选框换官方 Checkbox）
 
 - **11 个复选框全部改为官方 `Checkbox`**（面板源码里 `type: 'checkbox'` 归零，`UiCheckbox` 12 处）。官方原子要求一个 `label` 字符串（可见且可访问），所以每处都把**文案提升为原子的 label**：`label.check` / `label.checkbox-row` 包裹被原子取代，布局类改由 `className` 传给原子（`.check`、`.checkbox-row` 继续生效）。

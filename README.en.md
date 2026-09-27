@@ -200,6 +200,7 @@ Static gates (run first; the suite aborts on the first failure):
 | Sessions | `sessionExportEventCap` | 200000 | Event cap for whole-log reads (export / health check); past it truncation is flagged |
 | Usage ledger | `usageSnapshotIntervalMs` | 3600000 | Background snapshot interval (ms); `0` disables the sweep |
 | Usage ledger | `usageLedgerCap` | 2000 | Ledger rows kept (100–100000; above 100000 the mount throws), evicting the oldest `lastSeenAt` first |
+| Panel switches | `panels` | `{}` | Per-panel three-state switch: `auto` (default: yield when the official UI covers it) / `on` (register even then) / `off` (never register; wins over everything). Keys must be one of the eleven panel ids (`extensions` / `mcp` / `skills` / `subagents` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`) and values one of the three states; a typo **fails the mount**. The browser half cannot read the config row, so it asks the host once per mount (`pluginAdmin/panels`), registers eagerly from the cached answer (localStorage `dsh-admin-panels-policy`) and reconciles when the fresh one lands. |
 
 **Validated pass-through overrides (11)** — spread through the same config row untouched and read by each sub-module (an absent key stays undefined, so each module keeps the default below); type and range are validated at mount too:
 
