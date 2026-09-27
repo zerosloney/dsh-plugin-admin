@@ -22,6 +22,10 @@
  * 8. `createUsageLedger` loads lazily, writes through the caller's serial
  *    queue, skips the write when nothing changed, and returns the FULL row set
  *    (live + retained) from `record()`.
+ * 9. two ledgers over ONE file merge instead of overwriting: the second
+ *    writer's read-modify-write is a locked read-merge-replace over the union
+ *    of the file and its own mirror, which is what a second dsh instance on
+ *    the same home looks like (it loaded its mirror before the first wrote).
  *
  * Run: node scripts/verify-usage-ledger.mjs
  */
@@ -37,6 +41,7 @@ const {
   createUsageLedger,
   mergeUsageLedger,
   readUsageLedger,
+  unionUsageEntries,
   usageRowOf,
   writeUsageLedger,
 } = await import(new URL('../lib/usage-ledger.js', import.meta.url).href)
@@ -220,6 +225,37 @@ await checkAsync('8. createUsageLedger loads lazily, writes through the queue, a
   assert.equal(memoryOnly.storagePath, null)
   const memoryRows = await memoryOnly.record([session()])
   assert.equal(memoryRows.length, 1, 'a ledger without a path still answers in memory')
+})
+
+await checkAsync('9. two ledgers over one file merge instead of overwriting (cross-process safety)', async () => {
+  // Before the lock, both instances merged from their OWN mirror and then
+  // replaced the whole file, so the second writer silently dropped the first
+  // one's rows. The write is now a locked read-merge-replace over the union of
+  // the file and the writer's mirror — which is exactly what two dsh instances
+  // on one $DSH_HOME look like, simulated in-process: B mounts (and so loads
+  // its mirror) first, then A writes, then B writes.
+  const disk = [{ id: 's-disk', input: 7, lastSeenAt: 1, deleted: false }]
+  const mirror = [{ id: 's-mirror', input: 9, lastSeenAt: 2, deleted: false }]
+  const union = unionUsageEntries(disk, mirror)
+  assert.deepEqual(union.map(e => e.id).sort(), ['s-disk', 's-mirror'], 'the union keeps rows only one side knows')
+  // Same id on both sides → the in-process mirror wins (it is derived from the
+  // file plus in-process reads, so it is the fresher row).
+  assert.equal(unionUsageEntries([{ id: 'x', input: 1 }], [{ id: 'x', input: 2 }])[0].input, 2, 'mirror wins a conflict')
+  assert.deepEqual(unionUsageEntries(undefined, undefined), [], 'an unreadable side contributes nothing')
+
+  const path = join(tmp, 'shared.json')
+  const a = createUsageLedger({ path, now: () => 1000 })
+  const b = createUsageLedger({ path, now: () => 2000 })
+  assert.deepEqual(b.entries(), [], 'B mounted before anything was written')
+  await a.record([session({ id: 's-a' })])
+  await b.record([session({ id: 's-b', cwd: 'E:/Demo/beta' })])
+  const stored = readUsageLedger(path)
+  assert.deepEqual(stored.map(e => e.id).sort(), ['s-a', 's-b'], 'the second writer kept the first writer rows')
+  assert.equal(stored.find(e => e.id === 's-a').input, 100, 'and kept their numbers (retained, not dropped)')
+  assert.deepEqual(b.entries().map(e => e.id).sort(), ['s-a', 's-b'], 'the second writer sees the union afterwards')
+  // The lock is released: a leftover sibling lock would make every later writer
+  // wait out the fail-open budget.
+  assert.equal(existsSync(path + '.dsh-admin.lock'), false, 'the cross-process lock is released')
 })
 
 rmSync(tmp, { recursive: true, force: true })

@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [1.25.5] - 2026-09-28
+
+按契合度审查的优先级收口：文档与实现同源、G1 接缝收敛、交付历史去写放大、工作流缓存键、用量台账跨进程写。
+
+### Fixed（先证伪再动手的：上一轮审查里有两条"扣分"其实不存在）
+
+- **Phase D2 其实早已落地**，`docs/COMPAT.md` 却仍写着"无 schema / `schemas` 为空 / Phase D 待补"：实际是 87 个 wire 挂 `mode:strict`、`lib/rpc-schema.js` 零依赖手写 7 个 schema、`RPC_OPTIONAL_WIRES` 把 82/5 收紧为 81/6 必填。文档改成事实并补上校验现状（键集、schema 名、必填/可选拆分），基线从手抄的 `HEAD 477b4f4` 改为 CI 真正 pin 的 tag，探针条数改为"以 `integration-check` 实际输出为准"（93/112/124 是历史快照，写死必然与 HEAD 漂移）。
+
+### Changed（行为变化）
+
+- **工作流 step 缓存键纳入语义 opts**（`lib/workflow-engine.js:stepFingerprint`，`workflow-admin` 的 amend/resume 行为随之变化）：旧键只有 `站点:kind:sha256(prompt)`，于是"只把 `opts.provider` 从 A 换成 B、脚本一个字不改"的 amend 会命中缓存，把**上一个模型**的结果当成这次运行的结果报出来——那不是省一次调用，是给了错的值。新键为 `站点:kind:sha256(prompt + 语义 opts)`，其中语义 opts 只取 `agent()` 的 `provider`/`model`/`schema` 与 `shell()` 的 `workdir`/`timeoutMs`（`label` 之类展示字段不进键，改个显示名不该重花一次子代理调用；`args` 也不进键——脚本用它拼出的 prompt 变了哈希自然变）。比较材料走新增的 `canonicalJson()`（键排序，循环引用与 BigInt 有兜底），所以同一份 schema 换种写法仍是同一个键。**升级后第一次 amend 会从旧 journal 全部落空（步骤重跑）**，方向是多花调用而不是复用错值；README 中英 + `workflow_admin` 工具描述同步改成事实。`verify-workflow-engine.mjs` 补 3 组断言（语义 opts 进键、键序无关/展示字段忽略、非对象与 BigInt 不抛）。
+- **交付历史与投递去重拆成两个 sidecar**（`lib/webhook-triggers.js`）：合并文件每次投递被**整份**重写两遍（先落去重集、动作后再落历史行），于是 200 条历史 + 512 条去重合成一份、约 1400 条 JSON 的同步 I/O 走两次，而 `webhookHistoryCap` 还会放大去重写的成本。现在 `webhook-history.json` 只装历史环，去重集搬到派生路径 `webhook-history.seen.json`（新导出 `seenPathFor()`；**派生而非新增 config 键**，25 键的配置面与 `host-check` 的键集断言不变，迁移 `webhookHistoryPath` 的部署自动一起搬）。每个"更新版本的文件"降级也各自独立（`readSeenFile` 带自己的 `newer`），老版本留下的合并文件仍可读：挂载时把内联的 `seen` 先写进新文件，在任何一次历史写丢掉那个键之前，升级不会遗忘已认领的投递 id。`verify-webhook-triggers.mjs` 补 3 项（拆分后的双文件内容、老文件迁移、路径派生规则）。
+- **用量台账的读-改-写移进跨进程锁**（`lib/usage-ledger.js:persist`）：此前串行队列只管本进程，两个 dsh 实例共用一个 `$DSH_HOME` 时各自从自己的镜像合并、然后整份替换文件，后写的把先写的行静默抹掉。现在是**锁内读-合并-替换**：文件在临界区里重读，与本进程镜像取并集（新增导出 `unionUsageEntries()`，镜像优先——它是"文件 + 本进程读数"派生出来的更新一份）再合并写回，因此另一个实例的行得以保留、本进程还没落盘的行也不会被挤掉。锁是同步的（`Atomics.wait`），所以读/合并/写都在同一个同步回调里，合并基因此是"文件 ∪ 镜像"而不是一次 await 的实时读。"没学到新东西就不写"的短路保留在更外层：预判合并未变化时连 `enqueue` 都不进，2000 行的文件不会被一次无变化的刷新重写。`verify-usage-ledger.mjs` 补第 9 项（两个 ledger 共用一个文件 = 第二个写者不丢第一个的行 + 锁已释放）。
+
+### Added（G1：接缝从"两处内联 try"收敛成一个可测的助手）
+
+- **`lib/patch-utils.js:hotApplyFiberConfig(fiber, config)`**：MCP 条目热应用（`lib/index.js:hotApplyMcpEntry`）与 hooks 桥热重启（`lib/command-hook-admin.js:reloadBridge`）此前各写一份 `fiber.update(cfg, true)` + try/catch，能力探测和"需重启"回落文案都只存在于各自模块里。现在两处共用这一个助手，契约明确：**永不抛**，缺 fiber / 没有 `update` / update 拒绝都变成 `{applied:false, reason}`，面板因此不可能在没有接缝时谎报"无需重启/已生效"。`verify-file-lock.mjs` 补一组断言（noSave 恒为 true、配置确实是新配置、三种降级都带重启提示）。
+- **`integration-check` 新增 3 条接缝探针**钉住这个仍属内部 API 的通道：`vendor/cordis/src/fiber.ts` 的 `update(config, noSave = false)` 签名、它的"validate→restart"文档语义、以及 **loader 侧消费 `noSave` 的 `internal/update` 钩子**（少了最后这条，`noSave` 会被忽略，一次热应用就会把插件自己写的 patch 行改写掉）。G1 的上游化（公开的 config-patch 热应用 API）仍未落地，但接缝消失现在会先在 `npm test` 里响，而不是静默退化成"每次都需重启"。
+
 ## [1.25.4] - 2026-09-27
 
 冒烟再进两步：**写路径**与**真实浏览器**（14 → 28 项，dsh `0.1.7-rc.2` 上约 11–30 秒）。

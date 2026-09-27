@@ -37,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // fails that check on POSIX runners.
 const WORKSPACE = join(tmpdir(), 'repos', 'app')
 
-const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
+const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, seenPathFor, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
 
 const results = []
 const check = (name, fn) => {
@@ -62,6 +62,23 @@ const checkAsync = async (name, fn) => {
 }
 
 /* ============================ Pure functions ============================ */
+
+check('seenPathFor derives the dedup sidecar beside the history file', () => {
+  // Derived, NOT a config key: the documented 25-key config surface (and
+  // host-check's key-set assertion) must not grow for a storage split, and a
+  // deployment that relocates webhookHistoryPath gets its dedup file moved
+  // with it. The two files are one feature.
+  assert.equal(seenPathFor('/home/u/.dsh/webhook-history.json'), '/home/u/.dsh/webhook-history.seen.json')
+  // A custom path in a test or an unusual deployment relocates just as well
+  // (compared with an inline expectation: this block runs before the suite's
+  // own temp home is created, so it must not reference it).
+  assert.equal(seenPathFor('/tmp/dsh-admin/history-persist.json'), '/tmp/dsh-admin/history-persist.seen.json')
+  // Never collide with the history file itself, whatever the input shape.
+  for (const path of ['x.json', 'x.JSON', 'x', 'x.jsonl', 'C:/d/webhook-history.json']) {
+    assert.notEqual(seenPathFor(path), path, path + ' is not its own dedup path')
+    assert.ok(seenPathFor(path).endsWith('.seen.json'), path + ' gets a .seen.json sibling')
+  }
+})
 
 check('secretMatches compares equal secrets and rejects others', () => {
   assert.equal(secretMatches('s3cret', 's3cret'), true)
@@ -617,6 +634,71 @@ await checkAsync('delivery history persists across a remount', async () => {
   const list2 = await ctx2.provided.webhookAdmin.list()
   assert.ok(list2.history.some((h) => h.deliveryId === 'd-persist-1'), 'history survives the remount')
   for (const d of disposers1.splice(0).concat(disposers2.splice(0))) { try { d() } catch {} }
+})
+
+await checkAsync('the history ring and the replay dedup live in SPLIT sidecars (one bounded write each)', async () => {
+  // The combined sidecar was rewritten ENTIRELY twice per delivery, so its cost
+  // was history-cap + dedup-cap on every write and `webhookHistoryCap` even
+  // scaled the dedup write. Split, each file is bounded by its own cap; the
+  // dedup path is DERIVED from webhookHistoryPath (no new config key).
+  const historyPath = join(webhookHome, 'history-split.json')
+  const seenPath = join(webhookHome, 'history-split.seen.json')
+  const triggersPath = join(webhookHome, 'triggers-split.json')
+  const disposers = []
+  const steered = []
+  const ctx = makeIsolatedCtx(disposers, steered)
+  applyWebhookAdmin(ctx, {
+    enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null,
+    settings: { webhookTriggersPath: triggersPath, webhookHistoryPath: historyPath },
+  })
+  try {
+    await ctx.provided.webhookAdmin.saveRule({ id: 'split', secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true } })
+    const handler = registeredRoutes[registeredRoutes.length - 1].handler
+    const res = mockRes()
+    await handler(mockReq({
+      url: '/webhook-triggers/split',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': 'topsecret-key-16chars', 'x-webhook-event': 'push', 'x-webhook-delivery': 'd-split-1' },
+      chunks: ['{"ok":true}'],
+    }), res)
+    assert.equal(res.statusCode, 202)
+    assert.equal(steered.length, 1, 'the delivery executed')
+    const historyDoc = JSON.parse(readFileSync(historyPath, 'utf8'))
+    assert.ok(historyDoc.history.some((h) => h.deliveryId === 'd-split-1'), 'the delivery row lands in the history sidecar')
+    assert.equal(Object.prototype.hasOwnProperty.call(historyDoc, 'seen'), false, 'the history sidecar no longer carries the dedup set')
+    const seenDoc = JSON.parse(readFileSync(seenPath, 'utf8'))
+    assert.deepEqual(seenDoc.seen, ['split\u0000d-split-1'], 'the claimed id lands in the derived dedup sidecar')
+  } finally {
+    for (const d of disposers.splice(0)) { try { d() } catch {} }
+  }
+})
+
+await checkAsync('a pre-split combined sidecar seeds the dedup file at mount (no claim is forgotten)', async () => {
+  // Upgrade path: an older build kept `seen` inline in the history file, and
+  // every write after this one drops that key. The mount must therefore write
+  // the split file BEFORE any history flush can be the first to lose it.
+  const historyPath = join(webhookHome, 'history-legacy.json')
+  const seenPath = join(webhookHome, 'history-legacy.seen.json')
+  const triggersPath = join(webhookHome, 'triggers-legacy.json')
+  rmSync(seenPath, { force: true })
+  writeFileSync(historyPath, JSON.stringify({
+    version: 1,
+    history: [{ at: 'x', ruleId: 'legacy', deliveryId: 'd-old', ok: true }],
+    seen: ['legacy\u0000d-old'],
+  }, null, 2) + '\n', 'utf8')
+  const disposers = []
+  const ctx = makeIsolatedCtx(disposers, [])
+  applyWebhookAdmin(ctx, {
+    enqueue: (op) => Promise.resolve().then(op), runPnpm: null, reconcileBundles: null,
+    settings: { webhookTriggersPath: triggersPath, webhookHistoryPath: historyPath },
+  })
+  try {
+    assert.deepEqual(JSON.parse(readFileSync(seenPath, 'utf8')).seen, ['legacy\u0000d-old'],
+      'the inline claim is migrated into the derived dedup sidecar at mount')
+    const listed = await ctx.provided.webhookAdmin.list()
+    assert.ok(listed.history.some((h) => h.deliveryId === 'd-old'), 'the legacy history rows still read')
+  } finally {
+    for (const d of disposers.splice(0)) { try { d() } catch {} }
+  }
 })
 
 await checkAsync('replay dedup persists across a remount (cross-restart idempotency)', async () => {

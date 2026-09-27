@@ -374,6 +374,36 @@ check('different payload => different key', () => {
 check('different site => different key', () => {
   assert.notEqual(stepFingerprint(1, 'agent', 'p'), stepFingerprint(2, 'agent', 'p'))
 })
+// The cache key covers the opts that change WHAT a step produces. Without them
+// an amend that only swapped the model would replay the previous model's result
+// and call it a cache hit — a wrong value, not a saved call.
+check('semantic opts are part of the key (a different model must not hit the old cache)', () => {
+  assert.notEqual(stepFingerprint(1, 'agent', 'p', { provider: 'a' }), stepFingerprint(1, 'agent', 'p', { provider: 'b' }))
+  assert.notEqual(stepFingerprint(1, 'agent', 'p'), stepFingerprint(1, 'agent', 'p', { model: 'm' }))
+  assert.notEqual(stepFingerprint(1, 'agent', 'p', { schema: { type: 'object' } }), stepFingerprint(1, 'agent', 'p'))
+  assert.notEqual(stepFingerprint(1, 'shell', 'ls', { workdir: '/a' }), stepFingerprint(1, 'shell', 'ls', { workdir: '/b' }))
+  assert.notEqual(stepFingerprint(1, 'shell', 'ls', { timeoutMs: 1000 }), stepFingerprint(1, 'shell', 'ls', { timeoutMs: 2000 }))
+})
+check('equivalent opts keep one key (order-insensitive, display fields ignored)', () => {
+  // Key order must not decide a cache hit: the same schema written two ways is
+  // the same call.
+  assert.equal(
+    stepFingerprint(1, 'agent', 'p', { provider: 'a', model: 'm', schema: { b: 1, a: [1, 2] } }),
+    stepFingerprint(1, 'agent', 'p', { schema: { a: [1, 2], b: 1 }, model: 'm', provider: 'a' }),
+  )
+  // A label / unknown key is presentation, not semantics: renaming a step must
+  // not re-spend a subagent call.
+  assert.equal(stepFingerprint(1, 'agent', 'p', { label: 'x' }), stepFingerprint(1, 'agent', 'p'))
+  assert.equal(stepFingerprint(1, 'agent', 'p', {}), stepFingerprint(1, 'agent', 'p'))
+  // An omitted field and an explicit null are the same absence (the panel sends
+  // null for "not chosen").
+  assert.equal(stepFingerprint(1, 'agent', 'p', { provider: null }), stepFingerprint(1, 'agent', 'p'))
+})
+check('a non-object / bigint-bearing opts value still yields a key (never throws)', () => {
+  assert.doesNotThrow(() => stepFingerprint(1, 'shell', 'ls', 'nonsense'))
+  assert.equal(stepFingerprint(1, 'shell', 'ls', 'nonsense'), stepFingerprint(1, 'shell', 'ls'))
+  assert.doesNotThrow(() => stepFingerprint(1, 'shell', 'ls', { timeoutMs: 10n }))
+})
 
 // ─── 5. evalSnippet ──────────────────────────────────────────────────────────
 

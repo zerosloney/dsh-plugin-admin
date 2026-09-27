@@ -1,7 +1,12 @@
 # DSH 兼容矩阵
 
-> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，HEAD 477b4f4）· 插件 v1.25.0。
+> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，CI 另 pin `deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`）· 插件 v1.25.5。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
+>
+> 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
+> 校验器为零依赖手写（`lib/rpc-schema.js`，7 个 schema：text/scalar/number/boolean/textList/entry/json），
+> 刻意不比服务更严（不枚举 entry 字段），必填/可选为 81/6（`RPC_OPTIONAL_WIRES` + `verify-rpc-schema.mjs` 独立字面量契约）。
+> 包级 `schemas: []` 为空是历史形态，不等于“无校验”。
 
 ## 怎么读这张表
 
@@ -32,8 +37,8 @@
 
 | 接缝 | 用途 | 风险 | 现网兜底 |
 |---|---|---|---|
-| ⚠ `fiber.update(config, true)`（loader 内部） | MCP 已挂载条目 / hooks 桥热应用 | 非公开 API，宿主重构即失效 | 能力探测 + 失败回落"需重启"提示 |
-| ⚠ `ctx.typert.register` 裸描述符 | 14 个命名空间的 RPC 面 | 无 schema / 无客户端类型（`schemas` 为空） | Phase D 补 schema 与单一真相表 |
+| ⚠ `fiber.update(config, true)`（Cordis/loader 内部） | MCP 已挂载条目 / hooks 桥热应用 | 非公开 API，宿主重构即失效 | 两条热应用路径**收敛到 `lib/patch-utils.js:hotApplyFiberConfig()`**（能力探测 + 失败回落"需重启"提示，**永不抛**）；`integration-check` 三条探针钉住 `Fiber.update(config, noSave)` 签名、其文档语义、以及 loader 消费 `noSave` 的 `internal/update` 钩子 |
+| ⚠ `ctx.typert.register` 描述符 | 14 个命名空间的 RPC 面 | 包级 `schemas:[]` 为空，但 87 个 wire 已挂 `mode:strict` 边界校验（见下） | `lib/rpc-manifest.js` + `lib/rpc-schema.js` + `verify-rpc-schema` |
 | ⚠ `workspaceRegistry.unarchiveSession` 等动词 | 归档集清理 / 取消归档 | 版本间增删 | 挂载期能力探测 + 显式降级警告 |
 | ⚠ `agentPresets.acquireScope` 租约 | 读取预设 skill 作用域 | 与宿主 `dsh-webhook` 同款用法，属半公开 | 读毕即 dispose；失败逐作用域降级 |
 
@@ -50,9 +55,9 @@ npm test
 DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 ```
 
-**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过 124 条契约与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
+**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过接缝契约探针与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
 
-矩阵当前覆盖 **124 条契约**，其中与插件自身最新能力直接相关的几条：
+矩阵当前覆盖的契约数以 `integration-check` 实际输出为准（历史快照曾为 93/112/124），其中与插件自身最新能力直接相关的几条：
 
 | 接缝 | 探测来源 | 谁在用 |
 |---|---|---|
@@ -127,13 +132,14 @@ v1.25.4 起还有两步：
 | `cordis.patch.yml`（profile patch） | ✅ 锁内 `mutatePatch` / `mutateProfilePatch` | 21 处写入点全部走它；锁跨 读 → 变换 → 写 |
 | `cron-tasks.json` | ✅ 锁内 `mutateTasksStore` | `upsert` / `remove` / `toggle`；校验看到的 id 集就是写入替换的修订 |
 | `webhook-triggers.json` | ✅ 锁内 `mutateRulesStore` | `saveRule` / `deleteRule`；"空 secret 继承已存值"查的也是锁内那一份 |
-| profile `package.json`、`admin-audit.jsonl`、`usage-ledger.json`、`webhook-history.json`、`workflow/runs/**`、`subagent-admin.*.json` | ⚠️ 仅**原子写**（唯一临时名 + `atomicRename` 重试）；读-改-写靠**进程内**串行队列 | 同一 profile 同时跑两个 dsh 实例时这些文件仍可能丢一次更新 |
+| `usage-ledger.json` | ✅ 锁内 `withFileLock` 读-合并-替换 | 跨进程锁内重读磁盘 + 与内存镜像取并集（`unionUsageEntries`，镜像优先），两实例写入不互丢 |
+| profile `package.json`、`admin-audit.jsonl`、`webhook-history.json` + `webhook-history.seen.json`、`workflow/runs/**`、`subagent-admin.*.json` | ⚠️ 仅**原子写**（唯一临时名 + `atomicRename` 重试）；读-改-写靠**进程内**串行队列 | 同一 profile 同时跑两个 dsh 实例时这些文件仍可能丢一次更新 |
 
-上表 ⚠️ 行的取舍与兜底：台账与交付历史是**可重建的派生数据**（会话日志仍在，下一次读取或投递会覆盖），审计是**追加写**（两个实例的行会交错，但不会互相删除；只有"到达上限压缩"那一步会以读-改-写覆盖），workflow journal / subagent 侧车是单实例写入的产物。要彻底消除，可把 `withFileLock` 套到这些 store 的读-改-写；代价是**持锁期间不能 await**，而台账的合并依赖内存镜像（镜像里还有尚未落盘的保留行），改造前要先解决"镜像 ↔ 文件"的双向合并，属于独立的改动。
+上表 ⚠️ 行的取舍与兜底：交付历史是**可重建的派生数据**（下一次投递会覆盖，且去重集已拆分减少写放大），审计是**追加写**（两个实例的行会交错，但不会互相删除；只有"到达上限压缩"那一步会以读-改-写覆盖），workflow journal / subagent 侧车是单实例写入的产物。用量台账已在锁内实现"镜像 ∪ 文件"的合并（`unionUsageEntries()`），彻底消除了跨进程抹掉对方更新的窗口。
 
 两条容易误判的边界：
 
-- **交付历史的写放大**：`webhook-history.json` 是"单文件双用途"（历史环 + `x-webhook-delivery` 去重集），一次投递最多整文件重写**两次**（执行动作前先落去重集，动作后再落历史行），两次都是有意为之：第一次保证崩溃后重投不会重复执行，第二次记录结果。因此 `webhookHistoryCap` 越大，每次投递的同步写越贵（上限 10000 ≈ 2 × 约 2MB/投递）。**建议 ≤ 1000**；若要既大又不贵，替代方案是把历史改成 JSONL 追加、去重集单独存放（尚未实现）。
+- **交付历史的写放大 —— 已拆分**（原为"单文件双用途"）：`webhook-history.json` 现在只装历史环，`x-webhook-delivery` 去重集搬到派生路径 `webhook-history.seen.json`（`seenPathFor()`：仅换 `webhookHistoryPath` 的扩展名，**不是**新的 config 键，所以 25 键的配置面与 host-check 的键集断言不变）。一次投递仍是两次写（先落去重集、动作后再落历史行，两次都有意为之：第一次保证崩溃后重投不会重复执行），但**每次写只承担自己的上限** —— 过去 200 条历史 + 512 条去重合成一份、整份重写两遍（约 1400 条 JSON/投递），且 `webhookHistoryCap` 还会放大去重写的成本。老版本留下的合并文件仍可读：挂载时把内联的 `seen` 列表**先**写进新文件（在任何一次历史写把该键丢掉之前），因此升级不会遗忘已认领的投递 id。历史本身仍是 JSON 整份重写（**建议 `webhookHistoryCap` ≤ 1000**）；要再降一档需把历史改成 JSONL 追加（尚未实现）。
 - **`withFileLock` 是失败开放的**：等 3 秒仍拿不到锁就照写。语义是"宁丢一次更新，也不拒绝用户当下的操作"，原子 `temp + rename` 仍保证文件不会撕裂。抢占（过期锁 / 持有者已死）后带 5ms + 随机退避重试，且**无主的半写锁在 250ms 内不会被抢**（`open(…,'wx')` 与写入 pid 之间那个窗口），所以两个实例不会同时进入临界区。跨进程丢失更新只在"两个 dsh 同时写同一个 profile、且恰好落在同一窗口内"时才会发生 —— 这也是上表三件"锁内"文件要覆盖读-改-写整体的原因。
 
 ## 版本策略
@@ -143,4 +149,4 @@ v1.25.4 起还有两步：
 - 客户端直接静态引用平台共享模块（`@deepseek-ai/dsh-client-ui-primitives` / `-ui-slots` / `-client-store`，见 `scripts/build-client.mjs` 的 `PLATFORM_BASELINE`）与 `ctx.locale` 服务：0.1.6 的宿主模块表里没有这些 seed，缺一项就是**整包加载失败**，而不是降级。既然实现里已经没有 0.1.6 的回落分支，"继续支持 0.1.6"就只是一句与代码不符的承诺，本次把口径改成事实。
 - 保留的"先探测、后降级"分支（如 `agentPresets.acquireScope` → `standingKeyFor`、`fiber.update` 能力探测、`workspaceRegistry.unarchiveSession` 的缺失告警）是**同一范围内的防御性探测**（0.1.7 的 rc 与正式版之间、以及未来版本删动词时用），不是 0.1.6 支持。
 - 升级一台 0.1.6 的宿主前请先升 dsh；插件在 0.1.6 上的失败模式是"客户端整包不加载"，不会有半可用状态。
-- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含 124 条接缝契约，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。
+- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含接缝契约探针，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。当前探针数为 `integration-check` 实际输出为准（历史快照曾为 93/112/124，新增探针只增不改旧数）。

@@ -4,7 +4,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 > 面板文案内置简体/English 双语，并且**接在 dsh 自己的语言服务上**（`ctx.locale`，Phase C）：工具栏 🌐 切换的是**整个界面**的语言，面板即时重绘、无需刷新；宿主未提供该服务时回落到「跟随浏览器语言 + 中文原文兜底」，永不出坏。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.25.0 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（v1.25.0 起不再支持 0.1.6，见 [docs/COMPAT.md](docs/COMPAT.md)）
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.25.5 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（v1.25.0 起不再支持 0.1.6，见 [docs/COMPAT.md](docs/COMPAT.md)）
 
 ## 功能总览
 
@@ -72,7 +72,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 1. 打开：设置 → 自动化 → 「工作流」页签（排在「Webhook」之后）。页首有通俗说明与三步引导；**「从模板开始」**提供三个开箱即用的模板卡片（主题总结 / 并行双角度分析 / 分步润色流水线）——点卡片自动填好脚本、名称与参数，改改参数点「🚀 启动」即可，不会写代码也能跑。
 2. 新建：脚本（TypeScript / JavaScript，**顶层 `return` 即运行结果**）+ 名称（可选）+ args（JSON）→ 🚀 启动。父会话：工作流的子代理从某个在线会话派生——恰有一个在线会话时自动选中不出控件，多个时下拉选择（标题 · 工作目录），零个时提示先开会话。
 3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**，只有宿主 `ctx.shell` 不可用或运行被中止才抛出（脚本自行 try/catch）。脚本跑在 **node:vm 独立 realm**：require / import / fs / network / process 均不可达——只编排，重活交给 `agent()` / `shell()`；realm 防的是意外访问，不是硬安全边界（与宿主同进程、同信任级别）。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 会让运行判 errored 而不是产出损坏记录）。
-4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用；**缓存键只含 `站点序号:kind:sha256(prompt)`——只改 `opts`/`args` 而脚本不变时该步仍命中缓存**）；详情 2s 轮询实时刷新。停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」会被拒绝（防新旧双跑），等运行真正结束后用「续跑」。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是**读取时按父会话是否在线派生的**，不落盘）。
+4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用；**缓存键是 `站点序号:kind:sha256(prompt + 语义 opts)`——`agent()` 的 provider/model/schema 与 `shell()` 的 workdir/timeoutMs 进键，只改这些会让该步重跑（否则会拿到上一个模型的结果），改 `args` 而 prompt 不变仍命中**）；详情 2s 轮询实时刷新。停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」会被拒绝（防新旧双跑），等运行真正结束后用「续跑」。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是**读取时按父会话是否在线派生的**，不落盘）。
 5. 工作库：「保存」脚本入库——全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）；卡片「🚀 运行」一键启动。
 6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 干跑（同一次工具调用内 await 完成、**不起后台运行**，`agent()` 桩化、`shell()` 直接报错，零子代理成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
 7. 保存作用域自动识别（对齐 ZCode SaveWorkflow）：会话内经工具保存且未指定 scope 时，调用会话有 cwd → 存**项目** `.dsh/workflows/`；识别不了（无调用会话 / 会话无 cwd）→ 工具回 `needsScopeChoice`，由模型转问用户「存项目还是全局」，带选择重调。`delete_saved` 对称识别（项目优先、回退全局并回报实际删除的一级）。

@@ -344,6 +344,27 @@ const PROBES = [
     ],
   },
   {
+    id: 'loader fiber.update seam (MCP + hooks hot-apply)',
+    // lib/patch-utils.js:hotApplyFiberConfig centralizes BOTH hot-apply paths
+    // (MCP entry edits + hooks-bridge reloads) on fiber.update(config, noSave).
+    // The seam is Cordis' own (vendor/cordis), and the loader's `internal/update`
+    // waterfall is what makes noSave mean "do not write the config back" — see
+    // vendor/loader/src/index.ts. Until dsh publishes a first-class config-patch
+    // hot-apply API (G1), the seam's removal must fail loud here instead of
+    // silently turning every hot-apply into a "需重启" fallback.
+    file: 'vendor/cordis/src/fiber.ts',
+    checks: [
+      ['Fiber.update(config, noSave) still declared', t => t.includes('update(config: any, noSave = false) {')],
+      ['the doc pin still describes validate→restart', t => has('Validate and apply new config, then restart the plugin.', '@param noSave — hint for persistence hooks not to write the change back.')(t)],
+      // The loader side of the seam: without this waterfall, noSave would be
+      // ignored and a hot-apply would rewrite the profile patch file under us.
+      ['the loader still consumes noSave in its internal/update hook', () => {
+        const loader = readSource('vendor/loader/src/index.ts')
+        return loader !== null && loader.includes("ctx.on('internal/update', function (config, noSave, next) {")
+      }],
+    ],
+  },
+  {
     id: 'skill registry (skillsAdmin roster)',
     file: 'packages/skill/skill/src/index.ts',
     checks: [

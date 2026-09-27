@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atomicRename, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+import { atomicRename, hotApplyFiberConfig, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -169,6 +169,37 @@ await check('the retrying rename moves the file and still fails loud on a real e
   )
 })
 
+await check('the hot-apply helper restarts with noSave and never throws', async () => {
+  // The MCP entry edit and the hooks-bridge reload both ride this helper
+  // (G1's single seam). Its contract: noSave is always true (the plugin owns
+  // the patch file), and a missing/renamed seam or a throwing update becomes
+  // an honest restart hint rather than an exception at the RPC boundary.
+  const seen = []
+  const ok = await hotApplyFiberConfig(
+    { update: async (config, noSave) => { seen.push({ config, noSave }) } },
+    { serverName: 'github2' },
+  )
+  assert.deepEqual(ok, { applied: true }, 'a successful restart reports applied')
+  assert.equal(seen.length, 1, 'exactly one update was issued')
+  assert.equal(seen[0].noSave, true, 'noSave: the host must not rewrite the patch file')
+  assert.equal(seen[0].config.serverName, 'github2', 'the fiber restarts with the NEW config')
+
+  const missing = await hotApplyFiberConfig({}, { serverName: 'x' })
+  assert.equal(missing.applied, false, 'a fiber without update() cannot hot-apply')
+  assert.match(missing.reason, /重启/, 'and says so')
+
+  const absent = await hotApplyFiberConfig(null, { serverName: 'x' })
+  assert.equal(absent.applied, false, 'a missing fiber cannot hot-apply')
+  assert.match(absent.reason, /重启/, 'and says so')
+
+  const threw = await hotApplyFiberConfig(
+    { update: async () => { throw new Error('config invalid: serverName') } },
+    { serverName: 'x' },
+  )
+  assert.equal(threw.applied, false, 'a rejected config reports a failure, not a success')
+  assert.match(threw.reason, /config invalid: serverName/, 'and carries the real reason')
+})
+
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, cross-process, temp hygiene, rename)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, cross-process, temp hygiene, rename, hot-apply)')
