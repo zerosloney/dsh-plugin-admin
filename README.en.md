@@ -83,7 +83,7 @@ The session-history panel is the first tab of Settings → **Web & Sessions**, s
    - `/workflow` (or `list`): list the library (the current session's project `.dsh` first, then global) and live runs;
    - `/workflow run <name> [argsJSON]`: start a saved workflow in the current session (background; check `/workflow runs`);
    - `/workflow runs`: list runs (newest first); `/workflow stop <runId>`: stop one.
-9. Dependency & persistence: TS scripts need esbuild (declared as a peer dependency, installed with the plugin; plain JS needs nothing). Runs and the library live under `$DSH_HOME/workflows/{runs,saved}/`.
+9. Dependency & persistence: TS scripts need esbuild (an **optional** peer dependency — plain-JS workflows run without it, and a TS script gets an explicit diagnostic instead of failing silently; CI verifies against `^0.28`). Runs and the library live under `$DSH_HOME/workflows/{runs,saved}/`.
 
 ### ⌨️ Commands & Hooks
 1. Open: Settings → Built-in Plugins → the **Commands** and **Hooks** tabs (orders 60 / 70, after Subagents, commands first).

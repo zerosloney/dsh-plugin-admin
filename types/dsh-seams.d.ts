@@ -5,6 +5,14 @@
  * plugin actually reads, cross-checked by scripts/host-check.mjs and
  * scripts/integration-check.mjs against a real checkout.
  *
+ * What is ENFORCED vs DOCUMENTED: the runtime enforcement lives in those two
+ * scripts (88 seam probes + the mount-time capability checks), which is what
+ * fails when upstream changes. These declarations are documentation plus the
+ * handful of places a JSDoc annotation names them (`@param {DshContext}`); most
+ * services are reached through `ctx.get(...)`, which the index signature widens
+ * to `any`, so a wrong member here would NOT break the build on its own. Keep
+ * them accurate, but do not mistake them for a gate.
+ *
  * This file has no top-level import/export on purpose — that keeps every
  * declaration GLOBAL, so JSDoc in lib/*.js can reference DshContext directly
  * without an import path.
@@ -61,10 +69,17 @@ interface DshWorkspaceRegistry {
   detachSession?(workspaceId: string, sessionId: string): Promise<unknown> | unknown
 }
 
-/** Agent-preset registry: the lease-based scope read used by skills-admin. */
+/** Agent-preset registry: the lease-based scope read used by skills-admin, plus
+ * the verbs the panel/roster path calls. (The first version declared only
+ * acquireScope/standingKeyFor, so it described a service that does not exist.) */
 interface DshAgentPresets {
   acquireScope?(id?: string): Promise<{ key: unknown } & AsyncDisposable>
   standingKeyFor?(id?: string): unknown
+  list?(): Promise<unknown[]> | unknown[]
+  resolve?(id?: string): Promise<unknown> | unknown
+  serviceFor?(id?: string): unknown
+  defaultId?: string
+  selectionPolicy?(): { enabled?: boolean, defaultId?: string }
 }
 
 /** The Cordis Context surface the plugin rides. Declared members are checked;

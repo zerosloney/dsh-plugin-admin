@@ -2,16 +2,29 @@
 
 结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
 
+> 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
+
 ## [Unreleased]
 
 ### Added
 
+- **`.oxlintrc.json`（lint 策略落地）**：两个**生成产物**（`lib/client.js` / `lib/client.panels.js`）不再被 lint；`lib/**`（随包发布的宿主半）把 `no-unused-vars` / `no-useless-escape` 提为 **error**，`src/client/**` 与 `scripts/**` 保持 warning（客户端是 9k 行 React 树、改它要重建 470KB 产物；验证脚本保留可读性辅助）。首次收紧即清掉宿主半的真实死代码：4 个未用导入、`jobs`、3 个死常量 `RUN_*_PARAMS`、未用的 `stepFingerprint`/`SERVICE_KEY` 导入与常量、死函数 `lastDayOfMonth`、`toolCount`（含 2 处赋值）、3 处多余转义。lint 从 207 warning 降到 **146 warning / 0 error**。
+- **CI 接缝探测新增一条**：读 dsh 的 `packages/client/ui-primitives/src/index.ts` 导出表，断言**浏览器半真正 import 的每个官方原子**都在其中（93 → 95 条契约）。这是探针桩看不到的一类漂移：原子改名后 bundle 会在加载时"missed the module table"整包失败。
+- **`LICENSE`（MIT 正文）**：此前 `package.json` 声明 MIT 但仓库没有许可文件，发布出去的 tarball 也就没有正文。
 - **`workflowAdmin` 纳入审计**（Phase F3 收口）：`startRun` / `stopRun` / `amendRun` / `resumeRun` / `answerRun` / `saveSaved` / `deleteSaved` / `runSaved` 进 trail —— 工作流能执行 `shell` 步骤，"谁启动的、什么时候"值得留痕。`listRuns` / `getRun` / `listSaved` / `getSaved` 是读路径，不进。
   这些动词**没有 `ok` 字段**（失败形态分别是 `{ id: null, error }`、非空 `diagnostics`、`{ answered: false }`、`{ stopped: false }`），通用"非 `ok:false` 即成功"的读法会把失败的启动记成成功，因此 `auditService` 新增可选的 `okOf`，由 `workflowAuditOk` 提供这个命名空间的读法。agent 侧入口（`workflow_admin` 工具、`/workflow` 命令）直接走 registry/library、不经过 RPC 服务面，仍由 run journal 记录。
 - **`cron-tasks.json` 与 `webhook-triggers.json` 的读-改-写进锁**（F1/F2 扩展）：两个 dsh 实例同写一个 profile 时不再"各读、各改、各写"（后写者覆盖前者的任务/规则）。`mutateTasksStore` / `mutateRulesStore` 把「守卫读 + 校验 + 原子写」放进同一个跨进程锁，校验看到的 id 集/规则集就是写入替换的那一份。`docs/COMPAT.md` 新增「已知边界（并发写）」把仍有 ⚠️ 的存储逐条列清。
 
+### Changed
+
+- **`esbuild` 改为可选 peer**（`peerDependenciesMeta.optional: true`）：代码本来就是"缺 peer 时给出明确诊断"的降级路径，声明为必需会让 npm 7+/pnpm 为每个消费者自动安装约 10MB。README 中英同步改成"可选；CI 用 `^0.28` 验证"。
+- **`types/` 的两处准确性**：`dsh-client-ui-primitives.d.ts` 不再 `import type { ComponentType } from 'react'`（react 无类型，那行等于 `any`，却看着像真契约），改用本地结构类型并注明"启用 `@types/react` 是全客户端树的独立迁移"；`dsh-seams.d.ts` 的 `DshAgentPresets` 补上实际调用的 `list`/`resolve`/`serviceFor`/`defaultId`/`selectionPolicy`（原声明描述的是一个不存在的服务），文件头写明**哪些是强制的**（host-check / integration-check 探针）**哪些只是文档**。
+- **CHANGELOG 顶部加说明**：各节里的数量是**该轮快照**，不回溯修改；只有最新一轮应与 HEAD 一致。
+
 ### Fixed
 
+- **`webhook-history.json` 的 `version` 此前只写不读**：来自更新版本的 sidecar 会被当成空 v1 读入、随后被覆写；`seen` 形状一变，已投递过的 delivery id 会被重新执行。现在读到更高的 `version` 就标记 `newer`：进程内历史环与去重仍工作（best-effort 不变），但**绝不回写**该文件，并告警一次。
+- **`looksLikeTs` 的两个漏检**（esbuild 缺失时的降级路径）：`agent<Result>("x")`）与 `const rows: Row[] = []` 此前会被当成纯 JS 交给 `new Function()`，报的是难懂语法错误而不是"esbuild 不可用"。补了泛型**调用**与数组注解两条模式（泛型要求首字母大写且后随调用，避免把 `a < B > c` 当类型实参）；该函数已导出并加了 19 例断言，其中两个已知误报（注释/字符串里出现 `interface X`）也写进用例 —— 方向保持"保守拒绝、失败可见"。
 - **`withFileLock` 的抢占路径不再空转**：抢到（unlink）过期锁后原本**立即**重试，两个进程可以互相抢对方的锁文件打满 CPU；现在退避 5ms + 随机抖动，并把「预算耗尽」的判断挪到抢占**之前**，失败开放照旧生效。另外**半写锁**（`open(…, 'wx')` 与写入 pid 之间的窗口）不再被当作过期锁抢占：250ms 内无主的锁一律等待，避免两个写者同时进入临界区。
 - **`verify-cron-admin.mjs` 的异步断言此前在「最后一个注册」时会被静默吞掉**：`check()` 用 `chain.then(body, fail)`，rejected promise 只由**下一个**链节处理，末位失败被 `settle()` 的拒绝处理吞掉 —— 去掉存储锁的伪证因此"通过"了。现在 `check()` 自己 `await` 并计数，异步断言失败必定进 `failures`。
 - `lib/webhook-triggers.js` 删除已无调用者的 `persist()`（`saveRule` / `deleteRule` 改走锁内的 `mutateRulesStore`）。

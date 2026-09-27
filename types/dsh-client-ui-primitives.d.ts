@@ -10,10 +10,14 @@
  * (packages/client/ui-primitives/README.md, the component catalog).
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
-  import type { ComponentType } from 'react'
-
-  /** Any atom: the plugin passes native element attributes plus a few atom props. */
-  type Atom = ComponentType<any>
+  /**
+   * Any atom. Deliberately a LOCAL structural type instead of React's
+   * `ComponentType`: `react` ships no types here (adding `@types/react` would
+   * turn on prop checking for the whole 9k-line client tree at once — a
+   * separate migration), and importing `ComponentType` from an untyped module
+   * silently resolved to `any` while looking like a real contract.
+   */
+  type Atom = (props: Record<string, any>) => unknown
 
   export const Button: Atom
   export const Input: Atom

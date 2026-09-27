@@ -10,7 +10,7 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -168,6 +168,49 @@ await check('a newer rules file degrades the webhook mount instead of aborting t
     (error) => error.code === 'STORE_VERSION_NEWER',
     'saving over the newer file is still refused',
   )
+  for (const dispose of disposers) { try { dispose() } catch { /* idempotent */ } }
+})
+
+await check('a newer history sidecar is left untouched while deliveries keep working', async () => {
+  // The sidecar's `version` used to be written but never READ: a file from a
+  // newer plugin was misread as an empty v1 store and then overwritten, and a
+  // shape change to `seen` would have re-executed already-claimed delivery ids.
+  const profileDir = join(dir, 'profile-newer-history')
+  mkdirSync(join(profileDir, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture', dependencies: {} }))
+  const rulesPath = join(dir, 'history-probe-rules.json')
+  const historyPath = join(dir, 'history-probe-history.json')
+  writeFileSync(rulesPath, JSON.stringify({ version: 1, rules: [] }))
+  const newerSidecar = JSON.stringify({ version: 99, history: [{ at: 'x', ruleId: 'future' }], seen: ['kept'] }, null, 2) + '\n'
+  writeFileSync(historyPath, newerSidecar)
+  const warnings = []
+  const disposers = []
+  const steered = []
+  const ctx = {
+    baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
+    logger: { info: () => {}, warn: (message) => warnings.push(String(message)), error: () => {} },
+    get: (key) => (key === 'agents'
+      ? { get: (id) => (id === 'live' ? { steer: (msg) => steered.push(msg) } : undefined) }
+      : undefined),
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d },
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+  }
+  applyWebhookAdmin(ctx, {
+    enqueue: (op) => Promise.resolve().then(op),
+    runPnpm: null,
+    reconcileBundles: null,
+    settings: { webhookTriggersPath: rulesPath, webhookHistoryPath: historyPath },
+  })
+  assert.ok(
+    warnings.some((message) => message.includes('webhook-history.json')),
+    'the newer sidecar is reported',
+  )
+  await ctx.provided.webhookAdmin.saveRule({ id: 'probe', enabled: true, secret: 'topsecret-key-16chars', action: { mode: 'steer', sessionId: 'live', steer: true } })
+  // A delivery exercises the history-flush path (testRule steers directly).
+  const tested = await ctx.provided.webhookAdmin.testRule('probe')
+  assert.equal(tested.ok, true, 'deliveries still work with the sidecar refused')
+  assert.equal(steered.length, 1, 'and the action really ran')
+  assert.equal(readFileSync(historyPath, 'utf8'), newerSidecar, 'the newer sidecar is byte-identical (never rewritten)')
   for (const dispose of disposers) { try { dispose() } catch { /* idempotent */ } }
 })
 

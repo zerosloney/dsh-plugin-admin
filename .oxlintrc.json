@@ -1,0 +1,39 @@
+{
+  // oxlint configuration (see package.json `check:lint`).
+  //
+  // Policy:
+  //   - the two GENERATED bundles are not linted: they are esbuild output of
+  //     src/client/**, and linting build products only diluted the signal
+  //     (207 -> 166 findings, all of them noise from the artifacts);
+  //   - `lib/**` is SHIPPED host code, so unused identifiers and regex escapes
+  //     there are errors: dead imports/constants/functions in the host half are
+  //     exactly the drift this gate exists to catch;
+  //   - `src/client/**` and `scripts/**` stay at `warn`: the client sources are
+  //     a 9k-line React tree whose unused locals are mostly intentional
+  //     placeholders (and touching it means rebuilding a 470 KB artifact), and
+  //     the verify scripts keep helpers for readability. A blanket
+  //     `--deny-warnings` would demand that cleanup first, so `check:lint`
+  //     stays error-based and this file is the enforced bar.
+  //
+  // `caughtErrors: "none"` matches the codebase's own convention: `catch {}` is
+  // used wherever the error is uninteresting, and the remaining `catch (e)` in
+  // older code should not be reported as a defect.
+  //
+  // The ~146 remaining warnings are `no-unused-vars` in `scripts/**` (verify
+  // scripts keep helpers for readability) and `src/client/**` (intentional
+  // placeholders before `configure(env)` overwrites them), plus unicorn STYLE
+  // suggestions in `lib/**` (pre-sized `new Array(n)`, `/^- x:/.test(s)` instead
+  // of `startsWith`) — recorded rather than silenced so the count stays visible.
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "ignorePatterns": ["lib/client.js", "lib/client.panels.js"],
+  "rules": {
+    "no-unused-vars": ["error", { "caughtErrors": "none", "args": "after-used" }],
+    "no-useless-escape": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/client/**/*.js", "scripts/**/*.mjs"],
+      "rules": { "no-unused-vars": "warn" }
+    }
+  ]
+}

@@ -16,6 +16,7 @@ import {
   stepFingerprint,
   createRunner,
   evalSnippet,
+  looksLikeTs,
 } from '../lib/workflow-engine.js'
 
 let failures = 0
@@ -431,8 +432,46 @@ await checkAsync('caller abort cuts eval well before the hard timeout', async ()
   assert.ok(elapsed < 5000, `caller abort should cut eval promptly, took ${elapsed}ms`)
 })
 
-// ─── 结果 ─────────────────────────────────────────────────────────────────────
+check('looksLikeTs gates the esbuild-missing fallback (TS refused, plain JS wrapped)', () => {
+  // compileScript's catch branch cannot be reached in a process that HAS esbuild
+  // installed, so the heuristic that decides "refuse vs wrap" is pinned directly:
+  // a false negative would hand TypeScript to new Function() and surface a
+  // syntax error with no diagnostic.
+  for (const ts of [
+    'interface Job { id: string }',
+    'type Args = { name: string }',
+    'enum Mode { A, B }',
+    'class X implements Runner {}',
+    'const n: number = 1',
+    'return await agent<Result>("x")',
+    'const rows: Row[] = []',
+  ]) {
+    assert.equal(looksLikeTs(ts), true, 'TypeScript-looking: ' + JSON.stringify(ts))
+  }
+  for (const js of [
+    'return await agent("audit")',
+    'const rows = await parallel(items.map((i) => () => agent("x" + i)))',
+    'await shell("ls -la")',
+    'phase("collect")',
+    'report("done", { total: 3 })',
+    'const args = { name: "x" }',
+    'if (a < b && c > d) return 1',
+    'const bigger = a < B > c',
+  ]) {
+    assert.equal(looksLikeTs(js), false, 'plain JS: ' + JSON.stringify(js))
+  }
+  // Known false positives of the text heuristic (it parses no comments/strings).
+  // They only ever fail LOUD — and only in the degraded no-esbuild mode, where
+  // the remedy is installing the peer — so the conservative direction is kept.
+  for (const falsePositive of [
+    '// a comment mentioning interface Foo',
+    'const msg = "type Args = { a: string }"',
+  ]) {
+    assert.equal(looksLikeTs(falsePositive), true, 'known false positive: ' + JSON.stringify(falsePositive))
+  }
+})
 
+// ─── 结果 ─────────────────────────────────────────────────────────────────────
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

@@ -21,11 +21,14 @@
  *
  * Run: node scripts/integration-check.mjs
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
+/** The plugin's own client sources: the atom imports live here (see the
+ * ui-primitives probe). Resolved in the PLUGIN tree, not the checkout. */
+const PLUGIN_CLIENT_DIR = join(here, '..', 'src', 'client')
 const CHECKOUT = process.env.DSH_CHECKOUT ?? join(here, '..', '..', 'deepseek-harness')
 
 if (!existsSync(join(CHECKOUT, 'package.json'))) {
@@ -489,6 +492,42 @@ const PROBES = [
       ['WebRouteKind covers prefix matching', t => t.includes("export type WebRouteKind = 'exact' | 'prefix'")],
       ['WebRoute handler receives (req, res)', t => t.includes('handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>')],
       ['prefix routes are stored by path', t => t.includes('private readonly prefixes = new Map<string, WebRoute>()')],
+    ],
+  },
+  {
+    id: 'ui-primitives atom exports (host)',
+    // The panels import the shell's shared atoms as build-time externals: a
+    // renamed or removed export is not a type error here (esbuild leaves the
+    // specifier external), it is a RUNTIME "missed the module table" failure at
+    // bundle load. So this probe reads OUR OWN import statements and checks every
+    // name against the upstream export list — the one drift the harness's stub
+    // cannot see.
+    file: 'packages/client/ui-primitives/src/index.ts',
+    checks: [
+      ['every atom the client sources import is exported upstream', t => {
+        const names = new Set()
+        for (const file of readdirSync(PLUGIN_CLIENT_DIR).filter((f) => f.endsWith('.js'))) {
+          const source = readFileSync(join(PLUGIN_CLIENT_DIR, file), 'utf8')
+          for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*'@deepseek-ai\/dsh-client-ui-primitives'/g)) {
+            for (const part of m[1].split(',')) {
+              const name = part.trim().split(/\s+as\s+/)[0].trim()
+              if (name !== '') names.add(name)
+            }
+          }
+        }
+        // Fail loud when the import shape itself moved: a vacuous pass here would
+        // hide exactly the rename this probe exists for.
+        if (names.size === 0) return false
+        const exported = new Set()
+        for (const m of t.matchAll(/export\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'/g)) {
+          for (const part of m[1].split(',')) {
+            const name = part.trim().split(/\s+as\s+/).pop().trim()
+            if (name !== '') exported.add(name)
+          }
+        }
+        return [...names].every((name) => exported.has(name))
+      }],
+      ['the upstream export list parses to something (not an empty match)', t => /export \{ (Button|Input) \}/.test(t)],
     ],
   },
   {

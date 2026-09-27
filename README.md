@@ -81,7 +81,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
    - `/workflow`（或 `list`）：列出工作库（当前会话的项目 `.dsh` 优先，其次全局）与活跃运行；
    - `/workflow run <名称> [argsJSON]`：在当前会话启动一个已保存的工作流（后台运行，`/workflow runs` 查进度）；
    - `/workflow runs`：列出运行（最新在前）；`/workflow stop <runId>`：停止。
-9. 依赖与安全：TS 脚本需要 esbuild（已声明 peerDependencies，随插件安装；纯 JS 无需）。运行与工作库落 `$DSH_HOME/workflows/{runs,saved}/`。
+9. 依赖与安全：TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工作流，TS 脚本会给出明确诊断而不是静默失败；CI 用 `^0.28` 验证）。运行与工作库落 `$DSH_HOME/workflows/{runs,saved}/`。
 
 ### ⌨️ 命令 & 钩子
 1. 打开：设置 → 内置插件 → 「命令」「钩子」两个页签（命令 60、钩子 70，排在「子智能体」之后，先命令后钩子）。

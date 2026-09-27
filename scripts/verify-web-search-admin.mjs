@@ -210,7 +210,7 @@ assert.deepEqual(pnpmCalls[0].args, ['add', '@deepseek-ai/dsh-web-search-exa'], 
 // The cordis row now lives in the patch.
 const after4 = readFileSync(patchPath, 'utf8')
 assert.ok(/^\s*- id: web-search-exa\s*$/m.test(after4), 'ex a row appended to the patch')
-assert.ok(/name: '\@deepseek-ai\/dsh-web-search-exa'/.test(after4), 'ex a row carries the module name')
+assert.ok(/name: '@deepseek-ai\/dsh-web-search-exa'/.test(after4), 'ex a row carries the module name')
 assert.ok(/apiKeyEnv: EXA_API_KEY/.test(after4), 'ex a row carries the apiKeyEnv')
 // The fresh `list()` reports installed=true for exa now.
 const list4 = await service.list()
