@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
@@ -59,11 +60,10 @@ assert.equal(registrations.length, 1, 'one bundle registration')
 assert.equal(registrations[0].id, 'dsh-plugin-admin')
 
 // 2. Materialization: the factory consumes the platform require table.
-const exports = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  if (spec === 'react-dom/client') return { createRoot }
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const exports = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
+// Slot labels became thunks in Phase C (they follow the active locale without
+// re-registration), so assertions resolve them the way the shell does.
+const slotLabel = (entry) => (typeof entry.options.label === 'function' ? entry.options.label() : entry.options.label)
 assert.deepEqual(exports.inject, ['slots', 'connection'], 'injects slots + connection')
 
 // 3. apply(): waits on the slot declarations and registers the three surfaces.
@@ -476,56 +476,58 @@ assert.equal(byId['command-hook-admin'], undefined, 'the standalone 命令与钩
 const extensions = byId.extensions
 assert.equal(extensions.options.name, 'settings.plugins.tab')
 assert.equal(extensions.options.order, 20, '扩展插件 tab sorts after 插件列表 (order 10)')
-assert.equal(extensions.options.label, '扩展插件', 'extensions tab label')
+assert.equal(slotLabel(extensions), '扩展插件', 'extensions tab label')
 const extensionsFace = extensions.options.inject()
 assert.equal(typeof extensionsFace.call, 'function', 'extensions tab inject face carries the RPC call')
 
 const skillsTab = byId.skills
 assert.equal(skillsTab.options.name, 'settings.plugins.tab', '技能 is a plugins-page tab, not a settings nav section')
 assert.equal(skillsTab.options.order, 30, '技能 tab sorts right after 扩展插件 (order 20)')
-assert.equal(skillsTab.options.label, '技能', 'skills tab label')
+assert.equal(slotLabel(skillsTab), '技能', 'skills tab label')
 assert.equal(byId['skills-admin'], undefined, 'the standalone 技能 settings nav section is gone')
 assert.equal(typeof skillsTab.options.inject().call, 'function', 'skills tab inject face carries the RPC call')
 
 const mcpSection = byId['mcp-servers']
 assert.equal(mcpSection.options.name, 'settings.plugins.tab', 'MCP服务器 is a plugins-page tab, not a settings nav section')
 assert.equal(mcpSection.options.order, 40, 'MCP服务器 tab sorts right after 技能 (order 30)')
-assert.equal(mcpSection.options.label, 'MCP服务器', 'MCP section label')
+assert.equal(slotLabel(mcpSection), 'MCP服务器', 'MCP section label')
 
 const subagentSection = byId['subagent-admin']
 assert.equal(subagentSection.options.name, 'settings.plugins.tab', '子智能体 is a plugins-page tab, not a settings nav section')
 assert.equal(subagentSection.options.order, 50, '子智能体 tab sorts right after MCP服务器 (order 40)')
-assert.equal(subagentSection.options.label, '子智能体', 'subagent section label')
+assert.equal(slotLabel(subagentSection), '子智能体', 'subagent section label')
 
 const chCommandsTab = byId['ch-commands']
 const automationSectionRef = byId['automation']
 assert.equal(chCommandsTab.options.name, 'settings.plugins.tab', '命令 is a plugins-page tab, not a settings nav section')
 assert.equal(chCommandsTab.options.order, 60, '命令 tab sorts right after 子智能体 (order 50)')
-assert.equal(chCommandsTab.options.label, '命令', 'commands tab label')
+assert.equal(slotLabel(chCommandsTab), '命令', 'commands tab label')
 assert.equal(typeof chCommandsTab.options.inject().call, 'function', 'commands tab inject face carries the RPC call')
 const chHooksTab = byId['ch-hooks']
 assert.equal(chHooksTab.options.name, 'settings.plugins.tab', '钩子 is a plugins-page tab, not a settings nav section')
 assert.equal(chHooksTab.options.order, 70, '钩子 tab sorts right after 命令 (order 60)')
-assert.equal(chHooksTab.options.label, '钩子', 'hooks tab label')
+assert.equal(slotLabel(chHooksTab), '钩子', 'hooks tab label')
 assert.equal(typeof chHooksTab.options.inject().call, 'function', 'hooks tab inject face carries the RPC call')
 assert.equal(byId['command-hook-admin'], undefined, 'the merged 命令与钩子 section is gone')
 
 // 历史会话 registers no section of its own any more — it is the default tab
 // of the Web 与会话 entry (below); 工作区 registers NOWHERE — retired, because
-// dsh covers workspaces natively. The bundle still exports both components so
-// the harness can mount them directly and keep exercising the panel contracts
-// (the workspace panel below exercises its own contracts directly).
+// dsh covers workspaces natively. The panel implementations live in the
+// lazily loaded chunk (Phase B2), so the harness asks the entry for it the way
+// a slot does and mounts the chunk's components directly, keeping their
+// contracts under test.
+const panels = await exports.loadPanels()
 const rpcCall = (method, args) => ctx.connection.rpc.call('/api', method, { args: args })
 const sessionsSection = {
   options: { id: 'session-history', inject: () => ({ call: rpcCall, refreshSessions: null }) },
-  component: exports.SessionsSection,
+  component: panels.SessionsSection,
 }
 const workspacesSection = {
   options: { id: 'workspaces', inject: () => ({ call: rpcCall }) },
-  component: exports.WorkspacesSection,
+  component: panels.WorkspacesSection,
 }
-assert.equal(typeof exports.SessionsSection, 'function', 'bundle exports the session-history panel for direct mounting')
-assert.equal(typeof exports.WorkspacesSection, 'function', 'bundle exports the workspace panel for direct mounting')
+assert.equal(typeof panels.SessionsSection, 'function', 'the chunk exports the session-history panel for direct mounting')
+assert.equal(typeof panels.WorkspacesSection, 'function', 'the chunk exports the workspace panel for direct mounting')
 const historyFace = sessionsSection.options.inject()
 assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
 assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
@@ -538,7 +540,7 @@ assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock injec
 const webSessionsSection = byId['web-sessions']
 assert.equal(webSessionsSection.options.name, 'settings.section', 'Web 与会话 is one standalone settings page')
 assert.equal(webSessionsSection.options.order, 27, 'Web 与会话 sorts BEFORE 用量仪表盘 (order 28)')
-assert.equal(webSessionsSection.options.label, 'Web 与会话', 'web-sessions section label')
+assert.equal(slotLabel(webSessionsSection), 'Web 与会话', 'web-sessions section label')
 const webSessionsFace = webSessionsSection.options.inject()
 assert.equal(typeof webSessionsFace.call, 'function', 'web-sessions inject face carries the RPC call')
 assert.ok('refreshSessions' in webSessionsFace, 'web-sessions inject face carries the sidebar refresh hook for the history tab')
@@ -546,13 +548,13 @@ assert.ok('refreshSessions' in webSessionsFace, 'web-sessions inject face carrie
 const usageSection = byId['usage-dashboard']
 assert.equal(usageSection.options.name, 'settings.section', 'usage dashboard is a standalone settings page')
 assert.equal(usageSection.options.order, 28, 'usage dashboard sorts right after Web 与会话 (order 27)')
-assert.equal(usageSection.options.label, '用量仪表盘', 'usage dashboard label')
+assert.equal(slotLabel(usageSection), '用量仪表盘', 'usage dashboard label')
 assert.equal(typeof usageSection.options.inject().call, 'function', 'usage dashboard inject face carries the RPC call')
 
 const automationSection = byId['automation']
 assert.equal(automationSection.options.name, 'settings.section', '自动化 is one standalone settings page')
 assert.equal(automationSection.options.order, 29, '自动化 keeps the former 定时任务 slot (29)')
-assert.equal(automationSection.options.label, '自动化', 'automation section label')
+assert.equal(slotLabel(automationSection), '自动化', 'automation section label')
 assert.equal(typeof automationSection.options.inject().call, 'function', 'automation inject face carries the RPC call')
 assert.equal(byId['cron-tasks'], undefined, 'the standalone 定时任务 section merged into 自动化')
 assert.equal(byId['webhook-triggers'], undefined, 'the standalone Webhook 触发 section merged into 自动化')
@@ -585,17 +587,18 @@ const sheets = [...document.querySelectorAll('style[data-plugin-css], style[data
 const cssAll = sheets.map((s) => s.textContent).join('\n')
 const chCss = document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]').textContent
 assert.ok(cssAll.includes('[data-cha-section] .tab.active'), 'CH tabs use the unified segmented tab recipe (re-rooted)')
-assert.ok(
-  cssAll.includes('[data-cha-section] .btn.primary') && cssAll.includes('--dsw-static-blue-600'),
-  'CH buttons use the unified blue primary',
-)
+// Phase B4: the bespoke .btn/.pill chrome is retired — every control is the
+// platform atom now, so a sheet that re-introduces the old class vocabulary is
+// a regression, not a variant.
+assert.ok(!/\[data-[a-z-]+\]\s+\.btn(?![\w-])/.test(cssAll), 'the retired .btn chrome is gone from every sheet')
+assert.ok(!/\[data-[a-z-]+\]\s+\.pill(?![\w-])/.test(cssAll), 'the retired .pill chrome is gone from every sheet')
 assert.ok(chCss.includes('.notice.warn') && chCss.includes('.tag.event'), 'CH banners/badges keep their own unique recipes')
 // Anti-drift invariant: one definition per shared component, in ONE sheet. A
 // second copy is a definition waiting to diverge again. The pattern anchors the
 // selector (`[scope] .btn` immediately followed by `{` or `,`) so a nested
 // selector like `.cli-scan-card .btn {` is not mistaken for a definition.
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-for (const shared of ['.btn', '.tag', '.input', '.list', '.empty', '.toolbar', '.card', '.card-sub', '.tabs', '.tab', '.form', '.field', '.btn.primary', '.btn.sm']) {
+for (const shared of ['.tag', '.input', '.list', '.empty', '.toolbar', '.card', '.card-sub', '.tabs', '.tab', '.form', '.field']) {
   const re = new RegExp(`\\[data-[a-z-]+\\] ${escapeRe(shared)}\\s*(?=\\{|,)`, 'g')
   const owners = sheets.filter((s) => (s.textContent.match(re) ?? []).length > 0)
   assert.equal(owners.length, 1, `${shared} is defined in exactly one stylesheet (found ${owners.length})`)
@@ -711,7 +714,9 @@ await act(async () => {
   propsOfSearch(searchInput).onChange({ target: { value: 'custom' } })
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
-const cardTextsAfterSearch = [...host.querySelectorAll('.card')].map((c) => c.textContent || '')
+// Scope to the plugin LIST: the panel also renders an audit card (Phase F3),
+// which is not a search result and must not be counted here.
+const cardTextsAfterSearch = [...host.querySelectorAll('.list .card')].map((c) => c.textContent || '')
 assert.equal(cardTextsAfterSearch.length, 1, 'search narrows the list to matching cards')
 assert.ok(cardTextsAfterSearch[0].includes('dsh-custom-tool'), 'matching card is dsh-custom-tool')
 // Version substring search: "0.2" matches dsh-custom-tool v0.2.0.
@@ -719,7 +724,7 @@ await act(async () => {
   propsOfSearch(searchInput).onChange({ target: { value: '0.2' } })
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
-const cardsByVersion = [...host.querySelectorAll('.card')].map((c) => c.textContent || '')
+const cardsByVersion = [...host.querySelectorAll('.list .card')].map((c) => c.textContent || '')
 assert.equal(cardsByVersion.length, 1, 'version substring search narrows to one card')
 assert.ok(cardsByVersion[0].includes('dsh-custom-tool'), 'version match finds dsh-custom-tool v0.2.0')
 // Nonsense needle → empty hint.
@@ -857,7 +862,7 @@ await act(async () => {
 assert.ok(document.body.textContent.includes('已置顶(1)'), 'pinned pill count updates')
 assert.ok(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/pinned-sessions')).length === 1, 'pin persisted to localStorage')
 await act(async () => {
-  const unpinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 已置顶') && b.className.includes('btn'))
+  const unpinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 已置顶'))
   assert.ok(unpinBtn !== undefined, 'unpin button present')
   unpinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   await new Promise((resolve) => setTimeout(resolve, 30))
@@ -1180,7 +1185,7 @@ const mkNavRow = (label) => {
 // INSIDE the 内置插件 page, not the settings nav, so they have no nav rows here.
 const pluginSectionLabels = registeredSections
  .filter((entry) => entry.options.name === 'settings.section')
- .map((entry) => entry.options.label)
+ .map((entry) => slotLabel(entry))
 for (const label of pluginSectionLabels) mkNavRow(label)
 const officialRows = ['Agent 预设', '模型', '内置插件', '已归档会话'].map((label) => mkNavRow(label))
 settingsDialog.appendChild(settingsNav)
@@ -1421,7 +1426,7 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
 // Find the reconnect checkbox and uncheck it
-const reconnectCheckbox = [...host.querySelectorAll('input[type="checkbox"]')].find((cb) => cb.id === 'reconnect-toggle')
+const reconnectCheckbox = [...host.querySelectorAll('input[type="checkbox"]')].find((cb) => cb.closest('label')?.textContent?.includes('启用自动重连'))
 assert.ok(reconnectCheckbox !== undefined, 'reconnect checkbox exists')
 await act(async () => {
   propsOfEl(reconnectCheckbox).onChange({ target: { checked: false } })
@@ -1498,7 +1503,7 @@ assert.ok(/\[data-dsh-admin-section\]\s*\{[^}]*overflow-y:\s*auto/.test(adminShe
 assert.ok(!/\[data-dsh-admin-section\]\s*\{[^}]*overflow:\s*hidden/.test(adminSheet.textContent), 'no overflow:hidden left on the section root')
 assert.ok(text.includes('⏱ 日期'), 'range pills row rendered')
 for (const pill of ['今天', '24H', '7D', '30D', '90D', '全部']) {
-  assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
+  assert.ok([...host.querySelectorAll('.usage-toolbar button')].some((b) => b.textContent === pill), 'range pill ' + pill + ' rendered')
 }
 assert.ok(text.includes('总 Token') && text.includes('输入 Token'), 'KPI token cards rendered')
 assert.ok(text.includes('会话数') && text.includes('活跃天数'), 'KPI session cards rendered')
@@ -1528,15 +1533,18 @@ assert.ok([...filter.querySelectorAll('option')].every((o) => !o.text.includes('
 assert.equal(filter.querySelector('select').getAttribute('title'), '全部项目', 'the select title carries the full current value')
 assert.equal(filter.querySelector('select').getAttribute('aria-label'), '按项目筛选', 'the select is labelled for assistive tech')
 // Range state is not colour-only.
-const pressed = [...host.querySelectorAll('.usage-toolbar .pill')].filter((b) => b.getAttribute('aria-pressed') === 'true')
+// Phase B3: range chips are the official Pill atom, so their identity is the
+// label plus aria-pressed rather than the retired .pill class.
+const rangePills = () => [...host.querySelectorAll('.usage-toolbar button')]
+const pressed = rangePills().filter((b) => b.getAttribute('aria-pressed') === 'true')
 assert.equal(pressed.length, 1, 'exactly one range pill is pressed')
 assert.equal(pressed[0].textContent, '30D', 'the pressed pill is the default 30D window')
 await act(async () => {
-  const pill7d = [...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D')
+  const pill7d = rangePills().find((b) => b.textContent === '7D')
   pill7d.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   await new Promise((resolve) => setTimeout(resolve, 30))
 })
-assert.ok([...host.querySelectorAll('.usage-toolbar .pill')].find((b) => b.textContent === '7D').className.includes('active'), '7D pill becomes active')
+assert.equal(rangePills().find((b) => b.textContent === '7D').getAttribute('aria-pressed'), 'true', '7D pill becomes pressed')
 await act(async () => { usageRoot.unmount() })
 host.remove()
 
@@ -1904,11 +1912,7 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'en')
 const registrationsEn = []
 globalThis.window.__ModuleLoader__ = { load: (registration) => registrationsEn.push(registration) }
 new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
-const exportsEn = registrationsEn[0].factory((spec) => {
-  if (spec === 'react') return React
-  if (spec === 'react-dom/client') return { createRoot }
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const exportsEn = registrationsEn[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 const injectedEn = []
 const registeredEn = []
 exportsEn.apply({
@@ -1925,16 +1929,16 @@ injectedEn.forEach((i) => i.callback())
 assert.equal(registeredEn.length, 10, 'en mode also registers ten sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
-assert.equal(byIdEn.extensions.options.label, 'Extensions', 'en nav label for the extensions tab')
-assert.equal(byIdEn['mcp-servers'].options.label, 'MCP Servers', 'en tab label for MCP')
-assert.equal(byIdEn['automation'].options.label, 'Automation', 'en nav label for automation')
+assert.equal(slotLabel(byIdEn.extensions), 'Extensions', 'en nav label for the extensions tab')
+assert.equal(slotLabel(byIdEn['mcp-servers']), 'MCP Servers', 'en tab label for MCP')
+assert.equal(slotLabel(byIdEn['automation']), 'Automation', 'en nav label for automation')
 
 const enRoot = await mountSection(byIdEn.extensions)
-const enSearch = document.querySelector('.toolbar .search-wrap .input')
+const enSearch = document.querySelector('.search-wrap input')
 assert.ok(enSearch && enSearch.placeholder === 'Search plugins (name/version/path)...', 'en search placeholder')
 assert.ok(document.body.textContent.includes('All (3)'), 'en filter pill with count')
 assert.ok([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Check updates')), 'en check-updates button')
-const langSelect = document.querySelector('select[title="Panel language (all admin panels)"]')
+const langSelect = document.querySelector('select[title="Interface language"]')
 assert.ok(langSelect && langSelect.value === 'en', 'language switch rendered with en selected')
 await act(async () => { enRoot.unmount() })
 host.remove()
@@ -1948,4 +1952,110 @@ await act(async () => { mcpEn.unmount() })
 host.remove()
 dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch)')
+
+/* ---- Phase C: the panel table rides the shell locale service ------------
+ * A fake ctx.locale proves the three things the migration promised: the table
+ * registers as ONE namespace with matching zh/en key sets, dshT() reads the
+ * shell's active locale, and switching it repaints a mounted panel live — no
+ * reload, no remount (the old 🌐 toggle reloaded the page).
+ */
+{
+  const dicts = new Map()
+  const listeners = new Set()
+  const setLocaleCalls = []
+  let active = 'zh'
+  const fakeLocale = {
+    register: (ns, value) => { dicts.set(ns, value); return () => dicts.delete(ns) },
+    bind: (ns) => (key) => {
+      const table = (dicts.get(ns) ?? {})[active]
+      return table !== undefined && typeof table[key] === 'string' ? table[key] : key
+    },
+    subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
+    getSnapshot: () => ({ active, revision: 0 }),
+    setLocale: (id) => { active = id; setLocaleCalls.push(id); for (const fn of [...listeners]) fn() },
+  }
+  const localeRegistrations = []
+  globalThis.window.__ModuleLoader__ = { load: (registration) => localeRegistrations.push(registration) }
+  new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
+  const exportsLocale = localeRegistrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
+  const injectedLocale = []
+  const registeredLocale = []
+  exportsLocale.apply({
+    logger: ctx.logger,
+    effect: (fn) => { fn() },
+    inject: undefined,
+    connection: ctx.connection,
+    slots: {
+      inject: (key, callback) => { injectedLocale.push({ key, callback }) },
+      register: (options, component) => { registeredLocale.push({ options, component }); return () => {} },
+    },
+    get: (key) => (key === 'locale' ? fakeLocale : undefined),
+  })
+  injectedLocale.forEach((i) => i.callback())
+  const table = dicts.get('dshAdmin')
+  assert.ok(table !== undefined, 'the panel table registers under the dshAdmin namespace')
+  assert.deepEqual(Object.keys(table.zh).sort(), Object.keys(table.en).sort(), 'zh/en dictionary key sets match exactly')
+  const localeById = {}
+  for (const entry of registeredLocale) localeById[entry.options.id] = entry
+
+  const localeRoot = await mountSection(localeById.extensions)
+  const bodyText = () => document.body.textContent ?? ''
+  assert.ok(bodyText().includes('检查更新'), 'zh: panel chrome renders in Chinese through the shell locale')
+  await act(async () => { fakeLocale.setLocale('en') })
+  assert.ok(bodyText().includes('Check updates'), 'en: the SAME mount repaints in English after the shell switches')
+  assert.ok(!bodyText().includes('检查更新'), 'en: the Chinese chrome is gone — no stale text survives the switch')
+  const langSelect = document.querySelector('select[title="Interface language"]')
+  assert.ok(langSelect !== null, 'the panel language switch still renders')
+  await act(async () => {
+    langSelect.value = 'zh'
+    langSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+  })
+  assert.deepEqual(setLocaleCalls, ['en', 'zh'], 'the panel toggle goes through the shell setLocale, never a reload')
+  await act(async () => { localeRoot.unmount() })
+  host.remove()
+}
+
+
+/* ---- Phase E: official-first auto-yield --------------------------------
+ * The table in src/client/native-coverage.js decides which panels still have
+ * a job. A covered panel must not register at all (not hidden, not disabled),
+ * and `dsh-admin-panels` must be able to force one back on.
+ */
+{
+  const mountPanels = (officialPanelIds) => {
+    const regs = []
+    globalThis.window.__ModuleLoader__ = { load: (registration) => regs.push(registration) }
+    new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
+    const ex = regs[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
+    const injected = []
+    const registered = []
+    ex.apply({
+      logger: ctx.logger,
+      effect: (fn) => { fn() },
+      connection: ctx.connection,
+      get: () => undefined,
+      slots: {
+        // Only the panel list carries the official entries the probes look for.
+        entries: (name) => (name === 'sidebar.panellist' ? officialPanelIds.map((id) => ({ options: { id } })) : []),
+        inject: (key, cb) => { injected.push({ key, cb }) },
+        register: (options, component) => { registered.push({ options, component }); return { options, component } },
+      },
+    })
+    injected.forEach((entry) => entry.cb())
+    return registered.map((entry) => entry.options.id).sort()
+  }
+
+  const withNone = mountPanels([])
+  assert.ok(withNone.includes('extensions'), 'no official panel list → the extensions tab registers')
+  const withOfficial = mountPanels(['plugins'])
+  assert.ok(!withOfficial.includes('extensions'), 'official 插件 page present → the extensions tab yields')
+  assert.equal(withOfficial.length, withNone.length - 1, 'exactly one panel yields (the rest still register)')
+  assert.ok(withOfficial.includes('mcp-servers') && withOfficial.includes('usage-dashboard'), 'uncovered panels keep registering')
+
+  dom.window.localStorage.setItem('dsh-admin-panels', 'extensions')
+  const forced = mountPanels(['plugins'])
+  assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
+  dom.window.localStorage.removeItem('dsh-admin-panels')
+}
+
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

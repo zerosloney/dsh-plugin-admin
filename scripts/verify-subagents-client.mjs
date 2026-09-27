@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
@@ -69,11 +70,7 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 })
 
 /* 2 ── materialization */
-const exports = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  if (spec === 'react-dom/client') return { createRoot }
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const exports = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 await check('exports apply + inject ["slots", "connection"]', () => {
   assert.deepEqual(exports.inject, ['slots', 'connection'])
   assert.equal(typeof exports.apply, 'function')
@@ -94,19 +91,27 @@ const ctx = {
     },
   },
 }
-await check('apply() injects styles and registers the 子智能体 settings section', () => {
+await check('apply() registers the 子智能体 settings section', () => {
   exports.apply(ctx)
-  assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted')
+  // Phase B2: the stylesheets ride with the panel chunk (injected in configure()).
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
     ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
     'unified apply injects the three settings sections + six plugins-page tabs + the todo dock',
   )
+
   injectedSlots.forEach((slot) => slot.factory())
   const registration = slotRegistrations.find((entry) => entry.declaration.id === 'subagent-admin')
   assert.ok(registration, 'subagent-admin registration present')
-  assert.equal(registration.declaration.label, '子智能体')
+  assert.equal((typeof registration.declaration.label === 'function' ? registration.declaration.label() : registration.declaration.label), '子智能体')
   assert.equal(registration.declaration.order, 50)
+})
+// The panel code (and its CSS) arrives with the lazily loaded chunk: styles are
+// injected by configure(), i.e. the moment the chunk lands, before any panel
+// renders. Ask for the chunk the way a slot does, then assert the tag exists.
+await exports.loadPanels()
+check('the panel chunk injects the subagent stylesheet', () => {
+  assert.ok(document.querySelector('style[data-dsh-sa-styles]'), 'subagent stylesheet mounted with the chunk')
 })
 
 /* 4 ── mock host: in-memory subagentAdmin remote with the real semantics.

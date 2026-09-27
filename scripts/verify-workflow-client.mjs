@@ -16,6 +16,7 @@ import { JSDOM } from 'jsdom'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import TestUtils from 'react-dom/test-utils'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -32,11 +33,7 @@ const registrations = []
 globalThis.window.__ModuleLoader__ = { load: (registration) => registrations.push(registration) }
 new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
 
-const clientExports = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  if (spec === 'react-dom/client') return { createRoot }
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const clientExports = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 
 let failures = 0
 function check(name, fn) {
@@ -59,6 +56,9 @@ function makeCall(rpc) {
 }
 
 // ─── 渲染工具 ──────────────────────────────────────────────────────────────
+// The section lives in the lazily loaded panel chunk (Phase B2): ask the entry
+// for the chunk the way a slot does, then render its component.
+const panels = await clientExports.loadPanels()
 
 function renderPanel(call) {
   const container = document.createElement('div')
@@ -66,7 +66,7 @@ function renderPanel(call) {
   const root = createRoot(container)
   // act 包裹：React 18 的并发渲染需要 act 才能同步取到结果
   const act = TestUtils.act
-  const Comp = clientExports.WorkflowSection
+  const Comp = panels.WorkflowSection
   act(() => { root.render(React.createElement(Comp, { call })) })
   return {
     container,
@@ -80,10 +80,9 @@ function renderPanel(call) {
   }
 }
 
-// WorkflowSection rides module.exports alongside SessionsSection/WorkspacesSection
-// (the dsh module loader reads only apply/inject/Config, so the extra key is
-// inert at runtime — it exists purely for this self-check).
-const WorkflowSection = clientExports.WorkflowSection
+// WorkflowSection rides the chunk exports alongside the slot components; the
+// dsh module loader reads only apply/inject/Config, so this is harness-only.
+const WorkflowSection = panels.WorkflowSection
 assert.ok(typeof WorkflowSection === 'function', 'WorkflowSection exported for the self-check')
 
 console.log('WorkflowSection:')

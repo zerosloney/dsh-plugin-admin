@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
@@ -52,10 +53,7 @@ globalThis.window.__ModuleLoader__ = { load: (r) => registrations.push(r) }
 // assertions cover the stock Chinese chrome.
 dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
-const bundle = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const bundle = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 
 // ---------- Mock workspace registry ----------
 
@@ -318,7 +316,7 @@ const setInput = async (input, value) => {
   await fiberHandler(input, 'onChange', { target: input, currentTarget: input })
 }
 
-function mountPanel(container) {
+async function mountPanel(container) {
   const injected = []
   const registered = []
   const ctx = {
@@ -332,9 +330,11 @@ function mountPanel(container) {
   bundle.apply(ctx)
   injected.forEach((entry) => entry.cb())
   // 工作区 registers no section anywhere (retired — dsh covers workspaces
-  // natively), and the bundle exports the component for direct mounting.
-  const component = bundle.WorkspacesSection
-  if (typeof component !== 'function') throw new Error('bundle does not export WorkspacesSection')
+  // natively); the component lives in the lazily loaded chunk (Phase B2), so
+  // the harness asks the entry for the chunk first.
+  const panels = await bundle.loadPanels()
+  const component = panels.WorkspacesSection
+  if (typeof component !== 'function') throw new Error('the chunk does not export WorkspacesSection')
   const face = { call: (method, args) => ctx.connection.rpc.call('/api', method, { args: args }) }
   const root = createRoot(container)
   root.render(React.createElement(component, face))
@@ -344,7 +344,7 @@ function mountPanel(container) {
 // --- Scenario 1: CLI mode → unavailable hint --------------------------------
 mode = 'cli'
 const host1 = document.body.appendChild(document.createElement('div'))
-const s1 = mountPanel(host1)
+const s1 = await mountPanel(host1)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 assert.ok(document.body.textContent.includes('本部署未挂载 dsh-workspace'),
   'CLI-mode unavailable hint renders')
@@ -363,7 +363,7 @@ const ws2 = await registry.create('/Users/demo/projects/beta')
 calls.length = 0
 
 const host2 = document.body.appendChild(document.createElement('div'))
-const s2 = mountPanel(host2)
+const s2 = await mountPanel(host2)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 
 // 2a. List renders both seeded workspaces
@@ -379,14 +379,14 @@ await act(async () => { createBtn.dispatchEvent(new dom.window.MouseEvent('click
 await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
 assert.ok(document.body.textContent.includes('选择目录'), 'create form expanded with picker button')
 // Manual path entry (picker disabled scenario later).
-const inputs = [...document.querySelectorAll('input.input')]
+const inputs = [...document.querySelectorAll('input')]
 const pathInput = inputs.find((i) => i.placeholder && i.placeholder.includes('手动输入绝对目录路径'))
 assert.ok(pathInput, 'manual path input visible')
 await setInput(pathInput, '/Users/demo/projects/gamma')
 // Allow React to flush the controlled-input re-render before querying the
 // freshly-bound onClick handler.
 await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
-const saveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存' && b.classList.contains('primary'))
+const saveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存')
 assert.ok(saveBtn, 'save button visible after path typed')
 assert.equal(saveBtn.disabled, false, 'save button is enabled once the path is non-empty')
 await act(async () => { saveBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
@@ -407,13 +407,15 @@ assert.equal(createBtn.disabled, false, 'create button re-enables after a succes
 // page also has a '✎ 重命名' text in the create form footer but no rename
 // button there. We pick the rename button whose card-title-text contains
 // 'beta' to scope the click to the right workspace.
-const renameBtn = [...document.querySelectorAll('.card')]
+const betaCard = [...document.querySelectorAll('.card')]
   .find((card) => card.querySelector('.card-title-text')?.textContent === 'beta')
-  ?.querySelector('button.btn')
+// Phase B3: the row actions are official buttons now, so they are identified by
+// their label instead of the retired .btn class.
+const renameBtn = [...(betaCard?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('✎ 重命名'))
 assert.ok(renameBtn, 'rename button on the beta card visible')
 await act(async () => { renameBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
-const renameInput = [...document.querySelectorAll('input.input')].find((i) => i.value === 'beta')
+const renameInput = [...document.querySelectorAll('input')].find((i) => i.value === 'beta')
 assert.ok(renameInput, 'rename input pre-filled with current title')
 await setInput(renameInput, 'Beta Project')
 const renameSave = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存')
@@ -434,13 +436,11 @@ assert.ok(newOrder.indexOf(ws1.id) > 0, 'alpha moved down in registry order')
 // 2e. Delete the third workspace (gamma) via two-step confirm.
 // Find gamma's delete button by scoping to the card whose card-title-text
 // is 'gamma' — same scoping pattern as the rename click above.
-const deleteBtn = [...document.querySelectorAll('.card')]
+// Phase B3: the row actions are official buttons now, so the delete entry is
+// identified by its label inside the gamma card rather than by .btn.
+const gammaCard = [...document.querySelectorAll('.card')]
   .find((card) => card.querySelector('.card-title-text')?.textContent === 'gamma')
-  ?.querySelectorAll('button.btn')
-  ? [...[...document.querySelectorAll('.card')]
-    .find((card) => card.querySelector('.card-title-text')?.textContent === 'gamma')
-    .querySelectorAll('button.btn')].pop()
-  : null
+const deleteBtn = [...(gammaCard?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === '删除')
 assert.ok(deleteBtn, 'delete button on the gamma card visible')
 await act(async () => { deleteBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
@@ -464,7 +464,7 @@ pickerBackend = 'native'
 pickerPath = '/Users/demo/picker-target'
 
 const host3 = document.body.appendChild(document.createElement('div'))
-const s3 = mountPanel(host3)
+const s3 = await mountPanel(host3)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 
 // Open create form
@@ -475,7 +475,7 @@ await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
 const pickBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('选择目录'))
 assert.ok(pickBtn, 'picker button rendered')
 // textContent skips input value attributes; read the value directly.
-const pathInput3 = [...document.querySelectorAll('input.input')]
+const pathInput3 = [...document.querySelectorAll('input')]
   .find((i) => i.placeholder && i.placeholder.includes('手动输入绝对目录路径'))
 assert.ok(pathInput3, 'path input visible before picker click')
 await act(async () => { pickBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
@@ -483,7 +483,7 @@ await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
 assert.equal(pathInput3.value, '/Users/demo/picker-target',
   'picker result flows into the create form')
 // Save — the registry should now contain picker-target.
-const saveBtn3 = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存' && b.classList.contains('primary'))
+const saveBtn3 = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存')
 await act(async () => { saveBtn3.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
 await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
 assert.ok(registry.list().some((w) => w.path === '/Users/demo/picker-target'),
@@ -501,7 +501,7 @@ registry = new FakeRegistry()
 pickerMode = 'absent'
 
 const host4 = document.body.appendChild(document.createElement('div'))
-const s4 = mountPanel(host4)
+const s4 = await mountPanel(host4)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 const createBtn4 = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('➕ 新建工作区'))
 await act(async () => { createBtn4.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
@@ -527,7 +527,7 @@ registry = new FakeRegistry()
 const wsA = await registry.create('/Users/demo/projects/dir-A')
 
 const host5 = document.body.appendChild(document.createElement('div'))
-const s5 = mountPanel(host5)
+const s5 = await mountPanel(host5)
 await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
 // Flip the registry to mark dir-A missing for the next status call.
 registry.flipMissing(wsA.id)

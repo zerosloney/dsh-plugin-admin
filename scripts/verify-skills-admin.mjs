@@ -57,6 +57,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
@@ -559,10 +560,7 @@ globalThis.window.__ModuleLoader__ = { load: (r) => registrations.push(r) }
 // assertions cover the stock Chinese chrome.
 dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
-const bundle = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const bundle = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 
 let rosterMode = 'roster'
 let sessionListFails = false

@@ -27,6 +27,7 @@ import { execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { makeClientRequire } from './lib/harness-client.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(import.meta.url)
@@ -36,6 +37,9 @@ const req = createRequire(import.meta.url)
 const { apply, parseGitStatusZ, parseGitNumstat, parseGitBranch, gitFileStats, normalizeMcpToolResult } = await import(new URL('../lib/index.js', import.meta.url).href)
 const { renderSessionMarkdown, exportFilename } = await import(new URL('../lib/session-export.js', import.meta.url).href)
 const { foldHealthReport, healthSummaryLine } = await import(new URL('../lib/health-report.js', import.meta.url).href)
+// Descriptor assertions moved here in Phase D1b: the manifest owns the wire surface,
+// so these checks read the table instead of grepping lib/index.js source text.
+const { RPC_MANIFEST } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
 
 const results = []
 const check = (name, fn) => {
@@ -241,9 +245,8 @@ await checkAsync('fileStats rejects non-string session ids', async () => {
 })
 
 check('typert descriptor carries the fileStats invocation', () => {
-  const src = readFileSync(join(here, '../lib/index.js'), 'utf8')
-  assert.ok(src.includes('${PACKAGE}/session/fileStats'), 'invocation id present')
-  assert.ok(src.includes("method: 'fileStats'"), 'method wired')
+  assert.equal(RPC_MANIFEST.sessionAdmin.methods.fileStats.id, 'dsh-plugin-admin/session/fileStats', 'invocation id present')
+  assert.deepEqual([...RPC_MANIFEST.sessionAdmin.methods.fileStats.params], ['sessionId'], 'method wired to its parameter')
 })
 
 /* ---- Markdown transcript rendering (pure) ---- */
@@ -421,10 +424,9 @@ await checkAsync('searchSessions maps the core SessionSearchHit contract', async
 })
 
 check('typert descriptor wires the two new session invocations', () => {
-  const src = readFileSync(join(here, '../lib/index.js'), 'utf8')
-  assert.ok(src.includes('${PACKAGE}/session/exportSession'), 'export invocation present')
-  assert.ok(src.includes("method: 'exportSession'"), 'export method wired')
-  assert.ok(src.includes('${PACKAGE}/session/gitDiff'), 'gitDiff invocation present')
+  assert.equal(RPC_MANIFEST.sessionAdmin.methods.exportSession.id, 'dsh-plugin-admin/session/exportSession', 'export invocation present')
+  assert.deepEqual([...RPC_MANIFEST.sessionAdmin.methods.exportSession.params], ['sessionId'], 'export method wired')
+  assert.equal(RPC_MANIFEST.sessionAdmin.methods.gitDiff.id, 'dsh-plugin-admin/session/gitDiff', 'gitDiff invocation present')
 })
 
 check('normalizeMcpToolResult concatenates text, flags errors, bounds size', () => {
@@ -507,10 +509,7 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   assert.equal(registrations[0].id, 'dsh-plugin-admin')
 })
 
-const exports_ = registrations[0].factory((spec) => {
-  if (spec === 'react') return React
-  throw new Error(`require("${spec}") missed the platform table`)
-})
+const exports_ = registrations[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
 
 /* apply() against a mock context, then resolve the todo dock registration. */
 const slotRegistrations = []
