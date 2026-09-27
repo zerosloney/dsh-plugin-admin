@@ -196,6 +196,47 @@ assert.deepEqual(
     assert.equal(invocation.invocation.kind, 'direct', `${target} invocation kind`)
   }
 
+  // 1b. Phase D2: every JSON parameter rides a STRICT codec (the gateway calls
+  //     create().parse(value) before the service sees the payload), the schema
+  //     table is COMPLETE (no wire left unvalidated) and FAITHFUL (no orphan row).
+  const { RPC_PARAM_SCHEMAS } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
+  const { RPC_SCHEMA_NAMES } = await import(new URL('../lib/rpc-schema.js', import.meta.url).href)
+  const usedSchemas = new Set()
+  let strictParams = 0
+  for (const [target, invocation] of mounted) {
+    for (const parameter of invocation.parameters) {
+      assert.equal(parameter.codec.mode, 'strict', `${target} parameter ${parameter.wire} rides a strict codec`)
+      assert.ok(typeof parameter.codec.typeSymbol === 'string' && parameter.codec.typeSymbol.length > 0,
+        `${target} parameter ${parameter.wire} names its wire type`)
+      assert.equal(parameter.acceptsUndefined, true,
+        `${target} parameter ${parameter.wire} keeps src-json omission semantics`)
+      const factory = parameter.codec.create()
+      assert.equal(typeof factory.parse, 'function', `${target} parameter ${parameter.wire} factory parses`)
+      assert.doesNotThrow(() => factory.parse(factory.sample()),
+        `${target} parameter ${parameter.wire} accepts its own sample`)
+      const schemaName = parameter.codec.typeSymbol.split(':').pop()
+      assert.ok(RPC_SCHEMA_NAMES.includes(schemaName), `${target} parameter ${parameter.wire} names a declared schema`)
+      usedSchemas.add(schemaName)
+      strictParams += 1
+    }
+  }
+  const rowErrors = []
+  for (const [key, row] of Object.entries(RPC_PARAM_SCHEMAS)) {
+    const [ns, method] = key.split('/')
+    const spec = RPC_MANIFEST[ns]?.methods?.[method]
+    if (spec === undefined) { rowErrors.push(`schema row ${key} has no manifest method`); continue }
+    assert.deepEqual(Object.keys(row), spec.params,
+      `${key} schema rows must cover exactly the declared wires, in order`)
+  }
+  for (const target of manifestTargets) {
+    const spec = RPC_MANIFEST[target.split('/')[0]].methods[target.split('/')[1]]
+    if (spec.params.length > 0 && RPC_PARAM_SCHEMAS[target] === undefined) {
+      rowErrors.push(`${target} has parameters but no schema row`)
+    }
+  }
+  assert.deepEqual(rowErrors, [], `D2 schema table drift:\n  ${rowErrors.join('\n  ')}`)
+  console.log(`host-check D2: ${strictParams} parameters validated by strict codecs (schemas: ${[...usedSchemas].sort().join(', ')})`)
+
   // 2. client side: scan every call('ns/method', ...) site.
   const clientDir = join(here, '..', 'src', 'client')
   // Every module of the browser half (Phase B2 moved the panels into their own
@@ -2074,6 +2115,27 @@ try {
   }
   if (savedNodeUseEnvProxy === undefined) delete process.env.NODE_USE_ENV_PROXY
   else process.env.NODE_USE_ENV_PROXY = savedNodeUseEnvProxy
+}
+
+/* ---------- Phase E3: the panel switch row is fail-loud ------------------ */
+// The browser half cannot read the profile config, so it asks the host for this
+// row at mount. A typo must stop the mount (an inert switch is worse than none).
+{
+  const { resolvePluginConfig } = await import(new URL('../lib/index.js', import.meta.url).href)
+  const { PANEL_IDS, PANEL_STATES } = await import(new URL('../lib/panel-ids.js', import.meta.url).href)
+  assert.equal(PANEL_IDS.length, 11, 'eleven switchable panels')
+  assert.deepEqual([...PANEL_STATES], ['auto', 'on', 'off'], 'three states, auto first')
+  assert.deepEqual(resolvePluginConfig({}).panels, {}, 'absent means every panel is auto')
+  assert.deepEqual(
+    resolvePluginConfig({ panels: { mcp: 'off', extensions: 'on' } }).panels,
+    { mcp: 'off', extensions: 'on' },
+    'explicit switches survive resolution',
+  )
+  assert.throws(() => resolvePluginConfig({ panels: { nope: 'off' } }), /not a panel id/, 'unknown panel id fails the mount')
+  assert.throws(() => resolvePluginConfig({ panels: { mcp: 'maybe' } }), /must be one of/, 'unknown state fails the mount')
+  assert.throws(() => resolvePluginConfig({ panels: ['mcp'] }), /must be a mapping/, 'a list is not a mapping')
+  const advertised = await fakeCtx.provided.pluginAdmin.panels()
+  assert.deepEqual(advertised, { panels: {} }, 'the mounted service reports the resolved switch map')
 }
 
 /* ---------- Phase F3: privileged actions reach the audit trail ------------ */

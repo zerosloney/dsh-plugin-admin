@@ -2016,13 +2016,21 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 }
 
 
-/* ---- Phase E: official-first auto-yield --------------------------------
- * The table in src/client/native-coverage.js decides which panels still have
- * a job. A covered panel must not register at all (not hidden, not disabled),
- * and `dsh-admin-panels` must be able to force one back on.
+/* ---- Phase E3: official-first auto-yield + the profile switch ----------
+ * The table in src/client/native-coverage.js decides which panels still have a
+ * job. On top of it, `config.panels` (asked of the host at mount, because the
+ * browser half cannot read the profile config) may force a panel on or off, and
+ * `dsh-admin-panels` in localStorage is the per-browser escape hatch. The last
+ * answer is cached, so a mount registers eagerly and a failed ask is still right.
  */
 {
-  const mountPanels = (officialPanelIds) => {
+  const POLICY_CACHE = 'dsh-admin-panels-policy'
+  const mountPanels = async (officialPanelIds, configPanels = {}, options = {}) => {
+    const { askFails = false, cache, force } = options
+    dom.window.localStorage.removeItem('dsh-admin-panels')
+    dom.window.localStorage.removeItem(POLICY_CACHE)
+    if (force) dom.window.localStorage.setItem('dsh-admin-panels', force)
+    if (cache) dom.window.localStorage.setItem(POLICY_CACHE, JSON.stringify(cache))
     const regs = []
     globalThis.window.__ModuleLoader__ = { load: (registration) => regs.push(registration) }
     new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
@@ -2031,31 +2039,62 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
     const registered = []
     ex.apply({
       logger: ctx.logger,
-      effect: (fn) => { fn() },
-      connection: ctx.connection,
+      effect: (fn) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+      // The panel switches ride one RPC: the browser half cannot read the config row.
+      connection: {
+        rpc: {
+          call: (_url, method) => (method === 'pluginAdmin/panels' && !askFails
+            ? Promise.resolve({ ok: true, value: { panels: configPanels } })
+            : Promise.reject(new Error('no host'))),
+        },
+      },
       get: () => undefined,
       slots: {
         // Only the panel list carries the official entries the probes look for.
         entries: (name) => (name === 'sidebar.panellist' ? officialPanelIds.map((id) => ({ options: { id } })) : []),
-        inject: (key, cb) => { injected.push({ key, cb }) },
-        register: (options, component) => { registered.push({ options, component }); return { options, component } },
+        inject: (key, cb) => { injected.push({ key, cb }); return () => {} },
+        register: (options, component) => {
+          registered.push({ options, component })
+          return () => { const at = registered.findIndex((entry) => entry.options.id === options.id); if (at !== -1) registered.splice(at, 1) }
+        },
       },
     })
-    injected.forEach((entry) => entry.cb())
+    // Registration is eager (empty cache → the coverage table), then the ask
+    // reconciles in a microtask — so the slot callbacks are drained twice, the
+    // way a real shell fires them whenever the slot's owner shows up.
+    const drain = () => { while (injected.length > 0) { const entry = injected.shift(); entry.cb() } }
+    drain()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    drain()
     return registered.map((entry) => entry.options.id).sort()
   }
 
-  const withNone = mountPanels([])
+  const withNone = await mountPanels([])
   assert.ok(withNone.includes('extensions'), 'no official panel list → the extensions tab registers')
-  const withOfficial = mountPanels(['plugins'])
+  const withOfficial = await mountPanels(['plugins'])
   assert.ok(!withOfficial.includes('extensions'), 'official 插件 page present → the extensions tab yields')
   assert.equal(withOfficial.length, withNone.length - 1, 'exactly one panel yields (the rest still register)')
   assert.ok(withOfficial.includes('mcp-servers') && withOfficial.includes('usage-dashboard'), 'uncovered panels keep registering')
 
-  dom.window.localStorage.setItem('dsh-admin-panels', 'extensions')
-  const forced = mountPanels(['plugins'])
+  const forced = await mountPanels(['plugins'], {}, { force: 'extensions' })
   assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
-  dom.window.localStorage.removeItem('dsh-admin-panels')
+
+  // Phase E3: the profile config is the profile's word.
+  const offByConfig = await mountPanels([], { mcp: 'off' })
+  assert.ok(!offByConfig.includes('mcp-servers'), 'config panels.mcp=off removes the MCP tab')
+  const offBeatsForce = await mountPanels([], { extensions: 'off' }, { force: 'extensions' })
+  assert.ok(!offBeatsForce.includes('extensions'), 'config off wins over the localStorage force')
+  const onBeatsCoverage = await mountPanels(['plugins'], { extensions: 'on' })
+  assert.ok(onBeatsCoverage.includes('extensions'), 'config panels.extensions=on registers despite official coverage')
+
+  // The cached answer is what an eager mount uses, so a failed ask still obeys
+  // the last policy (and never resurrects a panel the profile turned off).
+  const cachedOn = await mountPanels(['plugins'], {}, { askFails: true, cache: { extensions: 'on' } })
+  assert.ok(cachedOn.includes('extensions'), 'a cached on survives a failed ask')
+  const cachedOff = await mountPanels([], {}, { askFails: true, cache: { mcp: 'off' } })
+  assert.ok(!cachedOff.includes('mcp-servers'), 'a cached off survives a failed ask')
+  const noCacheNoHost = await mountPanels(['plugins'], {}, { askFails: true })
+  assert.ok(!noCacheNoHost.includes('extensions'), 'no cache + no host falls back to auto-yield')
 }
 
 console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
