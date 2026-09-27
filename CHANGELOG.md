@@ -8,11 +8,12 @@
 
 ### Fixed
 
-- **`verify-cron-admin` 的分钟边界等待预算过紧**（70s → 150s）：该断言在 `check()` 开始真正 `await` 之后才被强制执行，而 70s 只给"下一分钟边界（≤60s）+ 定时器延迟"留了 10s 余量 —— 负载高的 2 核 runner 上会偶发红（1.25.0 发布后 master 上出现过一次）。同一脚本的第二处等待一并放宽。
+- **`withFileLock` 把 Windows 上的非 `EEXIST` 竞争误判成致命错误**（1.25.0 里就存在的真实缺陷，被新的跨进程用例触发）：`open(lock, 'wx')` 在另一个进程正创建/删除锁文件时，Windows 会报 `EPERM` / `EACCES` / `EBUSY`，而不只是 `EEXIST`；原实现只放行 `EEXIST`，其余直接抛出 —— 表现是 `scripts/verify-cron-admin.mjs exited 1`、异常带 `path: '…cron-tasks.json.dsh-admin.lock'`（windows-latest / Node 22 一腿）。现在四种码都视为"有人持锁"而继续等待（`ENOSPC` / `EISDIR` / `EROFS` 等仍照抛），判定抽成 `isLockContention()` 并有单测覆盖两个方向；顺带把"open 成功但写 pid 失败"留下的半锁自行清理，不再让下一个调用者白等一个 stale 窗口。
+- **`verify-cron-admin` 的分钟边界等待预算过紧**（70s → 150s）：该断言在 `check()` 开始真正 `await` 异步体之后才被强制执行，而 70s 只给"下一分钟边界（≤60s）+ 定时器延迟"留 10s 余量，负载高的 2 核 runner 上偏紧。两处等待一并放宽（真正导致那次转红的是上面那条锁缺陷）。
 
 ### Changed
 
-- **CI 失败现在会自报是哪个脚本、哪条断言**：发布任务的日志需要 admin 权限才能读（REST 日志接口无权限返回 403），而 `::error::` 行会被 GitHub 变成**注解**、公开仓库可匿名读取。`ci.yml` / `release.yml` 的门禁步骤加上 `NODE_OPTIONS=--import=./scripts/lib/ci-failure-annotation.mjs`：该预载保留 stderr 尾部，进程非零退出时把"脚本路径 + 最后几行"重新发成注解。这样"exit code 1"会直接变成 `::error::scripts/verify-cron-admin.mjs exited 1` + 失败断言原文（30 多个脚本零改动；本地只是多几行文本）。
+- **CI 失败现在会自报是哪个脚本、哪条断言**：发布任务的日志需要 admin 权限才能读（REST 日志接口无权限返回 403），而 `::error::` 行会被 GitHub 变成**注解**、公开仓库可匿名读取。`ci.yml` / `release.yml` 的门禁步骤加上 `NODE_OPTIONS=--import=./scripts/lib/ci-failure-annotation.mjs`：预载保留 stderr 尾部，进程非零退出时把"脚本路径 + 最后几行"重新发成注解。30 多个脚本零改动（19 个各有自己的失败输出形状），本地只是多几行文本 —— **上面那条锁缺陷正是靠它第一次跑就定位到脚本与锁文件路径的**。
 
 ## [1.25.0] - 2026-09-27
 

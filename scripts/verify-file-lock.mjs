@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atomicRename, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+import { atomicRename, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -129,6 +129,28 @@ await check('each write uses its own temp path and leaves none behind', async ()
     'no temp file survives a completed write',
   )
   assert.equal(readFileSync(target, 'utf8'), '# three\n', 'the last write won')
+})
+
+await check('lock contention is read from every code Windows actually reports', () => {
+  // EEXIST is the documented one, but Windows reports EPERM/EACCES/EBUSY while
+  // another process creates or deletes the lock file. Tolerating only EEXIST let
+  // those escape as an uncaught exception from withFileLock — the windows-latest /
+  // Node 22 leg went red with `path: '…cron-tasks.json.dsh-admin.lock'`.
+  for (const code of ['EEXIST', 'EPERM', 'EACCES', 'EBUSY']) {
+    assert.equal(isLockContention(Object.assign(new Error(code), { code })), true, code + ' means contention')
+  }
+  for (const code of ['ENOSPC', 'EISDIR', 'EROFS', 'ENOENT']) {
+    assert.equal(isLockContention(Object.assign(new Error(code), { code })), false, code + ' stays a real failure')
+  }
+  assert.equal(isLockContention(new Error('no code')), false, 'an unidentified error is not contention')
+  assert.equal(isLockContention(null), false)
+  assert.equal(isLockContention(undefined), false)
+  // A real ENOSPC must still reach the caller instead of being waited out.
+  assert.throws(
+    () => withFileLock(join(dir, 'never.txt'), () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) }),
+    /disk full/,
+    'the critical section\'s own error propagates',
+  )
 })
 
 await check('the retrying rename moves the file and still fails loud on a real error', async () => {
