@@ -58,16 +58,24 @@ const cli = (args, cliEnv) => spawnSync(`dsh ${args.map((a) => (a.includes(' ') 
 })
 
 /* ------------------------------- preflight -------------------------------- */
+// Both tools are hard prerequisites: `dsh` is the Host under test, and `dsh plugin
+// … add` shells out to pnpm for the profile install (a profile with plugin
+// dependencies cannot be materialised without it). Checking here turns "one
+// missing tool" into one clear message instead of four cascading check failures.
+const missingTools = []
 const probe = cli(['--version'], process.env)
-const dshMissing = probe.status !== 0 || !String(probe.stdout ?? '').includes('.')
-if (dshMissing && process.env.SMOKE_REQUIRE_DSH === '1') {
-  // CI installs a pinned dsh before running this, so a missing CLI there is a
-  // broken pipeline, not an opt-out: a skipped gate must not print green.
-  console.error('smoke-real-host: `dsh` is not on PATH but SMOKE_REQUIRE_DSH=1 — install a supported version')
-  process.exit(1)
-}
-if (dshMissing) {
-  console.log('smoke-real-host: SKIP — no `dsh` on PATH (install a supported version to run this check)')
+if (probe.status !== 0 || !String(probe.stdout ?? '').includes('.')) missingTools.push('dsh (install a supported version)')
+const pnpmProbe = spawnSync('pnpm --version', { shell: true, encoding: 'utf8', timeout: 60_000 })
+if (pnpmProbe.status !== 0) missingTools.push('pnpm (dsh installs profile dependencies with it)')
+if (missingTools.length > 0) {
+  const why = `missing: ${missingTools.join(', ')}`
+  if (process.env.SMOKE_REQUIRE_DSH === '1') {
+    // CI installs all of these before running this, so a gap there is a broken
+    // pipeline, not an opt-out: a skipped gate must not print green.
+    console.error(`smoke-real-host: ${why} but SMOKE_REQUIRE_DSH=1 — install them first`)
+    process.exit(1)
+  }
+  console.log(`smoke-real-host: SKIP — ${why}`)
   process.exit(0)
 }
 const dshVersion = String(probe.stdout).trim().split(/\r?\n/).pop()

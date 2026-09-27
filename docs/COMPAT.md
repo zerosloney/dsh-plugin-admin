@@ -94,7 +94,8 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 前面三节都是"不启动宿主"的验证：`host-check` 用替身 ctx 挂载、`self-check` 用 jsdom 跑面板、`integration-check` 只**读** dsh 源码。它们能证明契约还在，但证明不了"loader 组出了我们的行、服务却根本没挂上"、"客户端 bundle 没进模块表"、"网关不认我们的描述符"这类事。`scripts/smoke-real-host.mjs` 补的就是这一层：
 
 ```
-npm run smoke:real-host          # 需要 PATH 上有 dsh；没有则 SKIP（CI 里用 SMOKE_REQUIRE_DSH=1 变成失败）
+npm run smoke:real-host          # 需要 PATH 上有 dsh 与 pnpm（dsh 用它安装 profile 依赖）；缺任一则 SKIP
+                                 # CI 里用 SMOKE_REQUIRE_DSH=1 让"缺工具"变成失败而不是静默跳过
 ```
 
 它**只用一次性目录**（`mkdtempSync` 做 `DSH_HOME`，从 dsh 自带的 web 模板生成 profile，用 `dsh plugin … add link:<repo>` 装本插件），跑完在 `finally` 里杀掉进程树并删目录 —— **绝不碰你真实的 `$DSH_HOME`**。断言四件事：

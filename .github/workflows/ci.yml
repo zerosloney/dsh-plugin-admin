@@ -78,6 +78,11 @@ jobs:
       - name: Install the pinned dsh CLI
         run: npm install --global @deepseek-ai/dsh@0.1.7-rc.2
 
+      # `dsh plugin … add` materialises the profile with pnpm, which the runner
+      # does not ship: without it the install step dies with exit 127.
+      - name: Install pnpm (dsh's profile installer)
+        run: npm install --global pnpm@11
+
       - name: Install dependencies
         run: npm ci
 
