@@ -85,6 +85,9 @@ jobs:
         env:
           # A missing CLI here is a broken pipeline, not an opt-out.
           SMOKE_REQUIRE_DSH: '1'
+          # Crash output (not just the script's own FAIL lines) becomes a readable
+          # annotation instead of an admin-only job log.
+          NODE_OPTIONS: --import=./scripts/lib/ci-failure-annotation.mjs
         run: npm run smoke:real-host
 
   # The multi-version matrix runs the same probe over several checkouts, so

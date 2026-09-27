@@ -41,7 +41,16 @@ const RPC_ENVELOPE = (rpcId, method) => JSON.stringify({ type: 'client-request',
 let checks = 0
 let failures = 0
 const ok = (label, detail = '') => { checks += 1; console.log(`  ok    ${label}${detail ? ' — ' + detail : ''}`) }
-const fail = (label, detail) => { checks += 1; failures += 1; console.error(`  FAIL  ${label} — ${detail}`) }
+// `::error::` makes GitHub turn the failure into an ANNOTATION, which is readable
+// from the API without admin rights — the job log is not (see
+// scripts/lib/ci-failure-annotation.mjs for the same trick on the gate).
+const fail = (label, detail) => {
+  checks += 1
+  failures += 1
+  const oneLine = String(detail).replace(/\s+/g, ' ').slice(0, 300)
+  console.error(`::error::smoke-real-host: ${label} — ${oneLine}`)
+  console.error(`  FAIL  ${label} — ${detail}`)
+}
 const step = (title) => console.log(`\n${title}`)
 
 const cli = (args, cliEnv) => spawnSync(`dsh ${args.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`, {
@@ -66,14 +75,19 @@ console.log(`dsh ${dshVersion} | plugin ${join(PLUGIN_DIR, 'package.json')}`)
 const pluginVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-home-'))
-const env = { ...process.env, DSH_HOME: home, npm_config_registry: process.env.npm_config_registry ?? 'https://registry.npmmirror.com' }
+// Inherit the environment as-is: the profile install must use whatever registry
+// the machine/CI is configured for (injecting one here only made CI behave
+// differently from every local run).
+const env = { ...process.env, DSH_HOME: home }
 let booted = null
 
 const teardown = () => {
   if (booted !== null && booted.pid !== undefined) {
     try {
       if (process.platform === 'win32') spawnSync(`taskkill /PID ${booted.pid} /T /F`, { shell: true, stdio: 'ignore' })
-      else try { process.kill(-booted.pid, 'SIGKILL') } catch { booted.kill('SIGKILL') }
+      // POSIX: the child was spawned detached, so its pid leads its own process
+      // group — killing the group reaps the shell AND the dsh it launched.
+      else try { process.kill(-booted.pid, 'SIGKILL') } catch { try { booted.kill('SIGKILL') } catch { /* gone */ } }
     } catch { /* already gone */ }
     booted = null
   }
@@ -102,7 +116,13 @@ try {
 
   /* ------------------------------- 2. mount ------------------------------- */
   step('2. boot the Host (port 0, no browser)')
-  booted = spawn(`dsh ${PROFILE} --port 0 --no-open`, { shell: true, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  booted = spawn(`dsh ${PROFILE} --port 0 --no-open`, {
+    shell: true,
+    env,
+    // POSIX: own process group so teardown can reap the shell and the Host.
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
   let stdout = ''
   booted.stdout.on('data', (chunk) => { stdout += chunk })
   booted.stderr.on('data', (chunk) => { stdout += chunk })
