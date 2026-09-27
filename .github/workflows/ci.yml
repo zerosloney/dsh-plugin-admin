@@ -51,6 +51,10 @@ jobs:
       - name: Run the gate (tsc / lint / artifact check / 34 scripts / 93 seam contracts)
         env:
           DSH_CHECKOUT: ${{ github.workspace }}/.dsh-checkout
+          # Makes a failing verify script annotate itself (name + assertion tail).
+          # Annotations are public on a public repo; the job log is not — see
+          # scripts/lib/ci-failure-annotation.mjs.
+          NODE_OPTIONS: --import=./scripts/lib/ci-failure-annotation.mjs
         run: npm test
 
   # The multi-version matrix runs the same probe over several checkouts, so

@@ -378,8 +378,11 @@ try {
       promptTemplate: 'tick $RULE',
     })
     // The timer is unref'd and armed to the next minute boundary; wait up to
-    // 70s for one fire. (CI variance makes the exact minute unpredictable.)
-    const deadline = Date.now() + 70_000
+    // 150s for one fire. (CI variance makes the exact minute unpredictable, and a
+    // stalled 2-core runner can eat the 10s of slack a 70s budget left: this check
+    // became ENFORCED when check() started awaiting async bodies, and that is how
+    // the ubuntu/Node 22 leg went red on an otherwise-green commit.)
+    const deadline = Date.now() + 150_000
     while (fired.length === 0 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 500))
     }
@@ -401,7 +404,8 @@ try {
     await ctx.provided.cronAdmin.runNow('no-orphan')
     const countOf = () => fired.filter(m => String(m.content?.[0]?.text || m).includes('no-orphan')).length
     assert.equal(countOf(), 1, 'runNow fired exactly once')
-    const deadline = Date.now() + 70_000
+    // Same budget reasoning as the every-minute check above.
+    const deadline = Date.now() + 150_000
     while (countOf() < 2 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 500))
     }

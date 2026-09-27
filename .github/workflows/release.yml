@@ -47,6 +47,9 @@ jobs:
       - name: Run self-check + host-check
         env:
           DSH_CHECKOUT: ${{ github.workspace }}/.dsh-checkout
+          # Same self-annotating gate as ci.yml (see scripts/lib/ci-failure-annotation.mjs):
+          # a publish that dies must say which check died.
+          NODE_OPTIONS: --import=./scripts/lib/ci-failure-annotation.mjs
         run: npm test
 
       - name: Verify tag matches package version

@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`verify-cron-admin` 的分钟边界等待预算过紧**（70s → 150s）：该断言在 `check()` 开始真正 `await` 之后才被强制执行，而 70s 只给"下一分钟边界（≤60s）+ 定时器延迟"留了 10s 余量 —— 负载高的 2 核 runner 上会偶发红（1.25.0 发布后 master 上出现过一次）。同一脚本的第二处等待一并放宽。
+
+### Changed
+
+- **CI 失败现在会自报是哪个脚本、哪条断言**：发布任务的日志需要 admin 权限才能读（REST 日志接口无权限返回 403），而 `::error::` 行会被 GitHub 变成**注解**、公开仓库可匿名读取。`ci.yml` / `release.yml` 的门禁步骤加上 `NODE_OPTIONS=--import=./scripts/lib/ci-failure-annotation.mjs`：该预载保留 stderr 尾部，进程非零退出时把"脚本路径 + 最后几行"重新发成注解。这样"exit code 1"会直接变成 `::error::scripts/verify-cron-admin.mjs exited 1` + 失败断言原文（30 多个脚本零改动；本地只是多几行文本）。
+
 ## [1.25.0] - 2026-09-27
 
 ### Added（收尾批次：审计、并发写与质量门）
