@@ -119,9 +119,12 @@ try {
     const logPath = /diagnostics: (\S+)/.exec(detail)?.[1]
     let logTail = ''
     if (logPath !== undefined && existsSync(logPath)) {
-      logTail = readFileSync(logPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-6).join(' | ')
+      // The LAST lines are the pnpm error itself (the trailing "Command failed…"
+      // line is just the wrapper), so take a generous tail and report it FIRST —
+      // a truncated detail must not cut the one line that explains the failure.
+      logTail = readFileSync(logPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-12).join(' | ')
     }
-    fail('plugin install', `${detail.slice(-200)}${logTail === '' ? '' : ' :: pnpm log: ' + logTail}`)
+    fail('plugin install', `${logTail === '' ? detail.slice(-200) : 'pnpm log: ' + logTail.slice(-450)}`)
   } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
 
   const dumped = cli([PROFILE, '--dump-config'], env)
