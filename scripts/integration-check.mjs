@@ -479,6 +479,26 @@ const PROBES = [
       ['prefix routes are stored by path', t => t.includes('private readonly prefixes = new Map<string, WebRoute>()')],
     ],
   },
+  {
+    id: 'gateway strict codec contract (host)',
+    // Phase D2 rides this: the gateway validates every JSON parameter with
+    // codec.create().parse(value). If the mode name or the call shape moves,
+    // our hand-written schemas stop being consulted — silently.
+    file: 'packages/api/gateway/src/index.ts',
+    checks: [
+      ['strict codecs are parsed at the boundary', t => t.includes('if (codec.mode === \'strict\') {') && t.includes('codec.create().parse(value)')],
+      ['a failed parse is reported as input-invalid', t => t.includes("'gateway/input-invalid'")],
+      ['arguments are checked against the declared wires', t => t.includes('args fields do not match the descriptor')],
+    ],
+  },
+  {
+    id: 'typert registry codec validation (host)',
+    file: 'packages/typert/registry/src/service.ts',
+    checks: [
+      ['src-json passes through untouched', t => t.includes("if (codec.mode === 'src-json') return")],
+      ['strict codecs must name a type symbol and supply create()', t => t.includes('strict codec has no create() factory')],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */
