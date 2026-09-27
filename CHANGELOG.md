@@ -6,8 +6,20 @@
 
 ## [Unreleased]
 
+## [1.25.3] - 2026-09-27
+
+补丁版：把"真实宿主冒烟"从 1 条 RPC 扩到全命名空间，**它第一次跑就抓到一个生产 bug**，另一个静态闸门又抓出 4 处同类潜伏点。
+
+### Fixed
+
+- **`projectAdmin/list` 在真实宿主上必然失败**（1.25.0 起）：`lib/project-hooks.js` 直接读了 `ctx.workspaceRegistry`，而 `workspaceRegistry` **不在**插件的 `inject` 声明里（它是有意不硬依赖的可选服务）。Cordis 的 scope guard 会抛 `cannot get property "workspaceRegistry" without inject`，面板拿到的是 `gateway/internal`。改用 `ctx.get('workspaceRegistry')`（与其它模块一致，缺失时走既有的 fail-closed 分支）。**所有替身 ctx 的检查都看不见它** —— 假 ctx 没有 scope guard，`host-check` / `self-check` / 30 个 `verify-*` 全绿；是新的真实宿主冒烟在第一次调用该端点时抓到的（错误信息前后对比即为证据）。
+- **同类的 4 处潜伏点**：`lib/subagent-admin.js` 的 `ctx.get('subprocess') ?? ctx.subprocess` 与三处 `ctx.get?.('agents') ?? ctx.agents` —— 这些回退本意是"服务缺失时降级"，但在 Cordis 下**恰好**在服务缺失/不在 scope 时抛 guard 错误（即回退分支自己想覆盖的那种情况）。现在只保留 `ctx.get(...)`；`typeof ctx.get === 'function'` 的能力守卫保留，因为测试桩可能根本没有 `get`。
+- **测试夹具保真**：`verify-project-hooks.mjs` 的桩 ctx 原先把 `workspaceRegistry` 当**属性**暴露 —— 正是生产禁止的那条路径，所以它一直替真实宿主"背了锅"。现在通过 `get('workspaceRegistry')` 提供。
+
 ### Added
 
+- **接缝扫描闸门 `verify-service-injects.mjs`**（已进 `npm test`）：静态扫描 `lib/*.js`（排除生成的 client bundle），断言每一处直接的 `ctx.<service>` 读取都在 `inject` 声明里。这类错误**任何替身检查都看不见**，只能靠真实宿主或静态规则；冒烟只覆盖它调用的路径，静态规则覆盖写入路径与冷分支。已双向伪证（把 `ctx.workspaceRegistry` 或 `ctx.agents` 放回去 → 立刻失败并点名文件与行号）。
+- **真实宿主冒烟扩到全命名空间**：21 次**只读**调用覆盖 **13/14** 个命名空间（`fsAdmin` 是唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并新增一条"没有任何端点撞上 Cordis inject guard"的显式断言。冒烟自身从 11 项增到 **14 项**，dsh `0.1.7-rc.2` 上约 6 秒跑完。
 - **真实宿主冒烟（L3）：`npm run smoke:real-host`**（`scripts/smoke-real-host.mjs`，零依赖）。此前所有检查都在替身 ctx / jsdom / 只读源码这一层：能证明契约还在，但证明不了"loader 组出了我们的行、服务却没挂上"、"客户端 bundle 没进模块表"、"网关不认我们的描述符"。这个脚本用**一次性 `DSH_HOME`**（dsh 自带 web 模板生成 profile + `dsh plugin … add link:<repo>` 装本插件）把真实宿主机跑起来，断言四件事：
   1. `--dump-config` 里出现 `- id: plugin-admin / name: dsh-plugin-admin`（宿主读到了我们包里的 `dsh.bundle.patch`）；
   2. Host 打印带 token 的 URL（插件存在时能正常 boot）；

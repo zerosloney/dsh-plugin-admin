@@ -115,14 +115,19 @@ function makeStubCtx(shell, approval) {
       return () => {}
     },
     effect: (fn) => { effects.push(fn); return fn() },
+    // projectAdmin/list fences cwd against the registry's known workspaces; the
+    // temp tree plays that role for the tests below. It is served through `get()`
+    // because that is the ONLY path production may use: a direct
+    // `ctx.workspaceRegistry` read is refused by Cordis's scope guard (the service
+    // is deliberately not in the plugin's inject list) — the real-host smoke
+    // caught exactly that, and verify-service-injects now pins it.
     get: (name) => (name === 'sessionPersistence'
       ? { locate: (header) => ({ kind: 'jsonl', path: `/logs/${header?.id ?? 'x'}.jsonl` }) }
       : name === 'approval'
         ? approvalSvc
-        : undefined),
-    // projectAdmin/list fences cwd against the registry's known workspaces;
-    // the temp tree plays that role for the tests below.
-    workspaceRegistry: { list: () => [{ path: tempRoot }] },
+        : name === 'workspaceRegistry'
+          ? { list: () => [{ path: tempRoot }] }
+          : undefined),
     shell,
   }
 }

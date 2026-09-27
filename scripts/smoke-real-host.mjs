@@ -221,6 +221,87 @@ try {
   } else {
     fail('pluginAdmin/list answered from the mounted service', raw.slice(0, 300))
   }
+
+  /* --------------------- 5. one read call per namespace -------------------- */
+  step('5. every admin namespace answers through the gateway (read-only)')
+  const profileDir = join(home, 'profiles', PROFILE)
+  // One read-only endpoint per namespace: mounting a service is not the same as
+  // its descriptors reaching the gateway, and this is the layer that would break
+  // silently (a namespace whose row fails to mount simply 404s here).
+  // `fsAdmin` is the single omission — its only method (`reveal`) opens a file
+  // manager on the HOST, which a smoke run must not do; host-check still asserts
+  // that namespace's mount surface.
+  // `expect: 'refusal'` marks a call whose read needs host state a throwaway
+  // profile does not have (no workspace is registered, so projectAdmin's
+  // fail-closed cwd check refuses). The point of those entries is that OUR code
+  // answers — a `gateway/*` error is a failure for every entry, which is exactly
+  // how this sweep caught `gateway/internal: cannot get property
+  // "workspaceRegistry" without inject`.
+  const SKIPPED_NAMESPACES = ['fsAdmin']
+  const SWEEP = [
+    ['pluginAdmin', 'list', {}],
+    ['pluginAdmin', 'panels', {}],
+    ['pluginAdmin', 'auditLog', {}],
+    ['sessionAdmin', 'list', {}],
+    ['sessionAdmin', 'usageReport', {}],
+    ['mcpAdmin', 'list', {}],
+    ['subagentAdmin', 'list', {}],
+    ['subagentAdmin', 'runtimeList', {}],
+    ['subagentAdmin', 'cliList', {}],
+    ['commandHookAdmin', 'listCommands', {}],
+    ['commandHookAdmin', 'listHooks', {}],
+    ['projectAdmin', 'list', { cwd: profileDir }, { expect: 'refusal', refusalText: '工作区' }],
+    ['webhookAdmin', 'list', {}],
+    ['cronAdmin', 'list', {}],
+    ['overlayAdmin', 'status', {}],
+    ['workspaceAdmin', 'list', {}],
+    ['skillsAdmin', 'list', { sessionIds: [] }],
+    ['webSearchAdmin', 'list', {}],
+    ['webSearchAdmin', 'active', {}],
+    ['workflowAdmin', 'listRuns', {}],
+    ['workflowAdmin', 'listSaved', {}],
+  ]
+  const reached = new Set()
+  let answered = 0
+  let injectGuards = 0
+  for (const [namespace, method, args, options = {}] of SWEEP) {
+    const response = await fetch(`${base}/api/${namespace}/${method}`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: `${namespace}-${method}`, method: `${namespace}/${method}`, payload: { args } }),
+    })
+    const text = await response.text()
+    let body = null
+    try { body = JSON.parse(text) } catch { /* reported below */ }
+    const message = String(body?.result?.error?.message ?? '')
+    // A Cordis scope guard ("cannot get property … without inject") means the
+    // plugin read a service it never declared in its `inject` list. Real dsh
+    // refuses that; a fake ctx does not — so it is a failure for EVERY entry,
+    // which is how this sweep first caught it on projectAdmin/list.
+    const injectGuard = /without inject/.test(text)
+    if (injectGuard) injectGuards += 1
+    const passed = !injectGuard && (
+      body?.result?.ok === true
+      // A documented refusal still proves the namespace dispatched to OUR code:
+      // the gateway wraps a thrown method as `gateway/internal`, so the message
+      // (not the code) is what identifies whose error it is.
+      || (options.expect === 'refusal' && message.includes(options.refusalText))
+    )
+    if (passed) { answered += 1; reached.add(namespace) }
+    else fail(`${namespace}/${method}`, `${injectGuard ? 'Cordis inject guard: ' : ''}${text.slice(0, 220)}`)
+  }
+  if (injectGuards === 0) ok('no endpoint hit a Cordis inject guard', `${SWEEP.length} calls`)
+  else fail('no endpoint hit a Cordis inject guard', `${injectGuards} call(s) read an undeclared service`)
+  // 14 is the manifest's namespace count (host-check asserts the manifest itself);
+  // this checks that the SWEEP did not quietly lose a namespace.
+  const sweepNamespaces = new Set(SWEEP.map(([ns]) => ns))
+  if (sweepNamespaces.size + SKIPPED_NAMESPACES.length === 14) {
+    ok('the sweep covers every admin namespace', `${sweepNamespaces.size} called + ${SKIPPED_NAMESPACES.length} skipped (${SKIPPED_NAMESPACES.join(', ')})`)
+  } else {
+    fail('the sweep covers every admin namespace', `${sweepNamespaces.size} called + ${SKIPPED_NAMESPACES.length} skipped, expected 14`)
+  }
+  if (answered === SWEEP.length) ok('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} calls over ${reached.size} namespaces`)
+  else fail('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} answered; reached ${[...reached].sort().join(', ')}`)
 } catch (error) {
   if (failures === 0) fail('smoke run', error instanceof Error ? error.message : String(error))
 } finally {
