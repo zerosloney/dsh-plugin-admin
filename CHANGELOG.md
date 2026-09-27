@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`workflowAdmin` 纳入审计**（Phase F3 收口）：`startRun` / `stopRun` / `amendRun` / `resumeRun` / `answerRun` / `saveSaved` / `deleteSaved` / `runSaved` 进 trail —— 工作流能执行 `shell` 步骤，"谁启动的、什么时候"值得留痕。`listRuns` / `getRun` / `listSaved` / `getSaved` 是读路径，不进。
+  这些动词**没有 `ok` 字段**（失败形态分别是 `{ id: null, error }`、非空 `diagnostics`、`{ answered: false }`、`{ stopped: false }`），通用"非 `ok:false` 即成功"的读法会把失败的启动记成成功，因此 `auditService` 新增可选的 `okOf`，由 `workflowAuditOk` 提供这个命名空间的读法。agent 侧入口（`workflow_admin` 工具、`/workflow` 命令）直接走 registry/library、不经过 RPC 服务面，仍由 run journal 记录。
+- **`cron-tasks.json` 与 `webhook-triggers.json` 的读-改-写进锁**（F1/F2 扩展）：两个 dsh 实例同写一个 profile 时不再"各读、各改、各写"（后写者覆盖前者的任务/规则）。`mutateTasksStore` / `mutateRulesStore` 把「守卫读 + 校验 + 原子写」放进同一个跨进程锁，校验看到的 id 集/规则集就是写入替换的那一份。`docs/COMPAT.md` 新增「已知边界（并发写）」把仍有 ⚠️ 的存储逐条列清。
+
+### Fixed
+
+- **`withFileLock` 的抢占路径不再空转**：抢到（unlink）过期锁后原本**立即**重试，两个进程可以互相抢对方的锁文件打满 CPU；现在退避 5ms + 随机抖动，并把「预算耗尽」的判断挪到抢占**之前**，失败开放照旧生效。另外**半写锁**（`open(…, 'wx')` 与写入 pid 之间的窗口）不再被当作过期锁抢占：250ms 内无主的锁一律等待，避免两个写者同时进入临界区。
+- **`verify-cron-admin.mjs` 的异步断言此前在「最后一个注册」时会被静默吞掉**：`check()` 用 `chain.then(body, fail)`，rejected promise 只由**下一个**链节处理，末位失败被 `settle()` 的拒绝处理吞掉 —— 去掉存储锁的伪证因此"通过"了。现在 `check()` 自己 `await` 并计数，异步断言失败必定进 `failures`。
+- `lib/webhook-triggers.js` 删除已无调用者的 `persist()`（`saveRule` / `deleteRule` 改走锁内的 `mutateRulesStore`）。
+
 ## [1.25.0] - 2026-09-27
 
 ### Changed (breaking)

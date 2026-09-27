@@ -27,6 +27,7 @@
  * Run: node scripts/verify-cron-admin.mjs
  */
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -55,12 +56,17 @@ function check(label, body) {
     failures += 1
     console.error(`✗ ${label}: ${error instanceof Error ? error.message : String(error)}`)
   }
-  chain = chain.then(() => {
+  // The body is AWAITED here on purpose: a rejected async body used to leave
+  // `chain` rejected and its error was only picked up by the NEXT link's `fail`.
+  // A check registered last therefore failed silently — `settle()` swallowed the
+  // rejection and the run still reported success (found by falsifying the
+  // cross-process check below: removing the store lock kept every assertion
+  // failing yet the script exited 0).
+  chain = chain.then(async () => {
     try {
-      return body()
+      await body()
     } catch (error) {
       fail(error)
-      return undefined
     }
   }, fail)
 }
@@ -493,9 +499,90 @@ try {
 }
 
 /* ========================================================================== */
+/* 跨进程并发写（Phase F1/F2 扩展）：两个 dsh 实例各自 upsert，谁的编辑都不能丢      */
+/* ========================================================================== */
+
+check('two processes upserting one tasks store lose no task', async () => {
+  // The guard read used to sit OUTSIDE any cross-process lock, so two instances
+  // could both read revision N, both merge their own task and the second write
+  // silently dropped the first. mutateTasksStore now holds the lock across
+  // read → merge → write; this is the acceptance case for that fix.
+  const dir = mkdtempSync(join(tmpdir(), 'cron-race-'))
+  const storePath = join(dir, 'cron-tasks.json')
+  const barrier = join(dir, 'go')
+  const worker = join(dir, 'worker.mjs')
+  // A round per write is cheap here (one small JSON file), so the loop is long
+  // enough for the two writers to overlap repeatedly: a no-lock read-merge-write
+  // would be caught rather than passing on startup skew alone.
+  const ROUNDS = 150
+  writeFileSync(worker, [
+    `import { applyCronAdmin } from ${JSON.stringify(new URL('../lib/cron-admin.js', import.meta.url).href)}`,
+    `import { existsSync } from 'node:fs'`,
+    'const [storePath, barrier, tag, rounds] = process.argv.slice(2)',
+    'const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))',
+    'const ctx = {',
+    "  baseUrl: 'http://127.0.0.1:1',",
+    '  logger: { info() {}, warn() {}, error() {} },',
+    '  get: () => undefined,',
+    '  effect: (fn) => { const d = fn(); return typeof d === \'function\' ? d : () => {} },',
+    '  provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },',
+    '}',
+    'applyCronAdmin(ctx, { enqueue: (op) => Promise.resolve().then(op), settings: { cronTasksPath: storePath } })',
+    // Barrier: both children start writing at the same instant, so the no-lock
+    // version really interleaves (startup skew alone would serialize them and a
+    // missing lock would go unnoticed).
+    'const until = Date.now() + 15000',
+    'while (!existsSync(barrier) && Date.now() < until) await sleep(2)',
+    'for (let i = 0; i < Number(rounds); i += 1) {',
+    '  await ctx.provided.cronAdmin.upsert({',
+    "    id: tag + '-' + i, cron: '* * * * *', enabled: false,",
+    "    action: { mode: 'steer', sessionId: 's' },",
+    '  })',
+    '}',
+    // The mount's fs.watch would keep the child alive; the work is done.
+    'process.exit(0)',
+    '',
+  ].join('\n'), 'utf8')
+  const run = (tag) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [worker, storePath, barrier, tag, String(ROUNDS)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    child.stdout.resume()
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(tag + ' worker exited ' + code + ': ' + stderr))))
+  })
+  try {
+    const children = [run('a'), run('b')]
+    // Let both mounts reach the barrier before releasing them.
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    writeFileSync(barrier, 'go', 'utf8')
+    await Promise.all(children)
+    const stored = JSON.parse(readFileSync(storePath, 'utf8'))
+    const ids = stored.tasks.map(t => t.id)
+    for (let i = 0; i < ROUNDS; i += 1) {
+      assert.ok(ids.includes('a-' + i), 'process a\'s task ' + i + ' survived')
+      assert.ok(ids.includes('b-' + i), 'process b\'s task ' + i + ' survived')
+    }
+    assert.equal(ids.length, ROUNDS * 2, 'every upsert landed exactly once')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+// The chain must be drained AFTER this check too, or its pending child processes
+// keep the process alive past the summary (the previous `settle()` calls all sit
+// earlier in the file).
+await settle()
+
+/* ========================================================================== */
 
 console.log(`cron-admin: ${checks - failures}/${checks} checks passed`)
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)
   process.exit(1)
 }
+// Exit hard like the sibling verify scripts (verify-webhook-triggers /
+// verify-store-version / verify-overlays): the mounts above leave fs.watch
+// listeners and armed timers behind, and the cross-process check's spawned
+// children leave pipe handles — a green run must not depend on the event loop
+// draining on its own.
+process.exit(0)

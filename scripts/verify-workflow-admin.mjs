@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkflowLibrary, createWorkflowAdmin } from '../lib/workflow-library.js'
-import { applyWorkflowAdmin } from '../lib/workflow-admin.js'
+import { applyWorkflowAdmin, workflowAuditOk } from '../lib/workflow-admin.js'
 
 let failures = 0
 async function check(name, fn) {
@@ -301,6 +301,53 @@ await check('saveSaved via RPC validates and persists', async () => {
 
   const listed = holder.workflowAdmin.listSaved({})
   assert.ok(listed.some((r) => r.name === 'via-rpc'))
+})
+
+// ─── 审计（Phase F3 覆盖 workflowAdmin）────────────────────────────────────────
+
+await check('workflowAuditOk reads each verb result by its own fields', () => {
+  // 成功形态
+  assert.equal(workflowAuditOk({ id: 'run-1', status: 'running', diagnostics: [] }), true)
+  assert.equal(workflowAuditOk({ ok: true, record: { name: 'x' } }), true)
+  assert.equal(workflowAuditOk({ stopped: true, reason: 'stopped' }), true)
+  assert.equal(workflowAuditOk({ answered: true }), true)
+  assert.equal(workflowAuditOk(undefined), true)
+  // 失败形态：全都没有 `ok` 字段，通用规则会把它们记成"成功"
+  assert.equal(workflowAuditOk({ id: null, error: 'parent session not found or not running' }), false, '启动失败（无在线父会话）')
+  assert.equal(workflowAuditOk({ id: null, status: 'errored', diagnostics: [{ message: 'TS 语法错误' }] }), false, '脚本编译失败')
+  assert.equal(workflowAuditOk({ stopped: false, reason: 'not running' }), false, 'stop 无事可做')
+  assert.equal(workflowAuditOk({ answered: false, error: 'no pending question' }), false, '回答迟了')
+  assert.equal(workflowAuditOk({ ok: false, error: 'invalid workflow name' }), false, 'saved 库拒绝')
+})
+
+await check('an audited workflow service lands failures as ok:false and skips reads', async () => {
+  const home = join(tmpBase, 'audit-ok')
+  const ctx = {
+    baseUrl: home,
+    get: (key) => (key === 'subagents' ? {} : undefined),
+    effect: (fn) => fn(),
+    provide: () => {},
+    logger: { warn() {} },
+  }
+  const holder = {}
+  ctx.provide = (key, s) => { holder[key] = s }
+  const entries = []
+  applyWorkflowAdmin(ctx, { enqueue, dshHome: home, audit: { record: async (entry) => { entries.push(entry) } } })
+
+  // 没有在线父会话 → 启动必然失败，trail 必须记 ok:false。
+  await holder.workflowAdmin.startRun({ script: 'return 1' })
+  const start = entries.find((e) => e.action === 'workflowAdmin/startRun')
+  assert.ok(start, 'startRun 进了 trail')
+  assert.equal(start.ok, false, '失败以 ok:false 落账，而不是被通用规则记成成功')
+  // 读路径不进 trail。
+  holder.workflowAdmin.listRuns()
+  holder.workflowAdmin.getRun('nope')
+  assert.equal(entries.filter((e) => String(e.action).startsWith('workflowAdmin/list')).length, 0, 'listRuns 是读路径')
+  assert.equal(entries.filter((e) => String(e.action).endsWith('/getRun')).length, 0, 'getRun 是读路径')
+  // saved 库写成功 → ok:true
+  await holder.workflowAdmin.saveSaved({ name: 'audited-save', scope: 'global', script: 'return 1' })
+  const save = entries.find((e) => e.action === 'workflowAdmin/saveSaved')
+  assert.equal(save.ok, true, '成功的 saved 写入记 ok:true')
 })
 
 // ─── 清理 ─────────────────────────────────────────────────────────────────────

@@ -81,6 +81,19 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 
 **未实现的探测**：上表中标 "—" 的行目前 `detect` 恒为 false，即面板保留。这是刻意的：**探测不到就不让位**——把看不见的东西当作"已覆盖"会让功能凭空消失。后续上游补齐（例如官方 MCP 管理页）时，只需给对应行加一条探测。
 
+## 已知边界（并发写）
+
+跨进程写保护（Phase F1/F2）的适用面是**明确的**，不等于"所有落盘都安全"：
+
+| 文件 | 读-改-写 | 说明 |
+|---|---|---|
+| `cordis.patch.yml`（profile patch） | ✅ 锁内 `mutatePatch` / `mutateProfilePatch` | 21 处写入点全部走它；锁跨 读 → 变换 → 写 |
+| `cron-tasks.json` | ✅ 锁内 `mutateTasksStore` | `upsert` / `remove` / `toggle`；校验看到的 id 集就是写入替换的修订 |
+| `webhook-triggers.json` | ✅ 锁内 `mutateRulesStore` | `saveRule` / `deleteRule`；"空 secret 继承已存值"查的也是锁内那一份 |
+| profile `package.json`、`admin-audit.jsonl`、`usage-ledger.json`、`webhook-history.json`、`workflow/runs/**`、`subagent-admin.*.json` | ⚠️ 仅**原子写**（唯一临时名 + `atomicRename` 重试）；读-改-写靠**进程内**串行队列 | 同一 profile 同时跑两个 dsh 实例时这些文件仍可能丢一次更新 |
+
+上表 ⚠️ 行的取舍与兜底：台账与交付历史是**可重建的派生数据**（会话日志仍在，下一次读取或投递会覆盖），审计是**追加写**（两个实例的行会交错，但不会互相删除；只有"到达上限压缩"那一步会以读-改-写覆盖），workflow journal / subagent 侧车是单实例写入的产物。要彻底消除，可把 `withFileLock` 套到这些 store 的读-改-写；代价是**持锁期间不能 await**，而台账的合并依赖内存镜像（镜像里还有尚未落盘的保留行），改造前要先解决"镜像 ↔ 文件"的双向合并，属于独立的改动。
+
 ## 版本策略
 
 **支持范围：dsh ≥ 0.1.7-rc.2。** 自 v1.25.0 起不再支持 dsh 0.1.6，这是**已决策**（不再是"待定"）：

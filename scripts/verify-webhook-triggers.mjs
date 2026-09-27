@@ -23,6 +23,7 @@
  * Run: node scripts/verify-webhook-triggers.mjs
  */
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -657,6 +658,82 @@ await checkAsync('replay dedup persists across a remount (cross-restart idempote
     assert.equal(steeredAll.length, 1, 'exactly one steer ever executed for this delivery id')
   } finally {
     for (const d of m.disposers.splice(0)) { try { d() } catch {} }
+  }
+})
+
+/* ==================== 跨进程并发写（F1/F2 扩展）==================== */
+
+await checkAsync('two processes saving rules into one store lose no rule', async () => {
+  // `persist` wrote atomically, but the guarded READ ran outside any lock: two
+  // dsh instances on one profile could both read revision N, both merge their own
+  // rule and the second write silently dropped the first. mutateRulesStore now
+  // holds the lock across read → merge → write; this is the acceptance case.
+  const dir = mkdtempSync(join(tmpdir(), 'webhook-race-'))
+  const profileDir = join(dir, 'profile')
+  mkdirSync(join(profileDir, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture', dependencies: {} }))
+  const rulesPath = join(dir, 'webhook-rules.json')
+  const historyPath = join(dir, 'webhook-history.json')
+  const barrier = join(dir, 'go')
+  const worker = join(dir, 'worker.mjs')
+  const ROUNDS = 25
+  writeFileSync(worker, [
+    `import { applyWebhookAdmin } from ${JSON.stringify(new URL('../lib/webhook-triggers.js', import.meta.url).href)}`,
+    `import { existsSync } from 'node:fs'`,
+    `import { pathToFileURL } from 'node:url'`,
+    'const [profileDir, rulesPath, historyPath, barrier, tag, rounds] = process.argv.slice(2)',
+    'const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))',
+    'const ctx = {',
+    "  baseUrl: pathToFileURL(profileDir).href,",
+    '  logger: { info() {}, warn() {}, error() {} },',
+    '  get: () => undefined,',
+    "  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },",
+    '  inject: undefined,',
+    '  provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },',
+    '}',
+    'applyWebhookAdmin(ctx, {',
+    '  enqueue: (op) => Promise.resolve().then(op),',
+    '  runPnpm: null,',
+    '  reconcileBundles: null,',
+    '  settings: { webhookTriggersPath: rulesPath, webhookHistoryPath: historyPath },',
+    '})',
+    // Barrier: both children start writing at the same instant, so the no-lock
+    // version really interleaves (startup skew alone would serialize them and a
+    // missing lock would go unnoticed).
+    'const until = Date.now() + 15000',
+    'while (!existsSync(barrier) && Date.now() < until) await sleep(2)',
+    'for (let i = 0; i < Number(rounds); i += 1) {',
+    '  await ctx.provided.webhookAdmin.saveRule({',
+    "    id: tag + '-rule-' + i, enabled: true, secret: 'topsecret-key-16chars',",
+    "    action: { mode: 'steer', sessionId: 's', steer: true },",
+    '  })',
+    '}',
+    'process.exit(0)',
+    '',
+  ].join('\n'), 'utf8')
+  const run = (tag) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [worker, join(profileDir, 'node_modules', 'dsh-plugin-admin'), rulesPath, historyPath, barrier, tag, String(ROUNDS)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    child.stdout.resume()
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(tag + ' worker exited ' + code + ': ' + stderr))))
+  })
+  try {
+    const children = [run('a'), run('b')]
+    // Let both mounts reach the barrier before releasing them.
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    writeFileSync(barrier, 'go', 'utf8')
+    await Promise.all(children)
+    const stored = JSON.parse(readFileSync(rulesPath, 'utf8'))
+    const ids = stored.rules.map(r => r.id)
+    for (let i = 0; i < ROUNDS; i += 1) {
+      assert.ok(ids.includes('a-rule-' + i), 'process a\'s rule ' + i + ' survived')
+      assert.ok(ids.includes('b-rule-' + i), 'process b\'s rule ' + i + ' survived')
+    }
+    assert.equal(ids.length, ROUNDS * 2, 'every save landed exactly once')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
