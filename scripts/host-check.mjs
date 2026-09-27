@@ -208,8 +208,12 @@ assert.deepEqual(
       assert.equal(parameter.codec.mode, 'strict', `${target} parameter ${parameter.wire} rides a strict codec`)
       assert.ok(typeof parameter.codec.typeSymbol === 'string' && parameter.codec.typeSymbol.length > 0,
         `${target} parameter ${parameter.wire} names its wire type`)
-      assert.equal(parameter.acceptsUndefined, true,
-        `${target} parameter ${parameter.wire} keeps src-json omission semantics`)
+      // Required unless the optional table says otherwise (the gateway enforces it).
+      assert.equal(
+        parameter.acceptsUndefined,
+        (RPC_OPTIONAL_WIRES[target] ?? []).includes(parameter.wire),
+        `${target} parameter ${parameter.wire} omission semantics match RPC_OPTIONAL_WIRES`,
+      )
       const factory = parameter.codec.create()
       assert.equal(typeof factory.parse, 'function', `${target} parameter ${parameter.wire} factory parses`)
       assert.doesNotThrow(() => factory.parse(factory.sample()),

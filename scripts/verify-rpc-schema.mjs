@@ -12,7 +12,7 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { RPC_MANIFEST, RPC_PARAM_SCHEMAS, paramSchema } from '../lib/rpc-manifest.js'
+import { RPC_MANIFEST, RPC_OPTIONAL_WIRES, RPC_PARAM_SCHEMAS, invocationsFor, paramSchema } from '../lib/rpc-manifest.js'
 import { RPC_SCHEMA_NAMES, RpcSchemaError, schemaFor } from '../lib/rpc-schema.js'
 
 const results = []
@@ -59,6 +59,34 @@ check('a factory is fresh per call (the gateway calls create() per decode)', () 
   assert.doesNotThrow(() => b.parse({ id: 'y' }))
 })
 
+check('a wire is required unless the optional table says otherwise', () => {
+  let required = 0
+  let optional = 0
+  for (const [namespace, entry] of Object.entries(RPC_MANIFEST)) {
+    // The DESCRIPTOR is what the gateway enforces, so assert against it — not
+    // against a second reading of the same table.
+    for (const descriptor of invocationsFor(namespace)) {
+      const optionalWires = RPC_OPTIONAL_WIRES[namespace + '/' + descriptor.method] ?? []
+      for (const parameter of descriptor.parameters) {
+        const shouldBeOptional = optionalWires.includes(parameter.wire)
+        assert.equal(
+          parameter.acceptsUndefined,
+          shouldBeOptional,
+          `${namespace}/${descriptor.method} ${parameter.wire} omission matches the optional table`,
+        )
+        if (shouldBeOptional) optional += 1; else required += 1
+      }
+      for (const wire of optionalWires) {
+        assert.ok(entry.methods[descriptor.method].params.includes(wire),
+          `${namespace}/${descriptor.method} optional wire ${wire} is a declared wire`)
+      }
+    }
+  }
+  // The count is the contract: a new method adds required wires unless it
+  // deliberately declares one optional (and then says why, next to the table).
+  assert.ok(required > 80, 'most wires are required (' + required + ')')
+  assert.ok(optional >= 5 && optional <= 12, 'a handful are optional (' + optional + ')')
+})
 check('every manifest wire resolves to a schema and rides a strict codec', () => {
   let wires = 0
   const used = new Set()
