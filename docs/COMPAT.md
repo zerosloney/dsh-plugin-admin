@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，HEAD 477b4f4）· 插件 v1.24.1。
+> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，HEAD 477b4f4）· 插件 v1.25.0。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 
 ## 怎么读这张表
@@ -83,5 +83,9 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 
 ## 版本策略
 
-- 自 v1.25.0 起**不再支持 dsh 0.1.6**：客户端可直接使用平台共享模块（`PLATFORM_MODULES`）与 `ctx.locale` 服务，不再保留 0.1.6 的回落分支。
+**支持范围：dsh ≥ 0.1.7-rc.2。** 自 v1.25.0 起不再支持 dsh 0.1.6，这是**已决策**（不再是"待定"）：
+
+- 客户端直接静态引用平台共享模块（`@deepseek-ai/dsh-client-ui-primitives` / `-ui-slots` / `-client-store`，见 `scripts/build-client.mjs` 的 `PLATFORM_BASELINE`）与 `ctx.locale` 服务：0.1.6 的宿主模块表里没有这些 seed，缺一项就是**整包加载失败**，而不是降级。既然实现里已经没有 0.1.6 的回落分支，"继续支持 0.1.6"就只是一句与代码不符的承诺，本次把口径改成事实。
+- 保留的"先探测、后降级"分支（如 `agentPresets.acquireScope` → `standingKeyFor`、`fiber.update` 能力探测、`workspaceRegistry.unarchiveSession` 的缺失告警）是**同一范围内的防御性探测**（0.1.7 的 rc 与正式版之间、以及未来版本删动词时用），不是 0.1.6 支持。
+- 升级一台 0.1.6 的宿主前请先升 dsh；插件在 0.1.6 上的失败模式是"客户端整包不加载"，不会有半可用状态。
 - CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含 93 条接缝契约，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。

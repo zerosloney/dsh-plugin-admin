@@ -3,6 +3,20 @@
 结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
 
 ## [Unreleased]
+
+## [1.25.0] - 2026-09-27
+
+### Changed (breaking)
+
+- **不再支持 dsh 0.1.6**：支持范围收紧为 **dsh ≥ 0.1.7-rc.2**（决策与依据见 `docs/COMPAT.md` 的「版本策略」）。客户端静态引用平台共享模块（`@deepseek-ai/dsh-client-ui-primitives` / `-ui-slots` / `-client-store`）与 `ctx.locale`，0.1.6 的宿主模块表里没有这些 seed —— 缺一项就是**整包加载失败**而非降级。实现里已经没有 0.1.6 的回落分支，本次把口径改成事实。**升级前请先把 dsh 升到 ≥ 0.1.7-rc.2**；CI 也按该范围跑（pin `dsh-v0.1.7-rc.2` + `master` 预警）。
+- **Webhook 入站默认只接受本机投递**（Phase F4 引入，本版明确为破坏性默认）：非 loopback 来源、以及**传输层报不出对端地址**的请求一律 403；要收远程投递必须显式开启 `webhookAllowRemote`。README 的端点步骤与 `docs/COMPAT.md` 均已注明。
+- **部分管理动作的「拒绝」从返回 `ok:false` 载荷改为抛错**：`webSearchAdmin/uninstall`（`pnpm remove` 失败）、`webSearchAdmin/saveConfig`（未安装的 provider、非标量字段值）。原因是面板把 **RPC 信封**的 `ok` 当成功标志，载荷里的 `ok:false` 过去会被显示成成功 —— 现在这些拒绝会真正报失败。（对直接调 RPC 的调用方，失败形态从载荷变为错误，语义仍是失败。）
+
+### Changed
+
+- `webSearchAdmin/saveConfig.expectedRevision` 由必填改为可选：服务本就把非数字当作「不做版本守卫」，要求必填会让「未来宿主不再回传 revision」变成一个费解的边界错误。契约表随之变为 **87 = 81 必填 + 6 可选**。
+- 换行规则写进仓库（新增 `.gitattributes`）：blob 存 LF、检出为 CRLF，并把此前 6 个 CRLF blob（`lib/command-hook-admin|cron-admin|overlay-admin|skills-admin|web-search-admin|webhook-triggers.js`）一次性归一化为 LF —— 纯换行改动，`git diff --ignore-cr-at-eol` 无内容差异。此后普通 `git add` 即可，不再依赖 `core.autocrlf` 的取值。
+
 ### Fixed（审查修复：F1 锁的作用域、审计写失败、版本拒读的爆炸半径）
 
 三条都是本次改动**自己引入或声称已解决**的问题，独立复现后修复：
