@@ -1,0 +1,54 @@
+# Line endings for this repository.
+#
+# REGIME: text files are stored with LF in the object database and checked out
+# with CRLF in the working tree. This repo is Windows-first (PowerShell scripts,
+# editors that default to CRLF, a CRLF-heavy history), so CRLF is the friendly
+# checkout format — while LF in the blobs keeps diffs, patches and the Linux CI
+# leg stable and makes the repository independent of any contributor's
+# `core.autocrlf` setting.
+#
+# Why this file exists: 6 library files were committed with CRLF blobs while the
+# other 85 tracked files held LF, so every edit to those 6 turned into a
+# whole-file diff under `core.autocrlf=true` (and a whole-file EOL flip under
+# `false`). Declaring the rule once removes that class of noise for good: with
+# `eol=crlf`, git normalises CRLF→LF when staging (so a writer that emits either
+# style stays clean) and materialises CRLF on checkout.
+#
+# Staging an edit: plain `git add` is fine — no `-c core.autocrlf=…` needed.
+#
+# Catch-all first, specific rules after: for a given attribute the LAST matching
+# line wins, so `* text=auto` must come before the extension rules to let them
+# override it. `text=auto` also keeps real binaries (none today) unconverted.
+
+* text=auto
+
+# Source, config, docs and scripts: normalise to LF in the repository, CRLF on
+# checkout.
+*.js    text eol=crlf
+*.cjs   text eol=crlf
+*.mjs   text eol=crlf
+*.ts    text eol=crlf
+*.json  text eol=crlf
+*.md    text eol=crlf
+*.yml   text eol=crlf
+*.yaml  text eol=crlf
+*.ps1   text eol=crlf
+*.txt   text eol=crlf
+
+# Extensionless dotfiles that must follow the same rule.
+.gitattributes text eol=crlf
+.gitignore     text eol=crlf
+.zcodeignore   text eol=crlf
+
+# Binary assets, should any be added: never normalise, never diff as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
