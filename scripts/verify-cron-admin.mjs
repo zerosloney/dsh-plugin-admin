@@ -423,6 +423,73 @@ try {
 }
 
 /* ========================================================================== */
+/*        早期唤醒不得重排刚跑过的那一次（重复执行保护，1.25.2）                    */
+/* ========================================================================== */
+
+// Reproduces, deterministically and in milliseconds, the failure a Windows CI
+// runner reported as `✗ runNow on an armed task leaves no orphan timer … 3 !== 2`:
+// nextOccurrence(fields, at - 1) returns `at` ITSELF (measured), so a timer that
+// wakes a millisecond early — the wake FIRE_SLACK_MS exists to tolerate — used to
+// re-arm for the occurrence it had just served, i.e. a ~1ms timer and a second
+// execution of the user's action.
+const dupHome = mkdtempSync(join(tmpdir(), 'cron-dup-'))
+try {
+  const dupSteered = []
+  const dupCtx = {
+    baseUrl: 'http://127.0.0.1:1',
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    get: (key) => (key === 'agents'
+      ? { get: (id) => (id === 'live' ? { steer: (message) => dupSteered.push(message) } : undefined) }
+      : undefined),
+    effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+    inject: undefined,
+    provide: (key, service) => { dupCtx.provided ??= {}; dupCtx.provided[key] = service },
+  }
+  const dupPath = join(dupHome, 'cron-tasks.json')
+  const stubbed = []
+  const realSetTimeout = globalThis.setTimeout
+  const realNow = Date.now
+
+  check('an early wake re-arms the NEXT occurrence and never runs one twice', async () => {
+    const base = new Date()
+    base.setSeconds(0, 0)
+    const at = base.getTime() + 60_000     // the upcoming minute boundary
+    globalThis.setTimeout = (fn, delay) => { stubbed.push({ fn, delay }); return { unref() {} } }
+    Date.now = () => at - 1                // the 1ms-early wake
+    try {
+      applyCronAdmin(dupCtx, { enqueue: (op) => Promise.resolve().then(op), settings: { cronTasksPath: dupPath } })
+      await dupCtx.provided.cronAdmin.upsert({
+        id: 'dup',
+        cron: '* * * * *',
+        action: { mode: 'steer', sessionId: 'live', steer: true },
+        promptTemplate: 'dup tick',
+      })
+      const armedAt = stubbed.at(-1)
+      assert.equal(armedAt.delay, 1, 'fixture: armed exactly one millisecond before the boundary')
+
+      await armedAt.fn()                   // serve that occurrence
+      assert.equal(dupSteered.length, 1, 'the occurrence ran exactly once')
+      const rearmed = stubbed.at(-1)
+      assert.ok(
+        rearmed.delay > 30_000,
+        `the re-arm must target the NEXT boundary (got ${rearmed.delay}ms; ~1ms means it re-armed the occurrence it just ran)`,
+      )
+
+      // A second timer aimed at the SAME occurrence (any stale-timer path) must
+      // not run the action again — one execution per scheduled occurrence.
+      await armedAt.fn()
+      assert.equal(dupSteered.length, 1, 'a duplicate timer for the same occurrence is suppressed')
+    } finally {
+      globalThis.setTimeout = realSetTimeout
+      Date.now = realNow
+    }
+  })
+} finally {
+  await settle()
+  rmSync(dupHome, { recursive: true, force: true })
+}
+
+/* ========================================================================== */
 /*                    Timer-cap clamp (premature wake guard)                  */
 /* ========================================================================== */
 
