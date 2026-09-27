@@ -127,7 +127,6 @@ try {
     if (logTail !== '') parts.push('log: ' + logTail.slice(-300))
     fail('plugin install', parts.join(' :: ') || `exit ${added.status}`)
   } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
-  } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
 
   const dumped = cli([PROFILE, '--dump-config'], env)
   const tree = String(dumped.stdout ?? '')
