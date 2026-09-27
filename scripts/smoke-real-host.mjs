@@ -113,18 +113,20 @@ try {
 
   const added = cli(['plugin', '--profile', PROFILE, 'add', `link:${PLUGIN_DIR}`], env)
   if (added.status !== 0) {
-    // dsh points at a pnpm diagnostics log instead of printing the cause: read its
-    // tail so a CI failure names the real reason (an annotation, not a hidden file).
-    const detail = String(added.stderr || added.stdout)
-    const logPath = /diagnostics: (\S+)/.exec(detail)?.[1]
+    // dsh FORWARDS pnpm's own output to its stdout while it writes its summary
+    // ("plugin command failed; diagnostics: …") to stderr: both must be read, or
+    // the actual pnpm error is exactly the half that gets dropped.
+    const forwarded = `${added.stdout ?? ''}${added.stderr ?? ''}`.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    const logPath = /diagnostics: (\S+)/.exec(forwarded.join(' '))?.[1]
     let logTail = ''
     if (logPath !== undefined && existsSync(logPath)) {
-      // The LAST lines are the pnpm error itself (the trailing "Command failed…"
-      // line is just the wrapper), so take a generous tail and report it FIRST —
-      // a truncated detail must not cut the one line that explains the failure.
       logTail = readFileSync(logPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-12).join(' | ')
     }
-    fail('plugin install', `${logTail === '' ? detail.slice(-200) : 'pnpm log: ' + logTail.slice(-450)}`)
+    const parts = []
+    if (forwarded.length > 0) parts.push('output: ' + forwarded.slice(-8).join(' | ').slice(-400))
+    if (logTail !== '') parts.push('log: ' + logTail.slice(-300))
+    fail('plugin install', parts.join(' :: ') || `exit ${added.status}`)
+  } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
   } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
 
   const dumped = cli([PROFILE, '--dump-config'], env)
