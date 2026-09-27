@@ -550,6 +550,71 @@ const PROBES = [
       ['strict codecs must name a type symbol and supply create()', t => t.includes('strict codec has no create() factory')],
     ],
   },
+  {
+    id: 'session lifecycle events (usage observer)',
+    // lib/index.js:1756-1795 listens for all four and branches on the handle it
+    // receives: `.id`, `.firstLiveSeq === 0` (the log started empty in THIS
+    // process, so the accumulator saw every event) and `.header.createdAt/.cwd`.
+    // The NAMES were unpinned until now: a rename would silently stop the usage
+    // ledger observing live sessions — no probe, no verify script, no error.
+    file: 'packages/core/session/src/index.ts',
+    checks: [
+      ['session/created delivers the session handle', t => blockOf(t, 'interface Events').includes("'session/created'(this: Scoped<Session>, session: Session): void")],
+      ['session/disposed delivers the session handle', t => blockOf(t, 'interface Events').includes("'session/disposed'(this: Scoped<Session>, session: Session): void")],
+      ['session/event delivers (session, event) — the fold reads both', t => blockOf(t, 'interface Events').includes("'session/event'(this: Scoped<Session>, session: Session, event: SessionEvent): void")],
+      ['session/flush is the awaited drain point', t => blockOf(t, 'interface Events').includes("'session/flush'(this: Scoped<Session>, session: Session): Promise<void> | void")],
+      ['Session exposes id + firstLiveSeq + header (what the observer reads)', t => has('readonly id: SessionId', 'readonly firstLiveSeq: SessionLogOffset', 'readonly header: SessionHeader')(t)],
+    ],
+  },
+  {
+    id: 'llm catalog service (provider/model dropdowns)',
+    // lib/subagent-admin.js:1715-1725 powers the panel's provider/model selects.
+    file: 'packages/llm/llm/src/index.ts',
+    checks: [
+      ['the service key is llm', t => t.includes("super(ctx, 'llm')")],
+      ['listProviders() is synchronous and returns the catalog', t => t.includes('listProviders(): LlmProviderInfo[]')],
+      ['listModels(provider) is awaitable', t => t.includes('async listModels(provider: string): Promise<LlmModelInfo[]>')],
+    ],
+  },
+  {
+    id: 'llm catalog entry shapes',
+    file: 'packages/llm/llm/src/types.ts',
+    checks: [
+      ['LlmProviderInfo keeps id + name', t => has('id: string', 'name: string')(blockOf(t, 'export interface LlmProviderInfo'))],
+      // The plugin reads `p.id || p.provider`: `provider` no longer exists on the
+      // provider info, so `id` is the only thing keeping the dropdown populated.
+      ['LlmModelInfo keeps id + name', t => has('id: string', 'name: string')(blockOf(t, 'export interface LlmModelInfo'))],
+    ],
+  },
+  {
+    id: 'storageDomain facility (projection-cache cleanup)',
+    // lib/index.js:2270 deletes a deleted session's projection-cache row through
+    // this facility: get('session_projcache') → table('sessions') → delete(id).
+    file: 'packages/storage/storage-domain/src/index.ts',
+    checks: [
+      ['the service is provided as storageDomain', t => t.includes("provide('storageDomain', facility)")],
+      ['get(name) hands back the opened domain', t => t.includes('get(name: string): DomainImpl | undefined')],
+      ['the host lookup map exposes ctx.storageDomain', t => t.includes('storageDomain: DomainFacility')],
+    ],
+  },
+  {
+    id: 'storage domain table surface (projection-cache cleanup)',
+    file: 'packages/storage/storage-domain/src/domain.ts',
+    checks: [
+      ['table(name) returns a key/value table', t => t.includes('table(name: string): KvTable<string, unknown>')],
+      ['the table delete is awaitable', t => t.includes('delete(key: K): Promise<boolean>')],
+    ],
+  },
+  {
+    id: 'subagentModelSelection service key',
+    // lib/subagent-admin.js:1885 only asks whether the key EXISTS (it feeds a
+    // boolean into entry validation), so the probe pins key + mountability.
+    file: 'packages/subagent/tool-subagent/src/model-selection-settings.ts',
+    checks: [
+      ['the service key is subagentModelSelection', t => t.includes("super(ctx, 'subagentModelSelection')")],
+      ['it is a mountable plugin, so the key exists once the host composes it', t => t.includes('export default SubagentModelSelectionConfig')],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */

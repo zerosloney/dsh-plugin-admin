@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run the gate (tsc / lint / artifact check / 34 scripts / 93 seam contracts)
+      - name: Run the gate (tsc / lint / artifact check / 34 scripts / 112 seam contracts)
         env:
           DSH_CHECKOUT: ${{ github.workspace }}/.dsh-checkout
           # Makes a failing verify script annotate itself (name + assertion tail).

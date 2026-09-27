@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **补上 7 条零覆盖接缝的探针**（接缝矩阵 95 → **112 条契约**）：这 7 条此前**既无上游探针、也无替身用例** —— 上游改名或挪走时不会有任何一条测试变红，表现为静默失效：
+  - `session/created` / `disposed` / `event` / `flush` 四个事件，以及观察者真正读的 `Session.id` / `firstLiveSeq` / `header`（用量台账的实时观察与 drain 时机，`lib/index.js:1756-1795`）；
+  - `llm.listProviders()` / `listModels(provider)` 与 `LlmProviderInfo` / `LlmModelInfo` 两个形状（子代理面板的 provider/model 下拉，缺了退化成空列表）；
+  - `storageDomain.get(name)` → `table(name).delete(key)`（删除会话时清 projection cache，否则侧栏残留到刷新）；
+  - `subagentModelSelection` 服务键（子代理入口校验里的"模型选择是否可用"）。
+
+  六条新探针**逐条做了伪证**（把上游声明改坏 → 对应契约失败，6/6 捕获，随后 checkout 复原并核对干净），并确认在 pin 与上游 `master` 上都通过。`docs/COMPAT.md` 的接缝表补上这四行并把引用的条数对齐到 112（README 中英与 CI 步骤名一并同步）。
+
+  顺带发现：上游目前**只有 `master` 一个分支，且正停在 pin 的那个提交**（`477b4f42`）—— 所以 CI 的「master 预警行」当下没有额外信号，一旦上游推进它会先响。
+
 ## [1.25.2] - 2026-09-27
 
 补丁版：修复「最近一次触发被重复执行」——cron 定时器的重排会在提前 1ms 唤醒时选回**刚跑过的那一次**。
