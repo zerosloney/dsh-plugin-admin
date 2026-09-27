@@ -21,6 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same seam-probe checkout as ci.yml, and for the same reason: since the
+      # gate started FAILING LOUD when integration-check has no checkout to read,
+      # a release without one dies at `npm test` — which is how v1.25.0's first
+      # Release run failed (the tag and the commit were fine; the job was missing
+      # the pinned sources). The ref is the release this plugin is verified
+      # against (docs/COMPAT.md); nothing is installed or built in it.
+      - name: Check out the pinned dsh checkout (seam probe)
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.1.7-rc.2
+          path: .dsh-checkout
+          fetch-depth: 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -31,6 +45,8 @@ jobs:
         run: npm ci
 
       - name: Run self-check + host-check
+        env:
+          DSH_CHECKOUT: ${{ github.workspace }}/.dsh-checkout
         run: npm test
 
       - name: Verify tag matches package version

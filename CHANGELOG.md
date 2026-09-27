@@ -26,6 +26,8 @@
 ### Fixed（收尾批次）
 
 - **换行规则与产物校验的冲突（本版引入、CI 上必现）**：`.gitattributes` 的 `*.js text eol=crlf` 也命中了两个**生成的 bundle**，而 `build-client --check` 是拿磁盘上的文件与 esbuild 输出**逐字节**比对（esbuild 恒输出 LF）——于是**每一次全新 clone**（即 CI 的每一腿）都判定 "STALE" 并中断整个门禁；开发机上因为工作副本还是旧的 LF 反而看不出来。修法是两处：`.gitattributes` 把 `lib/client.js` / `lib/client.panels.js` 显式钉成 `eol=lf`（后出现的规则胜出），`build-client --check` 再把 CRLF 归一化后比对（这样编辑器重写文件也不会因换行而误报 STALE）。已用"删掉文件 → `git checkout` 重新物化"复现原故障、并验证两处修法各自生效。
+- **Release 工作流缺少接缝探针的 checkout**：`integration-check` 在 CI 里没有 checkout 时**拒绝静默跳过**（第一档的改动），而 `release.yml` 从未取过 dsh 源码 —— 于是打 tag 后发布任务在 `npm test` 处就失败，**版本号校验与 `npm publish` 都没轮到**（v1.25.0 首次打 tag 的结果）。现在它和 `ci.yml` 一样先 checkout 固定版本 dsh 并设 `DSH_CHECKOUT`。
+- **两处跨进程断言与锁的"失败开放"契约相矛盾**（测试自身的问题，非实现变更）：`withFileLock` 等 3 秒拿不到锁就照写是**有意设计**，而新加的并发写用例却断言"一个都不能丢"，在慢的 CI 机器上（windows-latest / Node 22 一腿）会因此偶发失败。改为允许 ≤2 / ≤1 的损耗并注明理由 —— 去掉锁的对照组仍会丢约一半，检测力不受影响（已重新伪证）。
 - **`webhook-history.json` 的 `version` 此前只写不读**：来自更新版本的 sidecar 会被当成空 v1 读入、随后被覆写；`seen` 形状一变，已投递过的 delivery id 会被重新执行。现在读到更高的 `version` 就标记 `newer`：进程内历史环与去重仍工作（best-effort 不变），但**绝不回写**该文件，并告警一次。
 - **`looksLikeTs` 的两个漏检**（esbuild 缺失时的降级路径）：`agent<Result>("x")` 与 `const rows: Row[] = []` 此前会被当成纯 JS交给 `new Function()`，报的是难懂语法错误而不是"esbuild 不可用"。补了泛型**调用**与类型注解两条模式（泛型要求首字母大写且后随调用，避免把 `a < B > c` 当类型实参）；该函数已导出并配 19 例断言，其中两个已知误报（注释/字符串里出现 `interface X`）也写进用例 —— 方向保持"保守拒绝、失败可见"。
 - **`withFileLock` 的抢占路径不再空转**：抢到（unlink）过期锁后原本**立即**重试，两个进程可以互相抢对方的锁文件打满 CPU；现在退避 5ms + 随机抖动，并把「预算耗尽」的判断挪到抢占**之前**，失败开放照旧生效。另外**半写锁**（`open(…, 'wx')` 与写入 pid 之间的窗口）不再被当作过期锁抢占：250ms 内无主的锁一律等待，避免两个写者同时进入临界区。
