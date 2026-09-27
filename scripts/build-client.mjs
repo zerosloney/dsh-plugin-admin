@@ -100,7 +100,13 @@ for (const artifact of ARTIFACTS) {
   const next = facade(bundled, artifact.chunk)
   const outPath = join(root, artifact.out)
   if (checkOnly) {
-    const current = readFileSync(outPath, 'utf8')
+    // Compare TEXT, not bytes: the contract is "the committed artifact matches
+    // src/client/**", and line endings are not part of it. esbuild always emits
+    // LF, so a CRLF working copy — a Windows checkout, an editor that rewrites
+    // the file, a repo archive — used to report a false "STALE" and fail the
+    // gate on a fresh clone. (.gitattributes also pins these two paths to LF;
+    // this normalisation is the belt to that suspenders.)
+    const current = readFileSync(outPath, 'utf8').replace(/\r\n/g, '\n')
     if (current !== next) {
       console.error(`build-client: ${artifact.out} is STALE — run \`npm run build:client\` and commit the result.`)
       stale = true

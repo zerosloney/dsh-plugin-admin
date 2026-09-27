@@ -40,6 +40,20 @@
 .gitignore     text eol=crlf
 .zcodeignore   text eol=crlf
 
+# Generated bundles: LF on checkout, NOT crlf.
+#
+# These two are build output committed for distribution, and
+# `scripts/build-client.mjs --check` compares the file on disk byte for byte
+# against what esbuild writes (esbuild always emits LF). Forcing CRLF on checkout
+# therefore made the check fail on EVERY fresh clone — which is exactly what CI
+# does — while a developer's stale LF working copy kept passing locally. Pinning
+# them to LF keeps disk state equal to build output on every platform. (The check
+# also normalises CRLF before comparing now, so an editor that rewrites them
+# cannot fail the gate for a line-ending reason either.) These lines come after
+# the `*.js` rule on purpose: the last matching line wins.
+lib/client.js        text eol=lf
+lib/client.panels.js text eol=lf
+
 # Binary assets, should any be added: never normalise, never diff as text.
 *.png  binary
 *.jpg  binary
