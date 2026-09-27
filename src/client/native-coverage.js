@@ -24,6 +24,10 @@
  * return false (the panel stays) — that is deliberate: a panelled surface we
  * cannot see must never be treated as covered.
  */
+// One list for both halves (Phase E3): the host validates config.panels against it,
+// the table below must cover exactly it. The bundle inlines the file.
+import { PANEL_IDS as CONFIGURED_PANEL_IDS } from '../../lib/panel-ids.js'
+
 export const NATIVE_COVERAGE = Object.freeze([
   Object.freeze({
     panel: 'extensions',
@@ -106,9 +110,17 @@ export const NATIVE_COVERAGE = Object.freeze([
   }),
 ])
 
-/** The panel ids a caller can name in `dsh-admin-panels`.
+/** The panel ids a caller can name in `dsh-admin-panels` or `config.panels`.
  * @type {readonly string[]} */
-export const PANEL_IDS = Object.freeze(NATIVE_COVERAGE.map(function (row) { return row.panel }))
+export const PANEL_IDS = CONFIGURED_PANEL_IDS
+
+// Fail loud at import when the table and the configurable set drift apart: the
+// auto-yield table is what decides a panel's fate, so a missing row would silently
+// turn an 'auto' panel into an always-registered one.
+if (NATIVE_COVERAGE.map(function (row) { return row.panel }).join(',') !== PANEL_IDS.join(',')) {
+  throw new Error('native-coverage: the coverage table must list exactly the configurable panels (' +
+    PANEL_IDS.join(', ') + '), in that order')
+}
 
 /**
  * Whether one slot list already carries an entry with this id. Tolerates a

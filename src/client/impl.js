@@ -696,161 +696,202 @@ function apply(ctx) {
   // section ids). Observer lives for the page lifetime like the menu one.
   ctx.effect(function () { return setupSettingsNavIcons() })
 
-  // Ten slot surfaces, each parked where the shell already renders its
-  // domain. 插件管理 joins the shell-owned 插件 section as its third tab
-  // (插件配置 0, 插件列表 10, 扩展插件 20), 技能 as its fourth (30, v1.24.0
-  // — it used to be a standalone nav section), MCP服务器 as its fifth (40,
-  // v1.24.0), 子智能体 as its sixth (50, v1.24.0), 命令 as its seventh (60)
-  // and 钩子 as its eighth (70, both split out of the former standalone
-  // 命令与钩子 section); 自动化 stays a standalone nav entry (order 29,
-  // v1.24.0 — 定时任务 / Webhook 触发 merged into it, and 工作流 became its
-  // third internal tab), Web 与会话 (order 27 — 历史会话 + Web 搜索 merged
-  // into one nav entry, v1.24.0) / 用量仪表盘 are standalone pages, and the
-  // 待办清单 dock rides the composer.
-  // 工作区 has NO section of its own anywhere: dsh covers workspaces natively
-  // (the 已归档会话 page through 0.1.6, the ui-workspace sidebar browser from
-  // 0.1.7), so a plugin-side manager would only duplicate it. 历史会话 rides
-  // the Web 与会话 entry as its default tab (v1.24.0 — it used to be
-  // DOM-merged into the official page, with a standalone section as the
-  // no-official-page fallback).
-  // inject() waits on each slot's declaration, so registration order never
-  // matters.
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('extensions')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'extensions',
-      order: 20,
-      label: function () { return dshT('扩展插件') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('PluginsSection')))
-  })
-  // MCP server administration is the FIFTH tab of the 内置插件 page
-  // (插件配置 0, 插件列表 10, 扩展插件 20, 技能 30, MCP服务器 40 — v1.24.0
-  // moved it off the settings nav): no sidebar row of its own.
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('mcp')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'mcp-servers',
-      order: 40,
-      label: function () { return dshT('MCP服务器') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('McpSection')))
-  })
-  // Skills administration rides the 内置插件 page as its FOURTH tab
-  // (插件配置 0, 插件列表 10, 扩展插件 20, 技能 30) — no settings nav row of
-  // its own. Reads one Session's user-invocable skill catalog through
-  // `ctx.remote.skills.list()` without activating a cold Agent. web-app
-  // bundle mounts the underlying service by default; CLI / headless
-  // deployments render "skills unavailable" instead of failing.
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('skills')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'skills',
-      order: 30,
-      label: function () { return dshT('技能') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('SkillsSection')))
-  })
-  // Web 与会话 (order 27 — v1.24.0 merged the standalone 历史会话 fallback
-  // and the Web 搜索 section into ONE nav entry with two internal tabs,
-  // sorted before 用量仪表盘). The 历史会话 tab mounts the same panel that
-  // used to be DOM-merged into dsh's official 已归档会话 page; the Web 搜索
-  // tab lists dsh's three web-search providers and lets the user pick the
-  // active one in the profile patch.
-  ctx.slots.inject('settings.section', function () {
-    if (yielded('sessions')) return undefined
-    return ctx.slots.register({
-      name: 'settings.section',
-      id: 'web-sessions',
-      order: 27,
-      label: function () { return dshT('Web 与会话') },
-      inject: function () { return { call: call, refreshSessions: refreshSessions } },
-    }, withLocale(lazyPanel('WebSessionsSection')))
-  })
-  // 子智能体 is the SIXTH tab of the 内置插件 page (插件配置 0, 插件列表 10,
-  // 扩展插件 20, 技能 30, MCP服务器 40, 子智能体 50 — v1.24.0 moved it off the
-  // settings nav): no sidebar row of its own.
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('subagents')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'subagent-admin',
-      order: 50,
-      label: function () { return dshT('子智能体') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('SubagentAdminSection')))
-  })
-  // 命令 and 钩子 are the SEVENTH and EIGHTH tabs of the 内置插件 page
-  // (…扩展插件 20, 技能 30, MCP服务器 40, 子智能体 50, 命令 60, 钩子 70 —
-  // v1.24.0 split the former standalone 「命令与钩子」 section, commands first):
-  // no sidebar row of their own.
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('commands')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'ch-commands',
-      order: 60,
-      label: function () { return dshT('命令') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('ChCommandsSection')))
-  })
-  ctx.slots.inject('settings.plugins.tab', function () {
-    if (yielded('hooks')) return undefined
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'ch-hooks',
-      order: 70,
-      label: function () { return dshT('钩子') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('ChHooksSection')))
-  })
-  ctx.slots.inject('settings.section', function () {
-    if (yielded('usage')) return undefined
-    return ctx.slots.register({
-      name: 'settings.section',
-      id: 'usage-dashboard',
-      order: 28,
-      label: function () { return dshT('用量仪表盘') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('UsageDashboardSection')))
-  })
-  // 自动化 (order 29 — v1.24.0 merged the two standalone 定时任务 / Webhook
-  // 触发 sections into ONE nav entry with two internal tabs; the webhook tab
-  // drops the 触发 suffix). Host-level cron: fires while the dsh process is
-  // alive, independent of any session (dsh-schedule is session-local).
-  ctx.slots.inject('settings.section', function () {
-    if (yielded('automation')) return undefined
-    return ctx.slots.register({
-      name: 'settings.section',
-      id: 'automation',
-      order: 29,
-      label: function () { return dshT('自动化') },
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('AutomationSection')))
-  })
+  // Phase E3: `config.panels` gives the PROFILE the final word on a panel —
+  //   panels: { <id>: 'auto' | 'on' | 'off' }   (host-validated; lib/panel-ids.js)
+  // 'off' wins over everything (including the localStorage force), 'on' registers
+  // even when the official surface covers the panel, 'auto' is the coverage table.
+  //
+  // The browser half cannot read the config row, so it asks the host once per mount
+  // (`pluginAdmin/panels`). Registration is EAGER with the last known answer cached
+  // in localStorage, so a mount never waits on the RPC and the common case is
+  // flash-free; the fresh answer then reconciles (uninstall an 'off' panel, install
+  // an 'on' one). A failed ask leaves the cache (or 'auto') in charge.
+  var POLICY_CACHE_KEY = 'dsh-admin-panels-policy'
+  var readPolicyCache = function () {
+    try {
+      var raw = window.localStorage.getItem(POLICY_CACHE_KEY)
+      if (typeof raw !== 'string' || raw === '') return {}
+      var parsed = JSON.parse(raw)
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch (error) { return {} }
+  }
+  var writePolicyCache = function (states) {
+    try { window.localStorage.setItem(POLICY_CACHE_KEY, JSON.stringify(states)) } catch (error) { /* private mode */ }
+  }
+  var panelStates = readPolicyCache()
+  var slotDisposed = false
+  ctx.effect(function () { return function () { slotDisposed = true } }, 'plugin-admin: slot lifecycle')
+  var yielded = function (panel) {
+    var state = panelStates[panel] || 'auto'
+    if (state === 'off') return true
+    if (state === 'on') return false
+    return coverage.active[panel] === false
+  }
 
+  // The ten surfaces as data, so a late config answer can install what it enables
+  // and uninstall what it disables. Slot names and ids are the wire the shell sees.
+  var SLOT_SPECS = [
+  {
+    panel: 'extensions',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'extensions',
+              order: 20,
+              label: function () { return dshT('扩展插件') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('PluginsSection')),
+  },
+  {
+    panel: 'mcp',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'mcp-servers',
+              order: 40,
+              label: function () { return dshT('MCP服务器') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('McpSection')),
+  },
+  {
+    panel: 'skills',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'skills',
+              order: 30,
+              label: function () { return dshT('技能') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('SkillsSection')),
+  },
+  {
+    panel: 'sessions',
+    slot: 'settings.section',
+    options:       {
+              name: 'settings.section',
+              id: 'web-sessions',
+              order: 27,
+              label: function () { return dshT('Web 与会话') },
+              inject: function () { return { call: call, refreshSessions: refreshSessions } },
+          },
+    component: withLocale(lazyPanel('WebSessionsSection')),
+  },
+  {
+    panel: 'subagents',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'subagent-admin',
+              order: 50,
+              label: function () { return dshT('子智能体') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('SubagentAdminSection')),
+  },
+  {
+    panel: 'commands',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'ch-commands',
+              order: 60,
+              label: function () { return dshT('命令') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('ChCommandsSection')),
+  },
+  {
+    panel: 'hooks',
+    slot: 'settings.plugins.tab',
+    options:       {
+              name: 'settings.plugins.tab',
+              id: 'ch-hooks',
+              order: 70,
+              label: function () { return dshT('钩子') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('ChHooksSection')),
+  },
+  {
+    panel: 'usage',
+    slot: 'settings.section',
+    options:       {
+              name: 'settings.section',
+              id: 'usage-dashboard',
+              order: 28,
+              label: function () { return dshT('用量仪表盘') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('UsageDashboardSection')),
+  },
+  {
+    panel: 'automation',
+    slot: 'settings.section',
+    options:       {
+              name: 'settings.section',
+              id: 'automation',
+              order: 29,
+              label: function () { return dshT('自动化') },
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('AutomationSection')),
+  },
+  {
+    panel: 'todo',
+    slot: 'conversation.input.dock',
+    options:       {
+              name: 'conversation.input.dock',
+              id: 'todo-admin',
+              order: 5,
+              inject: function () { return { call: call } },
+          },
+    component: withLocale(lazyPanel('TodoAdminDock')),
+  },
+  ]
+  var injectDisposers = {}
+  var registerDisposers = {}
+  var installOne = function (spec) {
+    if (slotDisposed || injectDisposers[spec.panel] !== undefined) return
+    injectDisposers[spec.panel] = ctx.slots.inject(spec.slot, function () {
+      if (yielded(spec.panel)) return undefined
+      var dispose = ctx.slots.register(spec.options, spec.component)
+      registerDisposers[spec.panel] = dispose
+      return dispose
+    })
+  }
+  var uninstallOne = function (panel) {
+    var dispose = registerDisposers[panel]
+    if (dispose === undefined) return
+    registerDisposers[panel] = undefined
+    try { dispose() } catch (error) { /* the fiber owns teardown too */ }
+  }
+  var reconcileSlots = function () {
+    for (var i = 0; i < SLOT_SPECS.length; i += 1) {
+      var spec = SLOT_SPECS[i]
+      if (yielded(spec.panel)) { uninstallOne(spec.panel); continue }
+      installOne(spec)
+    }
+  }
 
+  reconcileSlots()
 
-  // 待办清单: live todo strip above the composer. The framework hands every
-  // session-scope slot entry the useProjection standard-kit hook, so the
-  // component reads the host-computed 'todos' projection directly — no
-  // polling for the list itself (the footer's file stats do poll). order 5
-  // sits just after the shell's own todo strip (order 0), which this panel
-  // hides while it has data; inject() is a no-op if this slot key is absent
-  // in older shells.
-  ctx.slots.inject('conversation.input.dock', function () {
-    if (yielded('todo')) return undefined
-    return ctx.slots.register({
-      name: 'conversation.input.dock',
-      id: 'todo-admin',
-      order: 5,
-      inject: function () { return { call: call } },
-    }, withLocale(lazyPanel('TodoAdminDock')))
-  })
-
+  // The ask. On success the answer becomes the cache and reconciliation runs again;
+  // on failure nothing changes (cache, else auto-yield). A mount WITHOUT a
+  // connection (a harness, a headless shell) must not throw here either.
+  var ask = null
+  try { ask = call('pluginAdmin/panels', {}) } catch (error) { ask = null }
+  if (ask !== null && typeof ask.then === 'function') {
+    ask.then(function (result) {
+      var panels = result && result.ok !== false && result.value ? result.value.panels : null
+      if (panels === null || panels === undefined || typeof panels !== 'object') return
+      panelStates = panels
+      writePolicyCache(panels)
+      reconcileSlots()
+    }, function () { /* no host answer: the cache or the coverage table decides */ })
+  }
 }
 
 // `loadPanels` rides the exports for the harnesses: SessionsSection /
