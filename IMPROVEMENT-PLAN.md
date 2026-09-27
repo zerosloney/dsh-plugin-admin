@@ -190,7 +190,7 @@
 
 ---
 
-## 仍开放（不阻塞 A–G 的完成）
+## 收口记录（原"仍开放"两项，均已完成）
 
-1. **刻意保留原生的控件**（B3 的边界，非待办）：`select`（16 处）、`textarea`、`radio`、workflow 面板的 5 个内联样式输入、Picker 组合控件内的输入（官方 `Input` 不转发 `ref`，而该控件靠 ref 管键盘焦点）。官方没有对应原子，或原子的 API 覆盖不到它们的既有行为。
-2. **参数必填化**（D2 的后续）：当前每个 wire 都保留 `acceptsUndefined`（与 src-json 时代一致）。要把"该必填的必填"真正收紧，需要逐调用点审计（浏览器半的每个 `call(...)` 载荷），这是独立的一轮工作。
+1. **可迁移的原生控件 → 已做尽。** Picker 的输入框改用官方 `Input`：`Input` 不转发 `ref`，而它需要的是按键时的实时值，于是改从事件自身读取（`e.target.value`，无 target 时回落草案状态），ref 因此不再必要。workflow 面板的 4 个输入框同样迁到官方 `Input`，宽度与间距由 `.wf-input` 一条 CSS 承担。**剩余的 18 个 `select` / 11 个 `textarea` / 1 个 `radio` 保留原生，是因为官方确实没有对应原子** —— 对照 `ui-primitives` 全部 42 个导出，没有 Select / Textarea / Radio。
+2. **参数必填化 → 已完成。** `RPC_OPTIONAL_WIRES` 是唯一判定表：87 个 wire = **82 必填 + 5 显式可选**。必填项由网关真正强制（缺参数即 `gateway/input-invalid`）；host-check 扫描浏览器半的每个字面量载荷，缺必填项直接报错（收紧后零告警）；`verify-rpc-schema.mjs` 对着**描述符**断言 `acceptsUndefined` 与可选表一致。两条新增的可选 wire 各有出处：无标题的工作区、移到列表最前。

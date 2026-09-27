@@ -3,6 +3,24 @@
 结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
 
 ## [Unreleased]
+### Changed（剩余两项收口：可迁移的原生控件 + 参数必填化）
+
+**1. 还能迁移的原生控件都迁了；不能迁的有了确凿依据。**
+
+- **Picker 的输入框改用官方 `Input`**（此前因"需要 ref 管焦点"刻意保留原生）。`Input` 不转发 ref，而它需要的是**按键时的实时值**：改从事件自身读取（`e.target.value`，事件无 target 时回落草案状态），ref 因此不再必要。官方原子不回退。
+- **workflow 面板的 4 个输入框改用官方 `Input`**，原先靠 `inputStyle()` 内联模拟共享外观；原子的包裹层是 `inline-flex`，所以宽度与间距改由 `.wf-input` 一条 CSS 承担（布局不丢）。
+- **剩下的 30 处原生控件是"官方没有对应原子"，不是偏好**：对照 `ui-primitives` 的全部 **42 个** 导出（无 `Select`、无 `Textarea`、无 `Radio`）—— 18 个 `select`、11 个 `textarea`、1 个 `radio` 全部保留原生；它们的 `select.input` / `textarea.input` 样式继续由插件 CSS 承担。
+
+**2. 参数从"一律可省"收紧为"默认必填"。**
+
+- 判定权交给 `RPC_OPTIONAL_WIRES` 一张表：**87 个 wire 里 82 个必填、5 个显式可选**。必填项在网关上被真正强制（缺参数 → `gateway/input-invalid`），不再是"谁都能省"。
+- 新增的两条可选 wire 都有具体出处：`workspaceAdmin/create.title`（无标题的工作区）与 `workspaceAdmin/insertBefore.beforeWorkspaceId`（移到列表最前）—— 面板按字段构造载荷，没内容就**不发这个键**，写成必填会拒掉合法调用。
+- 静态证明：host-check 扫描浏览器半的每个字面量载荷，**必填 wire 缺一个就报错**（本次收紧后零告警，说明前端一直在发全量字段）；`verify-rpc-schema.mjs` 另断言**描述符**的 `acceptsUndefined` 与可选表逐条一致（对着描述符断言，而不是再读一遍同一张表）。
+
+### Verified（本轮）
+
+- `npm test` 全绿：`host-check D2: 87 parameters validated by strict codecs`、`91 methods / 73 client call targets`、`verify-rpc-schema` 6 项、93 条接缝契约。
+- 迁移原生控件时抓到一处真实回归：Picker 的 Enter 处理器只读 React 状态会在"DOM 值已变但渲染未跟上"时读到空值（测试用它驱动出 `deny: ['bash','glob']` 而非 `['write','edit']`）。改成读事件 target 的实时值后修复 —— 这也是去掉 ref 的正确替代。
 ### Added（D2 边界校验 + E3 面板开关，用户点名实现）
 
 **D2 — 每个 RPC 参数由网关做严格校验。** 参数此前一律 `codec: { mode: 'src-json' }`，网关原样透传：**类型错的载荷能直接进服务**。现在 87 个参数全部改挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验（`packages/api/gateway/src/index.ts` 的 `decode()`），失败即 `gateway/input-invalid`。
