@@ -3412,7 +3412,7 @@ function Picker(props) {
   var values = props.values || []
   var options = props.options || []
   var allowCustom = props.allowCustom !== false
-  var inputRef = useRef(null)
+  // Phase B3e-follow-up: no ref. The official Input does not forward one, and the
   var textState = useState('')
   var text = textState[0]
   var setText = textState[1]
@@ -3460,7 +3460,11 @@ function Picker(props) {
   }
   function onKeyDown(e) {
     if (disabled) return
-    var live = (inputRef.current ? inputRef.current.value : text).trim()
+    // The live value comes from the event's own target, not a ref: the official
+    // Input does not forward one. During a keydown the DOM value is authoritative
+    // (a caller may have set it without React seeing a change event), and the
+    // draft state is the fallback when the event carries no target.
+    var live = (e && e.target && typeof e.target.value === 'string' ? e.target.value : text).trim()
     if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(function (h) { return Math.min(h + 1, filtered.length - 1) }); return }
     if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(function (h) { return Math.max(h - 1, 0) }); return }
     if (e.key === 'Enter') {
@@ -3501,11 +3505,8 @@ function Picker(props) {
 
   return createElement('div', { className: 'sa-picker' + (multi ? ' tag-input' : '') },
     tokens,
-    // Deliberately NATIVE: this composite owns keyboard/focus through a ref,
-    // and the platform Input atom does not forward one (its props are
-    // destructured, so `ref` never reaches the element).
-    createElement('input', {
-      ref: inputRef,
+    // The official Input (the composite no longer needs a ref: see `live` above).
+    createElement(UiInput, {
       value: multi ? text : (values[0] || ''),
       placeholder: props.placeholder || '',
       'aria-label': props.ariaLabel || props.placeholder || '',
@@ -7361,10 +7362,9 @@ function WorkflowSection(props) {
         h('div', { key: 'q-head', style: { fontWeight: '700', marginBottom: '6px' }, }, dshT('⏸ 工作流在等待回答')),
         h('div', { key: 'q-text', style: { fontSize: '13px', marginBottom: '8px' } }, d.pendingQuestion.text || ''),
         h('div', { key: 'q-row', style: { display: 'flex', gap: '8px' } }, [
-          h('input', {
-            key: 'q-input', placeholder: dshT('回答…'), value: state.answerText || '',
+          h(UiInput, {
+            key: 'q-input', className: 'wf-input', style: { flex: '1' }, placeholder: dshT('回答…'), value: state.answerText || '',
             onChange: function (e) { patch({ answerText: e.target.value }) },
-            style: inputStyle({ flex: '1' }),
             onKeyDown: function (e) { if (e.key === 'Enter') submitAnswer() },
           }),
           h('button', {
@@ -7398,10 +7398,10 @@ function WorkflowSection(props) {
     var children = [
       h('div', { key: 'head', style: { fontWeight: '700', marginBottom: '8px' } },
         isAmend ? dshT('改建工作流（已完成步骤走缓存，不重花调用）') : dshT('新建工作流')),
-      h('input', {
-        key: 'label', placeholder: dshT('名称（可选）'), value: ed.label,
+      h(UiInput, {
+        key: 'label', className: 'wf-input', placeholder: dshT('名称（可选）'), value: ed.label,
         onChange: function (e) { ed.label = e.target.value; patch({ editor: ed }) },
-        style: inputStyle(), readOnly: isAmend,
+        readOnly: isAmend,
       }),
       (!isAmend && state.liveSessions.length > 1)
         ? h('div', { key: 'parent-row', style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
@@ -7488,10 +7488,9 @@ function WorkflowSection(props) {
     var ed = state.savedEditor
     var children = [
       h('div', { key: 'head', style: { fontWeight: '700', marginBottom: '8px' } }, dshT('保存到工作库')),
-      h('input', {
-        key: 'name', placeholder: dshT('名称（字母数字 . _ -）'), value: ed.name,
+      h(UiInput, {
+        key: 'name', className: 'wf-input', placeholder: dshT('名称（字母数字 . _ -）'), value: ed.name,
         onChange: function (e) { ed.name = e.target.value; patch({ savedEditor: ed }) },
-        style: inputStyle(),
       }),
       h('select', {
         key: 'scope', value: ed.scope,
@@ -7501,10 +7500,9 @@ function WorkflowSection(props) {
         h('option', { key: 'g', value: 'global' }, dshT('全局')),
         h('option', { key: 'p', value: 'project' }, dshT('项目（随工作区 .dsh/）')),
       ]),
-      h('input', {
-        key: 'desc', placeholder: dshT('一句话描述（可选）'), value: ed.description,
+      h(UiInput, {
+        key: 'desc', className: 'wf-input', placeholder: dshT('一句话描述（可选）'), value: ed.description,
         onChange: function (e) { ed.description = e.target.value; patch({ savedEditor: ed }) },
-        style: inputStyle(),
       }),
       h('textarea', {
         key: 'script', placeholder: dshT('脚本'), value: ed.script,

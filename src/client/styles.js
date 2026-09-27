@@ -15,7 +15,11 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] { display: flex; flex-direction: column; width: 100%; gap: 14px; padding: 2px; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-primary, #222); max-height: calc(100vh - 140px); overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l2, rgba(200,200,210,0.4)) transparent; }',
   '[data-dsh-admin-section] *, [data-dsh-sa-section] *, [data-cha-section] *, [data-dsh-admin-todo] * { box-sizing: border-box; }',
   '[data-dsh-admin-section] .toolbar, [data-dsh-sa-section] .toolbar, [data-cha-section] .toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 20px 10px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 1px 2px rgba(0,0,0,0.02); }',
-  '[data-dsh-admin-section] .toolbar .input { height: 32px; padding: 0 12px; border-radius: 8px; border-color: var(--dsw-alias-border-l2, rgba(200,200,210,0.5)); }',
+  // Phase B3e follow-up: the workflow fields are the official Input now, so the
+// width/margin their inline style used to carry lives here (the atom's wrapper is
+// inline-flex and would otherwise shrink to content).
+'[data-dsh-admin-section] .wf-input { display: flex; width: 100%; margin-bottom: 8px; }',
+'[data-dsh-admin-section] .toolbar .input { height: 32px; padding: 0 12px; border-radius: 8px; border-color: var(--dsw-alias-border-l2, rgba(200,200,210,0.5)); }',
   '[data-dsh-admin-section] .search-wrap, [data-dsh-sa-section] .search-wrap { flex: 1.6; min-width: 0; position: relative; display: flex; align-items: center; height: 32px; }',
   '[data-dsh-admin-section] .search-wrap .input, [data-dsh-sa-section] .search-wrap .input { flex: 1; min-width: 0; padding-left: 30px; font-size: 13px; }',
   '[data-dsh-admin-section] .session-search { flex: 1; height: 32px; }',
