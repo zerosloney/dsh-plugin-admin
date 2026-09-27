@@ -29,7 +29,7 @@
  * Run: npm run smoke:real-host      (or: node scripts/smoke-real-host.mjs)
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -112,8 +112,17 @@ try {
   else ok('profile created (dump-config, no boot)', `DSH_HOME=${home}`)
 
   const added = cli(['plugin', '--profile', PROFILE, 'add', `link:${PLUGIN_DIR}`], env)
-  if (added.status !== 0) fail('plugin install', String(added.stderr || added.stdout).slice(-300))
-  else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
+  if (added.status !== 0) {
+    // dsh points at a pnpm diagnostics log instead of printing the cause: read its
+    // tail so a CI failure names the real reason (an annotation, not a hidden file).
+    const detail = String(added.stderr || added.stdout)
+    const logPath = /diagnostics: (\S+)/.exec(detail)?.[1]
+    let logTail = ''
+    if (logPath !== undefined && existsSync(logPath)) {
+      logTail = readFileSync(logPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-6).join(' | ')
+    }
+    fail('plugin install', `${detail.slice(-200)}${logTail === '' ? '' : ' :: pnpm log: ' + logTail}`)
+  } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
 
   const dumped = cli([PROFILE, '--dump-config'], env)
   const tree = String(dumped.stdout ?? '')
