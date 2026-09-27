@@ -447,6 +447,38 @@ const PROBES = [
       ['NamedEntries.insert throws instead of shadowing', t => t.includes('if (data.has(name)) throw this.duplicateError(name)')],
     ],
   },
+  {
+    id: 'slots service runtime (client)',
+    // Phase E reads ctx.slots.entries() to decide which panels the official UI
+    // has taken over. If this signature moves, auto-yield silently stops firing.
+    file: 'packages/client/ui-slots/src/index.ts',
+    checks: [
+      ['entries(key) returns the stored entries', t => t.includes('entries(key: string): readonly StoredEntry[] {')],
+      ['StoredEntry carries its registration options', t => t.includes('entries: readonly StoredEntry[]')],
+    ],
+  },
+  {
+    id: 'locale runtime (client)',
+    file: 'packages/client/locale/src/client/index.ts',
+    checks: [
+      ['register(ns, locale, dict) returns a disposer', t => t.includes('register(ns: string, locale: string, dict: LocaleDict): () => void')],
+      ['register accepts the { zh, en } form', t => t.includes('register(ns: string, localeOrDicts: string | Record<string, LocaleDict>, dict?: LocaleDict): () => void {')],
+      ['bind(ns) returns a translate function', t => t.includes('bind(ns: string): Translate {')],
+      ['subscribe(fn) returns an unsubscribe', t => t.includes('subscribe(fn: () => void): () => void {')],
+      ['setLocale(id) switches the language', t => t.includes('setLocale(id: string): void {')],
+    ],
+  },
+  {
+    id: 'webServer route contract (host)',
+    // The webhook endpoint rides a prefix route and its hardening reads the
+    // peer address off the Node request, so the route shape is load-bearing.
+    file: 'packages/host/webserver/src/index.ts',
+    checks: [
+      ['WebRouteKind covers prefix matching', t => t.includes("export type WebRouteKind = 'exact' | 'prefix'")],
+      ['WebRoute handler receives (req, res)', t => t.includes('handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>')],
+      ['prefix routes are stored by path', t => t.includes('private readonly prefixes = new Map<string, WebRoute>()')],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */
