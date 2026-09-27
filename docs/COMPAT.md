@@ -50,16 +50,20 @@ npm test
 DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 ```
 
-**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过 112 条契约与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
+**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过 124 条契约与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
 
-矩阵当前覆盖 **112 条契约**，其中与插件自身最新能力直接相关的几条：
+矩阵当前覆盖 **124 条契约**，其中与插件自身最新能力直接相关的几条：
 
 | 接缝 | 探测来源 | 谁在用 |
 |---|---|---|
 | `slots.entries(key)` 返回 `StoredEntry[]` | `packages/client/ui-slots/src/index.ts` | Phase E 的官方优先自动让位（读不到条目就不让位） |
+| `slots.inject(key, callback)` 的声明生命周期（已声明即同步运行、折叠后重跑） | `packages/client/ui-renderer/src/client/registry.ts` | 面板注入：**声明在 renderer 而不是 ui-slots 包里**，只查 ui-slots 会漏掉整条注入路径 |
+| `slots.register(options: ErasedOptions, component)` + `ErasedOptions.name/id/order/inject` | `packages/client/ui-slots/src/index.ts` | 面板注册（插件传的四个键） |
 | `locale.register/bind/subscribe/setLocale` | `packages/client/locale/src/client/index.ts` | Phase C 的客户端本地化与语言切换 |
 | `WebRoute { kind: 'prefix' \| 'exact', path, handler(req,res) }` | `packages/host/webserver/src/index.ts` | Webhook 入站端点（Phase F4 的加固读 `req.socket.remoteAddress`） |
+| `commands.register(definition)` + `CommandInvocation.agent/rawInput/attachments` | `packages/interaction/commands/src/index.ts` | 命令钩子（handler 解构这三个字段）与 `/workflow` 斜杠命令 |
 | `session/created` / `disposed` / `event` / `flush` 四个事件 + `Session.id/firstLiveSeq/header` | `packages/core/session/src/index.ts` | 用量台账的实时观察与 drain 时机（`lib/index.js:1756-1795`） |
+| `sessions.get(id)`（宿主存活判定）+ `ISessions.refresh()/refreshProjections()`（客户端侧栏） | `packages/core/session/src/index.ts`、`packages/api/session-controller/src/client/contract/sessions.ts` | steer 前的会话存活校验；删除会话后立即刷新侧栏 |
 | `llm.listProviders()` / `listModels(provider)` + `LlmProviderInfo` / `LlmModelInfo` | `packages/llm/llm/src/index.ts`、`types.ts` | 子代理面板的 provider / model 下拉（缺了就退化成空列表） |
 | `storageDomain.get(name)` → `table(name).delete(key)` | `packages/storage/storage-domain/src/index.ts`、`domain.ts` | 删除会话时立即清掉 projection cache（否则侧栏残留到刷新） |
 | `subagentModelSelection` 服务键 | `packages/subagent/tool-subagent/src/model-selection-settings.ts` | 子代理入口校验里的"模型选择是否可用" |
@@ -110,4 +114,4 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 - 客户端直接静态引用平台共享模块（`@deepseek-ai/dsh-client-ui-primitives` / `-ui-slots` / `-client-store`，见 `scripts/build-client.mjs` 的 `PLATFORM_BASELINE`）与 `ctx.locale` 服务：0.1.6 的宿主模块表里没有这些 seed，缺一项就是**整包加载失败**，而不是降级。既然实现里已经没有 0.1.6 的回落分支，"继续支持 0.1.6"就只是一句与代码不符的承诺，本次把口径改成事实。
 - 保留的"先探测、后降级"分支（如 `agentPresets.acquireScope` → `standingKeyFor`、`fiber.update` 能力探测、`workspaceRegistry.unarchiveSession` 的缺失告警）是**同一范围内的防御性探测**（0.1.7 的 rc 与正式版之间、以及未来版本删动词时用），不是 0.1.6 支持。
 - 升级一台 0.1.6 的宿主前请先升 dsh；插件在 0.1.6 上的失败模式是"客户端整包不加载"，不会有半可用状态。
-- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含 112 条接缝契约，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。
+- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含 124 条接缝契约，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。

@@ -135,4 +135,4 @@ for (const r of rows) {
 }
 const gaps = rows.filter((r) => !r.probed && r.stubs.length === 0)
 console.log(`\nno probe and no verify script (${gaps.length}): ${gaps.map((r) => r.name).join(', ')}`)
-console.log('\nCAVEAT: the probe column is a keyword screen and over-counts; the assessment quotes a\nstricter per-seam table produced by an evidence-cited hand pass. After the 2026-09-27 top-up\nthat table reads: probed 40 / stubbed-only 7 / neither 0 of 47 (the seven former gaps — llm,\nstorageDomain, subagentModelSelection and the four session/* events — now have probes).')
+console.log('\nCAVEAT: the probe column is a keyword screen and over-counts; the assessment quotes a\nstricter per-seam table produced by an evidence-cited hand pass. After the 2026-09-27 top-ups\nthat table reads: probed 41 / stubbed-only 6 / neither 0 of 47 — the twelve former gaps and\nshallow spots (llm, storageDomain, subagentModelSelection, the four session/* events,\nslots.inject, slots.register, commands.register, sessions.get/refresh) now have probes.')

@@ -615,6 +615,60 @@ const PROBES = [
       ['it is a mountable plugin, so the key exists once the host composes it', t => t.includes('export default SubagentModelSelectionConfig')],
     ],
   },
+  {
+    id: 'slots.inject lifetime contract (client panels)',
+    // src/client/impl.js:858 wraps every panel registration in
+    // `ctx.slots.inject(slot, () => ctx.slots.register(options, component))` and
+    // keeps the returned disposer. The declaration is NOT in the ui-slots package
+    // (that package owns register/entries): the renderer registry composes it, so
+    // the earlier ui-slots-only probe left the panel-injection path unchecked.
+    file: 'packages/client/ui-renderer/src/client/registry.ts',
+    checks: [
+      ['inject(key, callback) returns one disposer for the wait + active effect', t => t.includes('inject(key: keyof SlotMap & string, callback: () => SlotInjectionEffect): () => void {')],
+      ['the callback runs inside the caller\'s effect, so unload disposes the entry', t => t.includes('slots.inject(${JSON.stringify(key)}): declaration')],
+      ['a declaration collapse re-runs the callback (the panels rely on remount)', t => t.includes('unsubscribe = this._core.subscribeDeclaration(key, changed)')],
+    ],
+  },
+  {
+    id: 'slots.register signature + option keys (client panels)',
+    file: 'packages/client/ui-slots/src/index.ts',
+    checks: [
+      ['register(options, component) returns the entry disposer', t => t.includes('register(options: ErasedOptions, component: unknown): () => void {')],
+      ['ErasedOptions keeps the keys the panels pass (name/id/order/inject)', t => has('name: string', 'id?: string | undefined', 'order?: number | undefined', 'inject?: ((...args: any) => Record<string, unknown>) | undefined')(blockOf(t, 'interface ErasedOptions'))],
+    ],
+  },
+  {
+    id: 'commands.register signature + invocation fields',
+    // lib/command-hook-admin.js:737 registers user commands; its handler
+    // destructures `{ agent, rawInput, attachments }` (makeHandler), and
+    // lib/workflow-command.js reads `invocation.agent` / `invocation.rawInput`.
+    file: 'packages/interaction/commands/src/index.ts',
+    checks: [
+      ['register(definition) returns the command disposer', t => t.includes('register(definition: CommandDefinition): () => void {')],
+      ['CommandInvocation carries agent + rawInput + attachments', t => has('readonly agent: Agent', 'readonly rawInput: string', 'readonly attachments: readonly (ImageBlock | FileBlock)[]')(blockOf(t, 'export interface CommandInvocation'))],
+      ['CommandDefinition requires name + description + handler', t => has('readonly name: string', 'readonly description: string', 'readonly handler: (invocation: CommandInvocation) => CommandResult | Promise<CommandResult>')(blockOf(t, 'export interface CommandDefinition'))],
+    ],
+  },
+  {
+    id: 'sessions.get(id) liveness probe (host)',
+    // lib/index.js:1182 asks whether a session id is live before steering it.
+    file: 'packages/core/session/src/index.ts',
+    checks: [
+      ['the service key is sessions', t => t.includes("super(ctx, 'sessions')")],
+      ['get(id) returns the live Session or undefined', t => t.includes('get(id: SessionId): Session | undefined {')],
+    ],
+  },
+  {
+    id: 'client sessions refresh (sidebar nudge after delete)',
+    // src/client/impl.js:687 nudges the sidebar through the CLIENT sessions
+    // service (key `sessions`, injected by ui-session) so a deleted session does
+    // not linger until reload.
+    file: 'packages/api/session-controller/src/client/contract/sessions.ts',
+    checks: [
+      ['ISessions.refresh() refreshes the host-authoritative list', t => t.includes('refresh(): Promise<void>')],
+      ['ISessions.refreshProjections(sessionId) reloads one projection', t => t.includes('refreshProjections(sessionId: SessionId): Promise<void>')],
+    ],
+  },
 ]
 
 /* ------------------------------- runner ---------------------------------- */

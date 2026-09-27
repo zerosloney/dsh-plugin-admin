@@ -171,7 +171,7 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 - `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
 
 
-- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（112 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（124 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。

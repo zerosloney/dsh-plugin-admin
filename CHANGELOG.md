@@ -8,6 +8,17 @@
 
 ### Changed
 
+- **补齐"钉得比用到的浅"的 5 条接缝探针**（接缝矩阵 112 → **124 条契约**）：这几条原本有探针或替身，但**没钉住插件真正调用的那个成员**：
+  - `slots.inject(key, callback)` 的声明生命周期 —— 声明**不在 `packages/client/ui-slots` 包里**，而由 renderer 组合（`packages/client/ui-renderer/src/client/registry.ts`），所以此前只查 ui-slots 等于整条面板注入路径没人看着；现在钉住"已声明即同步运行、折叠后重跑、返回 disposer"三条语义。
+  - `slots.register(options: ErasedOptions, component)` 的签名 + 插件实际传的四个选项键（`name` / `id` / `order` / `inject`）。
+  - `commands.register(definition)` 的签名 + `CommandInvocation.agent/rawInput/attachments`（命令钩子的 handler 解构这三个字段，`/workflow` 读 `agent`/`rawInput`）。
+  - `sessions.get(id)`（宿主侧的会话存活判定）与客户端 `ISessions.refresh()/refreshProjections()`（删除会话后刷新侧栏）。
+  - 逐条伪证：7 个漂移用例全部被捕获（含"改掉 `ErasedOptions.order`"与"改掉 `CommandInvocation.agent`"这类成员级改动），随后 checkout 复原并核对干净。
+
+  顺带确认两件此前只是推测的事：`slots.inject` **确实存在**（dsh 自家 40+ 个客户端插件都在用，只是声明在 renderer），客户端 `sessions.refresh()` **也确实在 `ISessions` 契约里**（`packages/api/session-controller/src/client/contract/sessions.ts:109`）—— 两处都不是"调了不存在的 API"。`docs/COMPAT.md` 接缝表补上这几行并把条数对齐 124。
+
+### Changed
+
 - **补上 7 条零覆盖接缝的探针**（接缝矩阵 95 → **112 条契约**）：这 7 条此前**既无上游探针、也无替身用例** —— 上游改名或挪走时不会有任何一条测试变红，表现为静默失效：
   - `session/created` / `disposed` / `event` / `flush` 四个事件，以及观察者真正读的 `Session.id` / `firstLiveSeq` / `header`（用量台账的实时观察与 drain 时机，`lib/index.js:1756-1795`）；
   - `llm.listProviders()` / `listModels(provider)` 与 `LlmProviderInfo` / `LlmModelInfo` 两个形状（子代理面板的 provider/model 下拉，缺了退化成空列表）；
