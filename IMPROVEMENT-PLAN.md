@@ -1,9 +1,7 @@
 # dsh-plugin-admin 改进方案
 
 > 状态：**已执行**——A→G 各阶段主体工作完成（16 轮推进，每轮 `npm test` 全绿）。剩余项见文末"仍开放"。
-> 基线校验：`npm test` 全绿（exit 0，tsc / oxlint / 产物一致性 / 33 个脚本）；`integration-check` **88 条契约**探针通过；`npm run test:matrix` 支持多 checkout。
-
-> 基线校验：`npm test` 全绿（exit 0，tsc / oxlint / 产物一致性 / 33 个脚本）；`integration-check` **88 条契约**探针通过；`npm run test:matrix` 支持多 checkout。
+> 基线校验：`npm test` 全绿（exit 0，tsc / oxlint / 产物一致性 / 34 个脚本）；`integration-check` **93 条契约**探针通过；`npm run test:matrix` 支持多 checkout。
 
 ## 执行状态（滚动更新）
 

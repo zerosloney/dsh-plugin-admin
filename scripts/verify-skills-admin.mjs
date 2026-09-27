@@ -510,6 +510,10 @@ await checkAsync('8b. an unusable preset is REPORTED, the roster survives, and t
   assert.equal(scopes[2].label, '预设 vanished', 'a preset without a display name falls back to its id')
   assert.deepEqual(view.skills.map((s) => s.name), ['from-preset'], 'one unusable preset never sinks the roster')
   assert.ok(!calls.some((options) => options.scope?.standing === 'unreadable'), 'the unreadable preset is never mounted')
+  // The preset branch used to return `complete: true` for both failures above,
+  // so "the roster is complete" and "two layers were never read" held at once.
+  // The sibling session-scope path already flipped it; this one does now too.
+  assert.equal(view.complete, false, 'a preset layer that was never read cannot read as a complete roster')
 
   // Cap: the panel reads at most MAX_PRESETS presets and says so.
   const manyPresets = Array.from({ length: 11 }, (_, index) => ({ id: 'p' + String(index), name: '预设' + String(index) }))

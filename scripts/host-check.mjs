@@ -160,6 +160,26 @@ assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
 assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.workflowAdmin, 'workflowAdmin service provided (merged)')
+/* ---------- every audited method exists on the mounted service ----------
+ * Phase F3: `auditService` skips a row naming a method the service does not
+ * have, so `pluginAdmin: [..., 'update']` promised a trail entry that could
+ * never be written. The wrapped service keeps its own enumerable keys, so the
+ * mounted object is exactly what the table must describe.
+ */
+{
+  const { AUDITED_METHODS } = await import(new URL('../lib/audit-log.js', import.meta.url).href)
+  for (const [namespace, methods] of Object.entries(AUDITED_METHODS)) {
+    const service = fakeCtx.provided?.[namespace]
+    assert.ok(service !== undefined, `${namespace} is provided (AUDITED_METHODS lists it)`)
+    for (const method of methods) {
+      assert.equal(
+        typeof service[method],
+        'function',
+        `${namespace}.${method} exists on the mounted service (AUDITED_METHODS row)`,
+      )
+    }
+  }
+}
 // One unified descriptor per package: all fourteen namespaces ride a single
 // registration (a second `typert.register` under 'dsh-plugin-admin' would
 // have thrown in the emulated registry above).
@@ -179,7 +199,7 @@ assert.deepEqual(
  * method the host no longer mounts fails here instead of at click time).
  */
 {
-  const { RPC_MANIFEST, RPC_OPTIONAL_WIRES, RPC_DYNAMIC_CLIENT_TARGETS, RPC_HOST_ONLY_TARGETS } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
+  const { RPC_MANIFEST, RPC_OPTIONAL_WIRES, RPC_DYNAMIC_CLIENT_TARGETS, RPC_DYNAMIC_CLIENT_PAYLOADS, RPC_HOST_ONLY_TARGETS } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
   const mounted = new Map(typertRegistrations[0].invocations.map((i) => [`${i.namespace}/${i.method}`, i]))
   const manifestTargets = new Set()
   for (const [ns, entry] of Object.entries(RPC_MANIFEST)) {
@@ -298,9 +318,27 @@ assert.deepEqual(
     clientSites.get(target).push({ kind, keys })
   }
   const clientTargets = new Set(clientSites.keys())
+  // Targets whose payload is assembled at runtime: the key-by-key required-wire
+  // check below cannot see them (kind 'expr'), so they must be declared in
+  // RPC_DYNAMIC_CLIENT_PAYLOADS instead of silently escaping the gate.
+  const dynamicPayloadTargets = new Set(
+    [...clientSites].filter(([, sites]) => sites.some((site) => site.kind === 'expr')).map(([target]) => target),
+  )
   const errors = []
   for (const target of clientTargets) {
     if (!manifestTargets.has(target)) errors.push(`client calls ${target} but the manifest does not declare it`)
+  }
+  const declaredDynamicPayloads = new Set(RPC_DYNAMIC_CLIENT_PAYLOADS.map((entry) => entry.target))
+  for (const target of dynamicPayloadTargets) {
+    if (!declaredDynamicPayloads.has(target)) {
+      errors.push(`${target} passes a payload assembled at runtime — the required-wire check cannot see it; `
+        + 'declare it in RPC_DYNAMIC_CLIENT_PAYLOADS (with the wires verified by hand) or build a literal payload')
+    }
+  }
+  for (const entry of RPC_DYNAMIC_CLIENT_PAYLOADS) {
+    if (!manifestTargets.has(entry.target)) errors.push(`RPC_DYNAMIC_CLIENT_PAYLOADS entry ${entry.target} is stale (not in the manifest)`)
+    else if (!dynamicPayloadTargets.has(entry.target)) errors.push(`RPC_DYNAMIC_CLIENT_PAYLOADS entry ${entry.target} no longer passes a runtime payload — drop the exemption`)
+    else if (typeof entry.why !== 'string' || entry.why.trim() === '') errors.push(`RPC_DYNAMIC_CLIENT_PAYLOADS entry ${entry.target} needs a reason`)
   }
   for (const [target, sites] of clientSites) {
     if (!manifestTargets.has(target)) continue

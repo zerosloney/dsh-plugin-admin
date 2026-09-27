@@ -3,6 +3,39 @@
 结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
 
 ## [Unreleased]
+### Fixed（审查修复：F1 锁的作用域、审计写失败、版本拒读的爆炸半径）
+
+三条都是本次改动**自己引入或声称已解决**的问题，独立复现后修复：
+
+- **F1 的锁没盖住「读」**（`lib/patch-utils.js`）：锁只包住「备份 + rename」，读-改-写整体仍在锁外，两个实例照样各读、各改、各写 —— 正是它声称解决的那个丢失更新。新增 `mutatePatch(patchPath, mutate)` / `mutateProfilePatch(profileDir, mutate)`：**锁住 读 → 变换 → 写**（`mutate` 契约为同步 —— 持跨进程锁时不能 await）。6 个文件、21 处 patch 写入点（index / command-hook / web-search / subagent / webhook / overlay）全部迁到它；`writePatch` 保留给"内容不是读来的"场景，并在文档里写明它保护不了读。
+- **固定临时文件名**（新增 `tempPathFor`）：`<目标>.dsh-admin.tmp` 是所有写入共享的，实例 A 的 rename 会把实例 B 刚写的载荷装进去，B 自己的 rename 再抛 `ENOENT`（已复现：`# A-edit` 落成 `# B-edit`，B 报错）。现在每次写入用 `pid.计数器` 唯一名，且临时文件写在**锁内**；同类的固定名（cron/webhook 的 `.wt-tmp`/`.wh-tmp`、台账 `.ul-tmp`、审计与 `package.json` 的 `.dsh-admin.tmp`、subagent 的 `.tmp-subagent-admin`、命令钩子的 `.cha-tmp`、引擎的 `.tmp`）一并换成 `tempPathFor`。
+- **rename 的瞬时共享冲突**（新增 `atomicRename`）：Windows 会在文件刚落地时（杀毒/索引器/监视器仍持有句柄）短暂拒绝 rename，随后同一句 rename 立刻成功 —— 本次跑闸门时就撞到过一次（`EPERM ... rename '<patch>.3388.7.dsh-admin.tmp' -> '<patch>'`，同一份代码随后连跑三次全绿）。所有原子替换改走 `atomicRename`：对 `EPERM`/`EACCES`/`EBUSY` 最多重试 5 次（10ms 递增退避），其余 errno 立即上抛（重试是安全的：rename 失败时源文件仍在原地）。
+- **审计写失败会改变动作结果**（`lib/audit-log.js`）：`await audit.record(...)` 没有兜错，而 `auditLogPath` 只校验「非空字符串」—— 指向不存在的目录时 `appendFileSync` 抛 ENOENT。已复现「动作已执行、RPC 却报失败」（`cronAdmin/runNow` 会让用户重点一次、任务跑两遍），`.catch` 分支还会再记一次并把原始错误换成审计错误。现在两个分支都吞掉审计自身的失败（动作结果不受影响、原始错误保留），并在写入前 `mkdirSync(dirname, { recursive: true })`。
+- **版本拒读在挂载期抛出 → 整个插件挂不上**（`lib/cron-admin.js` / `lib/webhook-triggers.js`）：拒绝读发生在 `readTasksFile`/`readRulesFile` 里，而挂载读路径也走它们，`apply()` 末尾才是 typert 注册 —— 一个 `{"version":2}` 的文件会让 14 个命名空间与所有面板一起消失。现在**写路径的守卫保持 fail-loud**（绝不改写读不懂的文件），挂载 / 文件监听 / 入站请求的读路径降级为空集 + 一条 warn（`isStoreVersionRefusal` 按 `code` 判定，重复的模块实例也能分类）；webhook 端点因此对每次投递回 401，属 fail-closed。
+- 回归覆盖：`verify-file-lock` 增 **两个真实子进程并发 mutate 同一 patch 零丢失**（对旧实现会失败，已验证可伪证）与临时文件卫生；`verify-audit-log` 增 **审计写失败不改动作结果**（同样可伪证）与目录自动创建；`verify-store-version` 把「挂载必抛」的旧契约改为「挂载降级 + 写路径仍拒」，并新增 webhook 挂载降级与 `code` 分类断言。
+
+### Fixed（审查第一档：webhook 加固收口、web-search/skills 拒绝语义、参数可选化）
+
+- **入站闸门改为 fail-closed**（`lib/webhook-triggers.js`）：原判定 `caller !== null && !isLoopbackAddress(caller)` 在**传输层报不出对端地址时直接放行** —— 仓库自带的 28 条老测试 `mockReq` 没有 `socket`，全程走的正是这条放行路径。现在只有**证实的 loopback** 才放行（`caller === null` 同样 403），`webhookAllowRemote: true` 是文档化的逃生口；闸门同时挪到方法/Content-Type 检查**之前**，远端扫描器不再拿到 405/415 这种路由存在性信号。老测试的 mock 补上真实 socket（并支持 `remote: null` 复现拒绝路径）。
+- **`retry-after` 改为两条预算里更晚的那个**：调用方被请求预算与认证失败预算**同时**约束，而原实现取两个桶里最早的时间戳 —— 一次新请求 + 两次旧失败会告诉客户端"再等 5 秒"，实际封锁还有 55 秒。
+- **限速表不再无界增长**：`prune` 排空的桶直接 `delete`（原实现 `set(key, [])` 让每个见过的地址永久留两条），并在跟踪数超过 512 时清扫整窗已排空的键；两个 push 调用点改为重新挂回数组（否则时间戳会推进一个已脱离表外的数组）。新增只读 `trackedCallers()` 供测试钉住回收行为。
+- **401/429/封锁留痕**：此前 10 次错密钥投递产生**零日志零历史** —— 封锁要防的攻击在系统里不可观测。现在每个来源、每个窗口**一条日志 + 一条交付历史**（不是每请求一条，否则攻击者能刷爆它触发的日志），认证成功后才重置去重，于是下一次失败会重新上报。
+- **`secretMatches` 两个尖角**：`secretMatches('', '')` 不再返回 `true`（"空 secret 授权空猜测"这条只能靠 HTTP 处理器里的一次判断挡住，而 provider 路由不经过它）；非字符串返回 `false` 而不是抛 `TypeError`。
+- **runtime 规则回调也拒绝空 secret**：`rule.secret === ''` 原本只在 HTTP 处理器里成立，provider 路由（如 GitHub 桥）直达该回调，旧版本存下的空 secret 规则会照样执行。
+- **web-search 三个拒绝语义**：`pnpm remove` 失败不再被吞成 `{ok:true, state:'row-stripped-only'}`（挂载行已删、依赖仍在，面板却报成功）；`patch.size === 0` 的早返回改为**同样受"先安装"前置约束**（此前未挂载的 opt-in provider 空提交也报成功）；非标量字段值被拒（原先 `String({})` 会把字面量 `"[object Object]"` 存成 API key —— RPC 的 `entry` schema 刻意不枚举字段类型，这里是唯一防线）。
+- **skills 的完整性语义**：预设作用域"组合不可用"或读失败时返回 `complete: false`（原先返回 `true`，导致"名册完整"与"整层没读到"同时成立；同文件的会话作用域分支早已翻 false）。
+- **一个 wire 从必填改回可选**：`webSearchAdmin/saveConfig.expectedRevision`（服务把它当可选：非数字即"不做版本守卫"）。契约表随之变为 **87 = 81 必填 + 6 可选**，`verify-rpc-schema` 的独立期望表同步。
+- 四个新增 verify 脚本注册 `process.on('exit')` 清理：断言抛错时不再把临时目录留在 `%TEMP%`。
+
+### Fixed（审查修复：审计覆盖面、D2 闸门、矩阵 SKIP）
+
+- **审计覆盖面与声明不符**：`AUDITED_METHODS` 缺 `webSearchAdmin` 行 —— 该模块已把 recorder 交给 `auditService`，但包装器在缺行时**静默原样返回**，于是 `install`/`uninstall`/`setActive`/`saveConfig`（含 API key 写入）一条都不落盘，而 CHANGELOG 声称已接入。反向也有一处：`workspaceAdmin` / `subagentAdmin` 两行是**死配置**（`apply*` 从未收到 recorder），`overlayAdmin/searchEnable`（改写启动关键的 profile patch）根本没接。现在：补 `webSearchAdmin` / `overlayAdmin` 两行、把 recorder 传给 workspace / subagent / overlay、删掉从未存在的 `pluginAdmin:'update'` 行，并让**未知 namespace 直接抛错**而不是空转。
+- **D2 的必填闸门此前不可能失败**：`verify-rpc-schema` 的「必填 vs 可选」断言把描述符（由 `RPC_OPTIONAL_WIRES` 派生）与同一张表比较 —— 往表里加一条 wire 仍然通过。改为对着**独立的字面量契约**（5 条可选 wire + 82 必填计数）断言；任一侧漂移即失败。
+- **运行时载荷的盲区变成显式清单**：`host-check` 只能逐键校验字面量载荷，动态拼接的载荷此前只校验 target 就放弃了必填检查。新增 `RPC_DYNAMIC_CLIENT_PAYLOADS`（3 条，各带理由）：**新的运行时载荷会让 host-check 失败**，直到有人把它列出（或改写字面量），而已失效的豁免也会失败。
+- **多版本矩阵的 SKIP 不再等同于成功**：`check-matrix` 现在分别报告 probed / skipped；当清单是显式给出的（`DSH_CHECKOUTS`/`DSH_CHECKOUT`）或运行在 CI 下时，**探测到 0 个 checkout 即失败**（此前打印 `OK: N checkout(s) probed` 并退出 0，路径写错也看不出来）。
+- **CI 里接缝探针不再空转**（`.github/workflows/ci.yml` + `integration-check`）：`test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；**CI 下找不到 checkout 直接失败**（本地仍按 SKIP，保持无 checkout 的机器可跑）。新增 `seam-matrix` 作业：同一 pin 与 `master` 两档跑 `npm run test:matrix`，`master` 作为上游漂移的预警行。`.gitignore` 随之忽略 `.dsh-checkout/`/`.dsh-release/`/`.dsh-main/`。
+- 回归覆盖：`verify-audit-log` 新增**双向覆盖扫描**（"接了 recorder 却没行" 与 "有行却没接线" 都会失败 —— 两个方向都已伪证）；`host-check` 新增**受审方法存在性断言**（`pluginAdmin:'update'` 这类死行会被点名，已伪证）。
+
 ### Changed（剩余两项收口：可迁移的原生控件 + 参数必填化）
 
 **1. 还能迁移的原生控件都迁了；不能迁的有了确凿依据。**
@@ -27,7 +60,7 @@
 
 - 校验器是**手写的、零依赖**（`lib/rpc-schema.js`，7 个 schema：`text` / `scalar` / `number` / `boolean` / `textList` / `entry` / `json`）。注册表只要求 `typeSymbol` 非空 + `create()` 返回带 `parse` 的对象，所以不必引入 zod，也不必生成类型。
 - **刻意不比服务更严**：id 是字符串、entry 是对象、sessionIds 是字符串数组 —— **不枚举 entry 的字段**。服务本来就接受调用方形状的 draft，猜一个字段集只会拒掉合法载荷。
-- **省略语义不变**：所有参数仍 `acceptsUndefined: true`（src-json 时代任何参数都可缺省）。收紧必填需要逐调用点审计，不能靠猜。
+- **省略语义随后收紧了**（见上文"参数从「一律可省」收紧为「默认必填」"）：本节当时的结论是「所有参数仍 `acceptsUndefined: true`」，最终提交把 82 条改成了必填 —— 本节保留为当时的记录，**以最终一节为准**。
 - 单一真相表多一列：`RPC_PARAM_SCHEMAS`（66 个带参方法），host-check 断言它**完整**（每个 wire 都有 schema）且**忠实**（无孤儿行、wire 顺序一致）；`scripts/verify-rpc-schema.mjs` 另证每个 schema 接受自身样本、拒绝错误类型。
 
 **E3 — 面板级开关走 profile 配置行。** 新增 `config.panels`：`{ <面板 id>: 'auto' | 'on' | 'off' }`。
@@ -88,9 +121,9 @@
 - `scripts/verify-store-version.mjs`（7 项）：分类（v1/相等/更新/非法）、迁移链顺序与盖版本、缺环报 `unmigratable`、三类错误类型化，以及**三条写路径各自的拒绝**（cron 挂载点与写入、webhook 保存、台账落盘）。脚本按仓库既有做法在结尾硬退出（webhook 挂载的 `fs.watch` 会吊住事件循环）。
 ### Added（Phase F1：跨进程写保护）
 
-- **`withFileLock`（`lib/patch-utils.js`）**：`writePatch` 的"备份 + rename"现在跑在一把跨进程建议锁里。在此之前，同一 profile 上的两个 dsh 实例会各自读 patch、各自改、各自 rename —— 后写者胜，另一处修改**静默丢失**。
+- **`withFileLock` + `mutatePatch` / `mutateProfilePatch`（`lib/patch-utils.js`）**：跨进程建议锁现在盖住 **读 → 变换 → 写**（第一版只包住「备份 + rename」，读在锁外，等于没防住丢失更新 —— 见上方 Fixed）。在此之前，同一 profile 上的两个 dsh 实例会各自读 patch、各自改、各自 rename —— 后写者胜，另一处修改**静默丢失**。
 - 三条刻意的性质：**失败开放**（等 3 秒后照写：原子 rename 仍保证文件不撕裂，而拒绝写入比丢一次更新更糟）；**过期可回收**（锁超过 30 秒、或持有者 pid 已死 → 抢占，崩溃的实例不会让 profile 卡死）；**同步**（用 `Atomics.wait` 真睡眠，不空转 CPU）。
-- `scripts/verify-file-lock.mjs`（4 项）：正常段落返回值不被吞、锁必被释放、过期锁被回收、**活锁只延迟不拒绝**（用父进程 pid 造锁，断言等待 ≥2.5s 后仍然写入）。
+- `scripts/verify-file-lock.mjs`（7 项）：正常段落返回值不被吞、锁必被释放、过期锁被回收、**活锁只延迟不拒绝**（用父进程 pid 造锁，断言等待 ≥2.5s 后仍然写入），以及**两个真实子进程并发 mutate 同一 patch 零丢失**（F1 的验收场景）、"每次写入独立临时名、写完不留残file"、`atomicRename` 搬家成功且对非瞬时错误（ENOENT）立即上抛。
 
 ### Added（Phase F3：特权动作审计日志）
 

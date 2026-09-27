@@ -65,8 +65,17 @@ const checkAsync = async (name, fn) => {
 check('secretMatches compares equal secrets and rejects others', () => {
   assert.equal(secretMatches('s3cret', 's3cret'), true)
   assert.equal(secretMatches('s3cret', 'wrong'), false)
-  assert.equal(secretMatches('', ''), true)
+  // `'' === ''` is NOT a match. It used to be, and that made "an empty stored
+  // secret authorizes an empty guess" true — the endpoint's own
+  // `rule.secret === ''` guard was the only thing standing in the way, and a
+  // provider route (or a future caller) does not go through that guard.
+  assert.equal(secretMatches('', ''), false)
   assert.equal(secretMatches('a', ''), false)
+  // Non-strings return false instead of throwing: `createHash().update(undefined)`
+  // raised a TypeError out of the comparison.
+  assert.equal(secretMatches(undefined, 'x'), false)
+  assert.equal(secretMatches('x', undefined), false)
+  assert.equal(secretMatches(null, null), false)
 })
 
 check('renderPromptTemplate substitutes $VARS and keeps unknown tokens', () => {
@@ -257,12 +266,17 @@ function mockRes() {
   }
 }
 
-function mockReq({ method = 'POST', url = '/webhook-triggers/ci-fail', headers = {}, chunks = [] }) {
+function mockReq({ method = 'POST', url = '/webhook-triggers/ci-fail', headers = {}, chunks = [], remote = '127.0.0.1' }) {
   const done = chunks.join('')
   return {
     method, url, headers,
     complete: true,
     resume() {},
+    // A real request always carries the peer address; the F4 loopback gate fails
+    // CLOSED on a transport that cannot report one, so these fixtures must look
+    // like the local delivery they are testing (pass `remote: null` to exercise
+    // the unknown-peer refusal).
+    socket: remote === null ? {} : { remoteAddress: remote },
     async *[Symbol.asyncIterator]() {
       if (done !== '') yield Buffer.from(done, 'utf8')
     },

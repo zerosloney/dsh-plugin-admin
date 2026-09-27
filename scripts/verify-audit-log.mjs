@@ -10,7 +10,7 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +34,9 @@ const check = async (name, fn) => {
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-admin-audit-'))
 const file = join(dir, 'admin-audit.jsonl')
+// Registered on exit as well as at the end: an assertion throws before the
+// trailing rmSync runs, and a temp directory leaked per failing run adds up.
+process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 await check('summarizeArgs redacts sensitive values by key and caps the detail', () => {
   const summary = summarizeArgs([{ id: 'ci', secret: 'super-secret-value', nested: { apiKey: 'sk-123' } }])
@@ -97,6 +100,77 @@ await check('a service without a recorder keeps its plain methods', async () => 
   assert.deepEqual(await service.upsert(), { ok: true }, 'no wrapping without a recorder')
 })
 
+await check('a failing trail write never changes the action it records', async () => {
+  // A recorder that always rejects stands in for a full disk, a read-only path
+  // or a directory that cannot be created. The privileged action has ALREADY
+  // happened by then, so its result must survive — rejecting would report e.g.
+  // cronAdmin/runNow as failed although the task fired, and the user would
+  // click again and run it twice.
+  const failing = { record: async () => { throw new Error('ENOSPC: no space left on device') } }
+  const service = {
+    upsert: async (entry) => ({ ok: true, entry }),
+    remove: async () => { throw new Error('the action itself failed') },
+  }
+  auditService(service, 'cronAdmin', failing)
+  assert.deepEqual(
+    await service.upsert({ id: 'x' }),
+    { ok: true, entry: { id: 'x' } },
+    'a successful action still resolves when the trail cannot be written',
+  )
+  await assert.rejects(
+    () => service.remove('x'),
+    /the action itself failed/,
+    'the action\'s own error survives — it is not replaced by the audit error',
+  )
+})
+
+await check('the recorder creates a missing parent directory instead of failing every action', async () => {
+  const nested = join(dir, 'nested', 'deeper', 'audit.jsonl')
+  const log = createAuditLog({ path: nested })
+  await log.record({ action: 'pluginAdmin/install', ok: true })
+  assert.ok(existsSync(nested), 'the configured auditLogPath directory is created on demand')
+  assert.equal(log.read(1)[0].action, 'pluginAdmin/install', 'and the entry landed')
+})
+
+await check('the wired namespaces and the AUDITED_METHODS rows are the same set', () => {
+  // Both directions of the gap this check exists for: a namespace that hands
+  // auditService a recorder but has no row used to be a silent no-op
+  // (webSearchAdmin shipped unaudited that way), and a row with no wiring is
+  // dead config promising coverage that cannot happen (workspaceAdmin /
+  // subagentAdmin did exactly that).
+  const libDir = join(here, '..', 'lib')
+  const wired = new Set()
+  const unresolved = []
+  for (const name of readdirSync(libDir).filter((entry) => entry.endsWith('.js'))) {
+    const text = readFileSync(join(libDir, name), 'utf8')
+    // `(?<!function )` skips the declaration itself; only call sites count.
+    for (const match of text.matchAll(/(?<!function )auditService\([^,]+,\s*([A-Za-z_$][\w$]*|'[^']+')\s*,/g)) {
+      const arg = match[1]
+      if (arg.startsWith("'")) { wired.add(arg.slice(1, -1)); continue }
+      const declaration = new RegExp('const\\s+' + arg + "\\s*=\\s*'([^']+)'").exec(text)
+      if (declaration === null) unresolved.push(name + ': ' + arg)
+      else wired.add(declaration[1])
+    }
+  }
+  assert.deepEqual(unresolved, [], 'every auditService call site resolves to a namespace literal')
+  assert.deepEqual(
+    [...wired].sort(),
+    Object.keys(AUDITED_METHODS).sort(),
+    'the wired namespaces match the AUDITED_METHODS rows',
+  )
+})
+
+await check('a namespace without a table row fails loud instead of wrapping nothing', async () => {
+  const log = createAuditLog({ path: join(dir, 'unlisted.jsonl') })
+  const service = { doThing: async () => ({ ok: true }) }
+  assert.throws(
+    () => auditService(service, 'notInTheTable', log),
+    /no AUDITED_METHODS row/,
+    'a privileged namespace cannot ship unaudited',
+  )
+  assert.deepEqual(await service.doThing(), { ok: true }, 'and the service is left untouched by the refusal')
+})
+
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-audit-log OK: ' + results.length + ' checks (recording, redaction, compaction)')
+console.log('verify-audit-log OK: ' + results.length + ' checks (recording, redaction, compaction, resilience, coverage)')

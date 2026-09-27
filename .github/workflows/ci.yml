@@ -25,6 +25,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The seam probe (integration-check) reads dsh's TypeScript SOURCES, so it
+      # needs a checkout to read: without one it skips, and a skipped gate
+      # reports exactly the same green as an enforced one — which is how
+      # upstream drift reaches a release unnoticed. The ref is the release this
+      # plugin is verified against (docs/COMPAT.md); the repository is public,
+      # so the default token suffices. Nothing is installed or built in it.
+      - name: Check out the pinned dsh checkout (seam probe)
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.1.7-rc.2
+          path: .dsh-checkout
+          fetch-depth: 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -34,5 +48,45 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run self-check + host-check
+      - name: Run the gate (tsc / lint / artifact check / 34 scripts / 93 seam contracts)
+        env:
+          DSH_CHECKOUT: ${{ github.workspace }}/.dsh-checkout
         run: npm test
+
+  # The multi-version matrix runs the same probe over several checkouts, so
+  # "supported dsh versions" is a loop over directories instead of a promise in
+  # a doc. It needs no dependencies of its own (integration-check only reads
+  # TypeScript sources), so this job is two shallow checkouts plus one node run.
+  # `dsh master` is the early-warning row: routine upstream refactors are
+  # expected to pass, a contract change must trip here first.
+  seam-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check out the pinned dsh release
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.1.7-rc.2
+          path: .dsh-release
+          fetch-depth: 1
+
+      - name: Check out dsh master (early warning)
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          path: .dsh-main
+          fetch-depth: 1
+
+      - name: Probe every checkout
+        env:
+          # An explicit list makes "nothing to probe" a failure, so a typo here
+          # cannot pass as a green matrix (see scripts/check-matrix.mjs).
+          DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-main
+        run: npm run test:matrix

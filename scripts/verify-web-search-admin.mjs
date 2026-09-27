@@ -105,6 +105,8 @@ assert.equal(descriptors.length, 7, 'seven web-search-admin invocations register
 // `runPnpm` stub is what keeps the install/uninstall scenarios from
 // hitting the real registry (private @deepseek-ai packages would 404).
 let pnpmCalls = []
+/** Set to make the stub's `remove` fail (scenario 5b: a failed uninstall). */
+let pnpmRemoveFails = false
 const runPnpmStub = async (profileDir, args) => {
   pnpmCalls.push({ profileDir, args })
   // Simulate a successful install/uninstall: produce a short output,
@@ -127,6 +129,7 @@ const runPnpmStub = async (profileDir, args) => {
     return ''
   }
   if (args[0] === 'remove' && args[1] !== undefined) {
+    if (pnpmRemoveFails) throw new Error('ERR_PNPM_FAKE_REMOVE: registry unreachable')
     const spec = args[1]
     const at = spec.lastIndexOf('/')
     const target = at === -1
@@ -240,6 +243,21 @@ const list5 = await service.list()
 const exa5 = list5.providers.find((p) => p.id === 'exa')
 assert.equal(exa5.installed, false, 'exa reports installed=false after uninstall')
 console.log('scenario 5 OK: uninstall refuses bundled + unknown; strips cordis row + npm dep')
+
+// ---------- Scenario 5b: a failed pnpm remove is NOT a successful uninstall --
+// The mount row is already gone by the time pnpm runs, so swallowing its failure
+// left the provider sitting in package.json while the panel reported success
+// ("已安装但未挂载"). It must surface as a rejection the panel renders.
+pnpmCalls = []
+pnpmRemoveFails = true
+await assert.rejects(
+  () => service.uninstall('perplexity'),
+  /已移除 .* 挂载行，但 pnpm remove .* 失败/,
+  'a failed pnpm remove is reported instead of reported as success'
+)
+pnpmRemoveFails = false
+assert.equal(pnpmCalls.length, 1, 'pnpm was still attempted')
+console.log('scenario 5b OK: a failed pnpm remove surfaces as a failed uninstall')
 
 // ---------- Scenario 6: end-state patch sanity -----------------------------
 const finalPatch = readFileSync(patchPath, 'utf8')
@@ -488,6 +506,21 @@ const saved16 = await service.saveConfig('deepseek-official', { model: '' }, [])
 assert.deepEqual(saved16, { ok: true, source: 'row', changed: [], restartRequired: false }, 'an empty submission reports nothing changed')
 assert.equal(readFileSync(patchPath, 'utf8'), before16, 'and writes nothing')
 console.log('scenario 16 OK: field validation, unknown ids, and empty-means-unchanged')
+
+// ---------- Scenario 16b: an EMPTY save keeps the same preconditions --------
+// The empty-patch early return used to answer ok:true before `writeRowConfig`
+// ever ran, so a save on a provider that is not even mounted looked successful.
+await assert.rejects(
+  () => service.saveConfig('perplexity', { searchRecency: '' }, []),
+  /先点「📥 安装」/,
+  'an empty save on an unmounted opt-in provider refuses exactly like a non-empty one'
+)
+// A non-scalar field value must not become "[object Object]" in the patch: the
+// RPC `entry` schema deliberately does not enumerate field types, so this
+// coercion is the only guard — including for the secret fields.
+await assert.rejects(() => service.saveConfig('exa', { baseURL: {} }, []), /必须是字符串、数字或布尔值/, 'an object in a string field is refused')
+await assert.rejects(() => service.saveConfig('exa', { apiKey: ['sk-1'] }, []), /必须是字符串、数字或布尔值/, 'an array in a secret field is refused')
+console.log('scenario 16b OK: empty saves keep the mount precondition; object values are refused')
 
 // ---------- Scenario 17: the settings-backed path (live, revision-guarded) --
 // A provider that registers a dsh settings namespace (the DeepSeek package

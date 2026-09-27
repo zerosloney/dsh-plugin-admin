@@ -11,10 +11,11 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { withFileLock } from '../lib/patch-utils.js'
+import { atomicRename, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -29,6 +30,9 @@ const check = async (name, fn) => {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-admin-lock-'))
+// Also on exit: a failing check throws before the trailing rmSync (the
+// cross-process check spawns children, whose temp files must go too).
+process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ } })
 const target = join(dir, 'cordis.patch.yml')
 writeFileSync(target, '# original\n', 'utf8')
 const lockPath = target + '.dsh-admin.lock'
@@ -74,6 +78,75 @@ await check('a live foreign lock delays the write but never refuses it (fail-ope
   rmSync(lockPath, { force: true })
 })
 
+await check('two processes mutating one patch lose no update (the F1 acceptance case)', async () => {
+  const target = join(dir, 'raced.patch.yml')
+  writeFileSync(target, '# seed\n', 'utf8')
+  const ROUNDS = 12
+  const worker = join(dir, 'lock-worker.mjs')
+  // The worker appends one marker per round through the locked read-modify-write.
+  // A lock that covered only the rename (the first cut of F1) would let the two
+  // processes read the same revision and one whole round of edits would vanish.
+  writeFileSync(worker, [
+    `import { mutatePatch } from ${JSON.stringify(new URL('../lib/patch-utils.js', import.meta.url).href)}`,
+    'const [target, marker, rounds] = process.argv.slice(2)',
+    'for (let i = 0; i < Number(rounds); i += 1) {',
+    '  mutatePatch(target, (lines) => {',
+    "    const next = lines.filter((line) => line.trim() !== '')",
+    "    next.push(marker + '-' + i)",
+    '    return { next, value: true }',
+    '  })',
+    '}',
+    '',
+  ].join('\n'), 'utf8')
+  const run = (marker) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [worker, target, marker, String(ROUNDS)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(marker + ' worker exited ' + code + ': ' + stderr))))
+  })
+  await Promise.all([run('A'), run('B')])
+  const lines = readFileSync(target, 'utf8').split('\n').filter((line) => line.trim() !== '')
+  for (let i = 0; i < ROUNDS; i += 1) {
+    assert.ok(lines.includes('A-' + i), 'process A\'s edit ' + i + ' survived')
+    assert.ok(lines.includes('B-' + i), 'process B\'s edit ' + i + ' survived')
+  }
+  assert.equal(lines.length, ROUNDS * 2 + 1, 'every append landed exactly once (seed + 2x' + ROUNDS + ')')
+})
+
+await check('each write uses its own temp path and leaves none behind', async () => {
+  const target = join(dir, 'temp-hygiene.yml')
+  writeFileSync(target, '# one\n', 'utf8')
+  const first = tempPathFor(target)
+  const second = tempPathFor(target)
+  assert.notEqual(first, second, 'two writes never share a temp path')
+  assert.ok(first.startsWith(target), 'the temp file sits beside the file it replaces')
+  writePatch(target, ['# two'])
+  writePatch(target, ['# three'])
+  assert.deepEqual(
+    readdirSync(dir).filter((name) => name.includes('.dsh-admin.tmp')),
+    [],
+    'no temp file survives a completed write',
+  )
+  assert.equal(readFileSync(target, 'utf8'), '# three\n', 'the last write won')
+})
+
+await check('the retrying rename moves the file and still fails loud on a real error', async () => {
+  const from = join(dir, 'rename-source.txt')
+  const to = join(dir, 'rename-target.txt')
+  writeFileSync(from, 'payload\n', 'utf8')
+  atomicRename(from, to)
+  assert.ok(!existsSync(from), 'the source is consumed')
+  assert.equal(readFileSync(to, 'utf8'), 'payload\n', 'the content moved')
+  // A missing source is NOT a transient sharing violation: it must surface
+  // immediately instead of being retried into a 5-attempt delay.
+  assert.throws(
+    () => atomicRename(join(dir, 'never-existed.txt'), to),
+    (error) => error.code === 'ENOENT',
+    'a non-retryable rename error keeps its code',
+  )
+})
+
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, cross-process, temp hygiene, rename)')

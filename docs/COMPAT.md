@@ -20,7 +20,7 @@
 | 命令（文件化 CRUD） | `ui-commands`（客户端命令 API，非文件管理） | 增量 | `ctx.commands` + `$DSH_HOME/commands` + fs.watch | verify-command-hooks |
 | 钩子（hooks.json / 双桥） | 宿主 hooks + claude-code / codex 桥（无 UI） | **独占** | `hooks.json` + patch 行 + ⚠ `fiber.update` | verify-hooks-codex-bridge |
 | 定时任务 | `ui-schedule` + `packages/schedule`（会话级任务） | 增量（宿主级 cron，语义不同） | `~/.dsh/cron-tasks.json` + 每任务 timer | verify-cron-admin / verify-cron-panel |
-| Webhook 入站规则 | `packages/webhook`、`webhook-github`（无规则管理 UI） | **独占** | prefix route + `x-webhook-secret` + 去重历史 | verify-webhook-triggers |
+| Webhook 入站规则 | `packages/webhook`、`webhook-github`（无规则管理 UI） | **独占** | prefix route + `x-webhook-secret` + 去重历史；**默认仅本机**（非 loopback 与"报不出对端地址"的传输层都 403，远程需 `webhookAllowRemote`） | verify-webhook-triggers / verify-webhook-hardening |
 | 工作流（journal / 续跑 / 工作库） | `workflow` + `tool-workflow` + `ui-workflow-run` | 增量 | `node:vm` realm + `$DSH_HOME/workflows` | verify-workflow-* |
 | 历史会话（批删 / 导出 / 体检 / 置顶） | `ui-workspace`（会话管理）、`session-query` | 增量 | `sessionPersistence` + ⚠ `workspaceRegistry` 归档集 | host-check |
 | Web 搜索（provider 切换） | `ui-settings-web-search`（DeepSeek provider 配置） | 增量（exa / perplexity 装卸） | profile patch row + `settings.mutate`（有 settings 命名空间时） | verify-web-search-admin |
@@ -45,12 +45,14 @@
 # 单个 checkout（默认取 $DSH_CHECKOUT，再退回同级 deepseek-harness）
 npm test
 
-# 多版本矩阵：逗号/分号分隔；没有 dsh 的目录记为 SKIP（不算失败），
+# 多版本矩阵：逗号/分号分隔；隐式回退时没有 dsh 的目录记为 SKIP（不算失败），
 # 任何一个存在的 checkout 契约漂移则整体失败。
 DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 ```
 
-矩阵当前覆盖 **88 条契约**，其中与插件自身最新能力直接相关的几条：
+**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过 93 条契约与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
+
+矩阵当前覆盖 **93 条契约**，其中与插件自身最新能力直接相关的几条：
 
 | 接缝 | 探测来源 | 谁在用 |
 |---|---|---|
@@ -82,4 +84,4 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 ## 版本策略
 
 - 自 v1.25.0 起**不再支持 dsh 0.1.6**：客户端可直接使用平台共享模块（`PLATFORM_MODULES`）与 `ctx.locale` 服务，不再保留 0.1.6 的回落分支。
-- 计划中的 CI 矩阵：`DSH_CHECKOUT` 指向 0.1.7-rc.2 / main 两档，跑 `host-check` + `integration-check`（Phase G2）。
+- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含 93 条接缝契约，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。

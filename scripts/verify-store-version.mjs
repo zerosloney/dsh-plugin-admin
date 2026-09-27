@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { StoreVersionError, assertStoreReadable, readStore } from '../lib/store-version.js'
+import { StoreVersionError, assertStoreReadable, isStoreVersionRefusal, readStore } from '../lib/store-version.js'
 import { createUsageLedger, readUsageLedger } from '../lib/usage-ledger.js'
 import { applyCronAdmin } from '../lib/cron-admin.js'
 import { applyWebhookAdmin } from '../lib/webhook-triggers.js'
@@ -32,6 +32,9 @@ const check = async (name, fn) => {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-admin-store-'))
+// Also on exit: a failing check throws before the trailing rmSync (and this
+// script mounts cron/webhook watchers, so a leak would also hold files open).
+process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 await check('classification: missing version is v1, equal is ok, newer is refused', () => {
   assert.equal(readStore({ entries: [] }, { current: 1 }).status, 'ok', 'unversioned reads as v1')
@@ -76,24 +79,39 @@ await check('the usage ledger refuses a file from a newer plugin', () => {
   assert.ok(Array.isArray(readUsageLedger(ledger)), 'a current file still reads (entry filtering is the ledger\'s own business)')
 })
 
-await check('the cron service refuses a newer tasks file at mount and on write', async () => {
+await check('a newer tasks file degrades the mount instead of aborting the plugin, and still refuses writes', async () => {
   const tasks = join(dir, 'cron-tasks.json')
+  const warnings = []
   const makeCtx = () => {
     const ctx = {
       baseUrl: 'http://127.0.0.1:1',
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      logger: { info: () => {}, warn: (message) => warnings.push(String(message)), error: () => {} },
       get: () => undefined,
       effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
       provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
     }
     return ctx
   }
-  // A newer file fail-loud at MOUNT (the initial load is unguarded on purpose:
-  // serving a misread mirror and rewriting it is worse than a refused mount).
+  // A newer file must NOT abort applyCronAdmin. The mount is ONE step of the
+  // plugin's apply(), and the typert registration that publishes every RPC
+  // namespace comes after it — throwing here would take all fourteen
+  // namespaces and every panel down for one store's version. The refusal
+  // belongs where it protects the file: the mirror degrades to empty (misread
+  // data is never served) and every mutation guard still throws (a build that
+  // cannot read the file never rewrites it).
   writeFileSync(tasks, JSON.stringify({ version: 99, tasks: [] }))
-  assert.throws(
-    () => applyCronAdmin(makeCtx(), { enqueue: (op) => Promise.resolve().then(op), settings: { cronTasksPath: tasks } }),
+  const refusedCtx = makeCtx()
+  assert.doesNotThrow(
+    () => applyCronAdmin(refusedCtx, { enqueue: (op) => Promise.resolve().then(op), settings: { cronTasksPath: tasks } }),
+    'a newer store no longer aborts the mount',
+  )
+  const degraded = await refusedCtx.provided.cronAdmin.list()
+  assert.deepEqual(degraded.tasks, [], 'the mirror degrades to empty instead of serving a misread store')
+  assert.ok(warnings.some((message) => message.includes('文件版本')), 'the refusal is reported to the operator once')
+  await assert.rejects(
+    () => refusedCtx.provided.cronAdmin.upsert({ id: 'x', cron: '* * * * *', action: { mode: 'steer', sessionId: 's' } }),
     (error) => error.code === 'STORE_VERSION_NEWER',
+    'a write against the newer file is still refused',
   )
   // A current file mounts, and a newer one written afterwards stops the WRITE
   // path (the file watcher keeps the previous mirror by design).
@@ -107,6 +125,50 @@ await check('the cron service refuses a newer tasks file at mount and on write',
     (error) => error.code === 'STORE_VERSION_NEWER',
     'a write against a newer file is refused',
   )
+})
+
+await check('the refusal classifies by code, so a duplicated module instance still downgrades', () => {
+  assert.equal(isStoreVersionRefusal(new StoreVersionError('测试', 3, 1)), true, 'the typed error classifies')
+  assert.equal(isStoreVersionRefusal(Object.assign(new Error('x'), { code: 'STORE_VERSION_NEWER' })), true, 'the code alone classifies')
+  assert.equal(isStoreVersionRefusal(Object.assign(new Error('disk full'), { code: 'ENOSPC' })), false, 'other failures stay loud')
+  assert.equal(isStoreVersionRefusal(undefined), false)
+  assert.equal(isStoreVersionRefusal(null), false)
+})
+
+await check('a newer rules file degrades the webhook mount instead of aborting the plugin', async () => {
+  // applyWebhookAdmin resolves the profile from ctx.baseUrl (patch-utils'
+  // profileDirOf), so the fixture needs a package.json beside the anchor.
+  const profileDir = join(dir, 'profile-degraded')
+  mkdirSync(join(profileDir, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture', dependencies: {} }))
+  const rulesPath = join(dir, 'webhook-rules-newer.json')
+  const historyPath = join(dir, 'webhook-history-newer.json')
+  writeFileSync(rulesPath, JSON.stringify({ version: 99, rules: [] }))
+  writeFileSync(historyPath, JSON.stringify({ version: 1, history: [], seen: [] }))
+  const warnings = []
+  const disposers = []
+  const ctx = {
+    baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
+    logger: { info: () => {}, warn: (message) => warnings.push(String(message)), error: () => {} },
+    get: () => undefined,
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d },
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+  }
+  assert.doesNotThrow(() => applyWebhookAdmin(ctx, {
+    enqueue: (op) => Promise.resolve().then(op),
+    runPnpm: null,
+    reconcileBundles: null,
+    settings: { webhookTriggersPath: rulesPath, webhookHistoryPath: historyPath },
+  }), 'a newer rules file no longer aborts the mount')
+  const listed = await ctx.provided.webhookAdmin.list()
+  assert.deepEqual(listed.rules, [], 'no misread rule is served')
+  assert.ok(warnings.some((message) => message.includes('文件版本')), 'the refusal is reported to the operator once')
+  await assert.rejects(
+    () => ctx.provided.webhookAdmin.saveRule({ id: 'probe', enabled: true, secret: 'topsecret-key-16chars', action: { mode: 'steer', sessionId: 's', steer: true } }),
+    (error) => error.code === 'STORE_VERSION_NEWER',
+    'saving over the newer file is still refused',
+  )
+  for (const dispose of disposers) { try { dispose() } catch { /* idempotent */ } }
 })
 
 await check('the webhook rules save refuses a newer file (write path is guarded)', async () => {

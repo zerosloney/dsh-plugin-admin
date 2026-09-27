@@ -29,7 +29,19 @@ const here = dirname(fileURLToPath(import.meta.url))
 const CHECKOUT = process.env.DSH_CHECKOUT ?? join(here, '..', '..', 'deepseek-harness')
 
 if (!existsSync(join(CHECKOUT, 'package.json'))) {
-  console.log(`integration-check SKIP: no dsh checkout at ${CHECKOUT} (set DSH_CHECKOUT to probe the real contracts)`)
+  // On a developer machine without a checkout this is a legitimate SKIP. Under
+  // CI it is NOT: a probe that skipped every contract reports the same green as
+  // one that enforced them, which is exactly how upstream drift reaches a
+  // release unnoticed. CI must check the pinned ref out first (see
+  // .github/workflows/ci.yml) and hand its path over in DSH_CHECKOUT.
+  const message = `integration-check: no dsh checkout at ${CHECKOUT}`
+  if (process.env.CI !== undefined && process.env.CI !== '') {
+    console.error(message)
+    console.error('  CI must check out the pinned dsh ref and set DSH_CHECKOUT before running the gate — '
+      + 'a skipped seam probe enforces nothing (see .github/workflows/ci.yml).')
+    process.exit(1)
+  }
+  console.log(`${message} — SKIP (set DSH_CHECKOUT to probe the real contracts)`)
   process.exit(0)
 }
 

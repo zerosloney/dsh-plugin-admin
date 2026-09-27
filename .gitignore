@@ -11,6 +11,12 @@ out.txt
 .probe/
 *.tmp
 
+# local dsh checkouts for the seam probe / version matrix (same paths CI checks
+# out — see .github/workflows/ci.yml)
+.dsh-checkout/
+.dsh-release/
+.dsh-main/
+
 # cbx local tool state
 .cbx/
 

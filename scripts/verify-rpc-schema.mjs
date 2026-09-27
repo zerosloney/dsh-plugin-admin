@@ -7,13 +7,34 @@
  *   - every declared schema accepts its own sample and rejects the wrong TYPE;
  *   - every manifest wire resolves to a schema, and every schema row is faithful
  *     (same wires, same order) so a new method cannot ship unvalidated;
- *   - omission stays legal (acceptsUndefined), i.e. src-json's semantics survive.
+ *   - the required/optional split is the SHIPPED contract, asserted against the
+ *     literal list below rather than re-reading the table the descriptors are
+ *     derived from (that self-comparison could never fail).
  *
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
 import { RPC_MANIFEST, RPC_OPTIONAL_WIRES, RPC_PARAM_SCHEMAS, invocationsFor, paramSchema } from '../lib/rpc-manifest.js'
 import { RPC_SCHEMA_NAMES, RpcSchemaError, schemaFor } from '../lib/rpc-schema.js'
+
+/**
+ * The wires the browser half legitimately omits, spelled out INDEPENDENTLY of
+ * `RPC_OPTIONAL_WIRES`. Every entry needs a reason in the manifest; widening the
+ * table without widening this list (or vice versa) is a wire silently changing
+ * from required to optional — the one D2 regression that must not pass.
+ */
+const EXPECTED_OPTIONAL = Object.freeze({
+  'workflowAdmin/amendRun': Object.freeze(['spec']),
+  'workflowAdmin/resumeRun': Object.freeze(['spec']),
+  'workflowAdmin/listSaved': Object.freeze(['spec']),
+  'workspaceAdmin/create': Object.freeze(['title']),
+  'workspaceAdmin/insertBefore': Object.freeze(['beforeWorkspaceId']),
+  'webSearchAdmin/saveConfig': Object.freeze(['expectedRevision']),
+})
+/** Wires the gateway must reject when omitted: 87 declared − 6 optional. */
+const EXPECTED_REQUIRED = 81
+/** The optional wire count is the contract too (6). */
+const EXPECTED_OPTIONAL_COUNT = 6
 
 const results = []
 const check = (name, fn) => {
@@ -59,33 +80,47 @@ check('a factory is fresh per call (the gateway calls create() per decode)', () 
   assert.doesNotThrow(() => b.parse({ id: 'y' }))
 })
 
-check('a wire is required unless the optional table says otherwise', () => {
+check('the required/optional split is the shipped contract, not a re-read of the table', () => {
+  // Two independent facts are asserted against each other here:
+  //   a) the DESCRIPTORS the gateway enforces (derived from RPC_OPTIONAL_WIRES);
+  //   b) EXPECTED_OPTIONAL — the literal list above.
+  // Comparing (a) to the table it is derived from (the previous version of this
+  // check) could never fail, so a wire silently turning optional passed.
+  assert.deepEqual(
+    Object.keys(RPC_OPTIONAL_WIRES).sort(),
+    Object.keys(EXPECTED_OPTIONAL).sort(),
+    'RPC_OPTIONAL_WIRES declares exactly the expected optional targets',
+  )
   let required = 0
   let optional = 0
   for (const [namespace, entry] of Object.entries(RPC_MANIFEST)) {
-    // The DESCRIPTOR is what the gateway enforces, so assert against it — not
-    // against a second reading of the same table.
     for (const descriptor of invocationsFor(namespace)) {
-      const optionalWires = RPC_OPTIONAL_WIRES[namespace + '/' + descriptor.method] ?? []
+      const target = namespace + '/' + descriptor.method
+      const expectedOptional = EXPECTED_OPTIONAL[target] ?? []
+      assert.deepEqual(
+        RPC_OPTIONAL_WIRES[target] ?? [],
+        expectedOptional,
+        `${target} optional wires match the shipped contract`,
+      )
       for (const parameter of descriptor.parameters) {
-        const shouldBeOptional = optionalWires.includes(parameter.wire)
+        const shouldBeOptional = expectedOptional.includes(parameter.wire)
         assert.equal(
           parameter.acceptsUndefined,
           shouldBeOptional,
-          `${namespace}/${descriptor.method} ${parameter.wire} omission matches the optional table`,
+          `${target} ${parameter.wire} omission matches the shipped contract`,
         )
         if (shouldBeOptional) optional += 1; else required += 1
       }
-      for (const wire of optionalWires) {
+      for (const wire of expectedOptional) {
         assert.ok(entry.methods[descriptor.method].params.includes(wire),
-          `${namespace}/${descriptor.method} optional wire ${wire} is a declared wire`)
+          `${target} optional wire ${wire} is a declared wire`)
       }
     }
   }
-  // The count is the contract: a new method adds required wires unless it
+  // The counts are the contract: a new method adds required wires unless it
   // deliberately declares one optional (and then says why, next to the table).
-  assert.ok(required > 80, 'most wires are required (' + required + ')')
-  assert.ok(optional >= 5 && optional <= 12, 'a handful are optional (' + optional + ')')
+  assert.equal(required, EXPECTED_REQUIRED, 'required wire count (' + required + ')')
+  assert.equal(optional, EXPECTED_OPTIONAL_COUNT, 'optional wire count (' + optional + ')')
 })
 check('every manifest wire resolves to a schema and rides a strict codec', () => {
   let wires = 0

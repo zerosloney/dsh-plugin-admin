@@ -12,10 +12,12 @@
  *   node scripts/check-matrix.mjs            # falls back to $DSH_CHECKOUT, then
  *                                            # the sibling deepseek-harness
  *
- * A directory with no dsh package.json is reported as SKIPPED and does not fail
- * the run (the same contract integration-check uses on machines without a
- * checkout). Any PRESENT checkout that drifts fails the whole matrix: that is
- * the point of the matrix.
+ * A directory with no dsh package.json is reported as SKIPPED. The skip is only
+ * forgiven when the checkout list was IMPLICIT (the sibling fallback): if the
+ * list came from DSH_CHECKOUTS / DSH_CHECKOUT — or we are running under CI —
+ * then probing zero checkouts is a misconfiguration, and "0 probed, no drift"
+ * must never read as a green gate. Any PRESENT checkout that drifts fails the
+ * whole matrix: that is the point of the matrix.
  */
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -25,6 +27,11 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const checker = join(here, 'integration-check.mjs')
 
+// An explicit list (or CI) makes "nothing to probe" a failure; the implicit
+// sibling fallback keeps a machine without a checkout green, exactly like
+// integration-check does on its own.
+const explicit = process.env.DSH_CHECKOUTS !== undefined || process.env.DSH_CHECKOUT !== undefined
+const requireProbe = explicit || (process.env.CI !== undefined && process.env.CI !== '')
 const raw = process.env.DSH_CHECKOUTS ?? process.env.DSH_CHECKOUT ?? join(here, '..', '..', 'deepseek-harness')
 const checkouts = raw
   .split(/[,;]/)
@@ -39,9 +46,12 @@ if (checkouts.length === 0) {
 
 const results = []
 let failed = 0
+let probed = 0
+let skipped = 0
 for (const checkout of checkouts) {
   const labelled = checkout + (existsSync(join(checkout, 'package.json')) ? '' : ' (no dsh checkout)')
   if (!existsSync(join(checkout, 'package.json'))) {
+    skipped += 1
     results.push('➖ ' + labelled)
     continue
   }
@@ -51,6 +61,7 @@ for (const checkout of checkouts) {
   })
   const output = String(run.stdout ?? '') + String(run.stderr ?? '')
   if (run.status === 0) {
+    probed += 1
     const summary = /integration-check OK: (\d+) contracts/.exec(output)
     results.push('✅ ' + checkout + ' — ' + (summary === null ? 'ok' : summary[1] + ' contracts'))
     continue
@@ -68,4 +79,15 @@ if (failed > 0) {
   console.error('check-matrix FAILED: ' + failed + ' of ' + checkouts.length + ' checkout(s) drifted')
   process.exit(1)
 }
-console.log('check-matrix OK: ' + checkouts.length + ' checkout(s) probed, no contract drift')
+if (probed === 0) {
+  const why = explicit
+    ? 'the requested DSH_CHECKOUTS/DSH_CHECKOUT path(s) hold no dsh checkout (typo?)'
+    : 'no dsh checkout found (set DSH_CHECKOUTS, or run where the sibling deepseek-harness exists)'
+  if (requireProbe) {
+    console.error('check-matrix FAILED: 0 checkout(s) probed — ' + why)
+    process.exit(1)
+  }
+  console.log('check-matrix OK: 0 checkout(s) probed, ' + skipped + ' skipped — ' + why + ' (implicit fallback, not a failure)')
+  process.exit(0)
+}
+console.log('check-matrix OK: ' + probed + ' checkout(s) probed, ' + skipped + ' skipped, no contract drift')

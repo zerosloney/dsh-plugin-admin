@@ -97,7 +97,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 6. 持久化与调度：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像）；调度器每任务一个 timer，触发前重读的是**内存镜像**（面板写入即时刷新它，外部文件编辑则等一次防抖），并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer。**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。
 7. 注意：cron 的 create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时，需先在「Webhook」页签安装并挂载 → 重启。
 8. Webhook 规则：id（小写字母开头）+ secret（新建规则自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑时留空=保持已存值）+ 可选事件名 + 动作——steer：选目标在线会话（插队/排队）；create：填 workspacePath（绝对路径）+ agentPreset + permissionPreset + 可选 model。
-9. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。
+9. 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）；create 模式需先一键安装并挂载 `@deepseek-ai/dsh-webhook` 运行时 → 重启。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（要收远程投递需显式开启 `webhookAllowRemote`）；401/429 与封锁会各留一条日志和一条交付历史。
 10. 测试：🧪 触发测试——注入测试消息并记录交付历史；面板底部查看历史（含失败原因）。
 11. 持久化：交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合落盘 `$DSH_HOME/webhook-history.json`（原子写），**重启 dsh 后历史保留、重发的同 delivery id 依旧去重**；容量可用插件 config 行 `webhookHistoryCap` 调整。
 12. 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
@@ -171,7 +171,7 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 - `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
 
 
-- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（78 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（93 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。
