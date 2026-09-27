@@ -2,7 +2,7 @@
 
 Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — ten management surfaces inside dsh's built-in settings UI: **Extensions**, **Skills**, **MCP Servers**, **Subagents**, **Commands**, **Hooks**, **Automation (Cron Tasks + Webhook Triggers + Workflows)**, **Web & Sessions (Session History + Web Search)**, **Usage Dashboard** and **Todo Dock** — that is three standalone settings pages (Web & Sessions 27 / Usage Dashboard 28 / Automation 29), six tabs inside the shell's own plugin pages (Extensions inside **Plugins**; Skills, MCP Servers, Subagents, Commands and Hooks inside **Built-in Plugins**), and one floating panel above the composer (Todo Dock). Zero dsh imports — everything rides the live Cordis Context; every write is atomic + serialized, and a missing dsh service degrades that one panel instead of failing the mount.
 
-> Panel copy ships in Simplified Chinese and English (the 🌐 button in the Extensions toolbar; it follows the browser language and falls back to the Chinese source text, so it never renders a broken string).
+> Panel copy ships in Simplified Chinese and English and now **rides dsh's own locale service** (`ctx.locale`, Phase C): the 🌐 switch in the Extensions toolbar sets the language of the **whole interface**, and these panels repaint live — no reload. When the host serves no locale service it falls back to "follow the browser language, fall back to the Chinese source text", so it never renders a broken string.
 
 **npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.24.1 · MIT
 **CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
@@ -139,11 +139,38 @@ pnpm dsh plugin --profile web add dsh-plugin-admin
 pnpm dsh --profile web
 ```
 
+## Source layout and build
+
+`lib/client.js` is a **build product** (since Phase B1). Its sources live in `src/client/`:
+
+| File | Responsibility |
+|---|---|
+| `src/client/index.js` | Entry: exports `apply` and `inject` (the only keys the dsh module loader reads) |
+| `src/client/impl.js` | Panel implementations, slot registrations and their shared helpers (one module scope) |
+| `src/client/i18n.js` | The zh/en table and `dshT()` |
+| `src/client/styles.js` | The four injected stylesheets and their install functions |
+
+Rebuild the artifact after every source edit:
+
+```sh
+npm run build:client          # write lib/client.js
+npm run build:client --check  # verify the artifact matches the sources (run by npm test)
+```
+
+The host half (`lib/*.js`) is committed directly and has no build step.
+
 ## Tests
 
 ```sh
-npm test   # 28 scripts: self-check / host-check / verify-* / integration-check
+npm test   # three static gates + 28 scripts: self-check / host-check / verify-* / integration-check
 ```
+
+Static gates (run first; the suite aborts on the first failure):
+
+- `check:types`: `tsc --noEmit` (`checkJs`) over `lib/**` and `src/client/**`; `lib/client.js` is excluded because it is a product.
+- `check:lint`: oxlint.
+- `build:client --check`: fails when `lib/client.js` no longer matches `src/client/**`, so a forgotten rebuild cannot ship.
+
 
 - `integration-check.mjs` probes the real dsh checkout source for contract drift (78 assertions across every admin RPC namespace and the workflow engine seams).
 - `verify-i18n.mjs` asserts that the English copy table and every `dshT()` call site cover each other (so a new string cannot ship untranslated) and that no English value keeps Chinese text.
@@ -153,9 +180,9 @@ npm test   # 28 scripts: self-check / host-check / verify-* / integration-check
 
 ## Adjustable config keys (plugin config row)
 
-`resolvePluginConfig` recognizes **14 validated keys** (first table) and **11 pass-through keys** (second table). A mistyped validated key **throws at mount** (fail-loud — it never silently degrades); the pass-through keys are **not validated at all** and are not described by the exported `Config` schema, so a wrong type is silently ignored and the default applies (e.g. `commandsDir: 5` neither errors nor works) — a known asymmetry.
+`resolvePluginConfig` recognizes **25 keys, all validated**: **14 tunables** (first table) and **11 pass-through overrides** (second table). Any mistyped value — tunable or override — **throws at mount** (fail-loud, never a silent degradation), including overrides such as `commandsDir: 5`, which used to be inert. Two rules share that contract: an **undocumented key** does not throw (the same row may carry keys other readers own) but is **warned once per process** (`warnUnknownConfigKeys`, logged as `plugin-admin: unknown config key(s) ignored: xxx — see README 可调配置键`), so a typo is no longer silent; and an **absent override stays undefined**, leaving every sub-module its own historical default, so existing behaviour is unchanged. The exported `VALIDATED_CONFIG_KEYS` / `PASSTHROUGH_CONFIG_KEYS` are these two tables in code, and `host-check` asserts the former equals the key set `resolvePluginConfig` actually fills in — a new knob that forgets to register fails that test instead of reading as unknown at mount.
 
-**Validated (14)** — resolved by `resolvePluginConfig` (`lib/index.js`); the `Config` schema runs through the same function:
+**Validated tunables (14)** — resolved by `resolvePluginConfig` (`lib/index.js`); the `Config` schema runs through the same function:
 
 | Group | Key | Default | Meaning |
 |---|---|---|---|
@@ -174,7 +201,7 @@ npm test   # 28 scripts: self-check / host-check / verify-* / integration-check
 | Usage ledger | `usageSnapshotIntervalMs` | 3600000 | Background snapshot interval (ms); `0` disables the sweep |
 | Usage ledger | `usageLedgerCap` | 2000 | Ledger rows kept (100–100000; above 100000 the mount throws), evicting the oldest `lastSeenAt` first |
 
-**Pass-through (11)** — spread through the same config row untouched and read by each sub-module; absent means the default below:
+**Validated pass-through overrides (11)** — spread through the same config row untouched and read by each sub-module (an absent key stays undefined, so each module keeps the default below); type and range are validated at mount too:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -185,12 +212,15 @@ npm test   # 28 scripts: self-check / host-check / verify-* / integration-check
 | `cronTasksPath` | `$DSH_HOME/cron-tasks.json` | Cron task store |
 | `webhookTriggersPath` | `$DSH_HOME/webhook-triggers.json` | Webhook rule store |
 | `webhookHistoryPath` | `$DSH_HOME/webhook-history.json` | Delivery history (shares the file with the dedup set) |
-| `webhookHistoryCap` | 200 | Delivery-history entries (1–10000; out of range falls back to the default) |
+| `auditLogPath` | `$DSH_HOME/admin-audit.jsonl` | Privileged-action audit trail (Phase F3: append-only, compacts past 2000 lines; secret-like arguments are redacted **by key name**) |
+| `webhookAllowRemote` | `false` | Whether the webhook endpoint accepts **non-loopback** deliveries (Phase F4: local-only by default; remote needs an explicit opt-in) |
+| `webhookRateLimit` | `60` | Inbound requests per caller per 60s (over the budget: 429 + `retry-after`; failed authentications lock out separately at 10/min) |
+| `webhookHistoryCap` | 200 | Delivery-history entries (1–10000; out of range throws at mount) |
 | `projectCommands` | enabled | `false` disables per-project `.agents` command registration |
 | `projectHooks` | enabled | `false` disables project hook interception |
-| `projectHooksTrust` | `confirm` | Only `allow-all` auto-allows; anything else means `confirm` |
+| `projectHooksTrust` | `confirm` | `allow-all` auto-allows, `confirm` asks; any other value throws at mount |
 
-> The path keys (`commandsDir` / `hooksPath` / … / `cronTasksPath`) are override points for tests and unusual deployments; only `usageLedgerCap` is additionally clamped by `lib/usage-ledger.js`'s own budget.
+> The path keys (`commandsDir` / `hooksPath` / … / `cronTasksPath`) are override points for tests and unusual deployments and must be non-empty strings; only `usageLedgerCap` is additionally clamped by `lib/usage-ledger.js`'s own budget.
 
 ## Security posture
 

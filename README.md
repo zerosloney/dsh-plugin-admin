@@ -2,7 +2,7 @@
 
 dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力——**扩展插件**、**技能**、**MCP 服务器**、**子智能体**、**命令**、**钩子**、**自动化（定时任务 + Webhook + 工作流）**、**Web 与会话（历史会话 + Web 搜索）**、**用量仪表盘**、**待办清单**——十个管理入口（3 个独立设置页：Web 与会话 27 / 用量仪表盘 28 / 自动化 29；6 个页签：扩展插件在「插件」页内，技能、MCP 服务器、子智能体、命令、钩子 在「内置插件」页内；1 个输入框上方浮层：待办清单）。零 dsh 导入，全部骑运行时 Cordis Context；写回统一原子写 + 串行队列，缺服务一律降级不挂死。
 
-> 面板文案内置简体/English 双语（扩展插件面板工具栏 🌐 切换，跟随浏览器语言，回退中文原文，永不出坏）。
+> 面板文案内置简体/English 双语，并且**接在 dsh 自己的语言服务上**（`ctx.locale`，Phase C）：工具栏 🌐 切换的是**整个界面**的语言，面板即时重绘、无需刷新；宿主未提供该服务时回落到「跟随浏览器语言 + 中文原文兜底」，永不出坏。
 
 **npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.24.1 · MIT
 
@@ -138,11 +138,38 @@ pnpm dsh --profile web
 ```
 
 
+## 源码结构与构建
+
+浏览器半 `lib/client.js` 是**构建产物**（Phase B1 起）：源码在 `src/client/`——
+
+| 文件 | 职责 |
+|---|---|
+| `src/client/index.js` | 入口：导出 `apply` 与 `inject`（dsh 模块加载器只读这两个键） |
+| `src/client/impl.js` | 面板实现、slot 装配与共享辅助函数（同一模块作用域） |
+| `src/client/i18n.js` | 中英文案表与 `dshT()` |
+| `src/client/styles.js` | 四组注入样式与各自的一次性安装函数 |
+
+改完源码必须重建产物：
+
+```sh
+npm run build:client          # 写入 lib/client.js
+npm run build:client --check  # 校验产物与源码一致（npm test 会跑这一档）
+```
+
+宿主半 `lib/*.js` 直接入库、无构建步骤。
+
 ## 自动化自检
 
 ```sh
-npm test   # 28 个脚本：self-check / host-check / verify-* / integration-check
+npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verify-* / integration-check
 ```
+
+静态闸门（`npm test` 先跑，任一失败即中止）：
+
+- `check:types`：`tsc --noEmit`（`checkJs`）覆盖 `lib/**` 与 `src/client/**`；`lib/client.js` 作为产物被排除。
+- `check:lint`：oxlint。
+- `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
+
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（78 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
@@ -152,9 +179,13 @@ npm test   # 28 个脚本：self-check / host-check / verify-* / integration-che
 
 ## 可调配置键（插件 config 行）
 
-`resolvePluginConfig` 认 **14 个受校验的键**（下面第一张表）与 **11 个直通键**（第二张表）。前者写错类型 / 范围会在**挂载期直接报错**（fail-loud，不会静默降级）；后者**不做任何校验**、也不在导出的 `Config` schema 里，写错类型会被静默忽略并回落默认值（例如 `commandsDir: 5` 不报错，只是不起作用）——这是已知的不对称。
+`resolvePluginConfig` 认 **25 个键，全部受校验**：**14 个可调项**（第一张表）与 **11 个直通覆盖**（第二张表）。任意一个写错类型 / 范围都会在**挂载期直接报错**（fail-loud，不会静默降级）——包括 `commandsDir: 5` 这类直通键，不再静默失效。
 
-**受校验（14）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
+两处例外按同一契约处理：**未文档化的键**不报错（同一 config 行也可能载着别的 reader 的键），但会**每进程告警一次**（`warnUnknownConfigKeys`，日志形如 `plugin-admin: unknown config key(s) ignored: xxx — see README 可调配置键`），写错拼写不再无声无息；**直通键缺省时保持 undefined**，各子模块仍用自己的历史默认值，因此不改变既有行为。
+
+导出的 `VALIDATED_CONFIG_KEYS` / `PASSTHROUGH_CONFIG_KEYS` 就是这两张表的代码形态，`host-check` 断言前者与 `resolvePluginConfig` 实际填出的键集完全一致 —— 新增旋钮忘了登记会在测试里失败，而不是在挂载期被当成"未知键"。
+
+**受校验可调项（14）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
 
 | 分组 | 键 | 默认 | 说明 |
 |---|---|---|---|
@@ -173,7 +204,7 @@ npm test   # 28 个脚本：self-check / host-check / verify-* / integration-che
 | 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
 | 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
 
-**直通（11）**——同一 config 行原样透传，由各子模块读；缺省即用下表默认值：
+**受校验直通覆盖（11）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -184,12 +215,15 @@ npm test   # 28 个脚本：self-check / host-check / verify-* / integration-che
 | `cronTasksPath` | `$DSH_HOME/cron-tasks.json` | 定时任务存储 |
 | `webhookTriggersPath` | `$DSH_HOME/webhook-triggers.json` | Webhook 规则存储 |
 | `webhookHistoryPath` | `$DSH_HOME/webhook-history.json` | 交付历史存储（与去重集合同文件） |
-| `webhookHistoryCap` | 200 | 交付历史条数（1–10000，越界回落默认） |
+| `auditLogPath` | `$DSH_HOME/admin-audit.jsonl` | 特权动作审计日志（Phase F3：追加写、上限 2000 行后压缩；密钥类参数按**键名**脱敏） |
+| `webhookAllowRemote` | `false` | webhook 入站是否接受**非本机**投递（Phase F4：默认只收本机，远程需显式开启） |
+| `webhookRateLimit` | `60` | 每个来源每 60 秒的入站请求上限（超出答 429 + `retry-after`；认证失败另有 10 次/分钟的封锁） |
+| `webhookHistoryCap` | 200 | 交付历史条数（1–10000；越界挂载期报错） |
 | `projectCommands` | 启用 | `false` 关闭项目 `.agents` 命令注册 |
 | `projectHooks` | 启用 | `false` 关闭项目 hooks 拦截 |
 | `projectHooksTrust` | `confirm` | 仅 `allow-all` 启用自动放行，其余值一律 `confirm` |
 
-> 路径类键（`commandsDir` / `hooksPath` / … / `cronTasksPath`）是测试与特殊部署用的覆盖点；只有 `usageLedgerCap` 额外受 `lib/usage-ledger.js` 自身预算钳制。
+> 路径类键（`commandsDir` / `hooksPath` / … / `cronTasksPath`）是测试与特殊部署用的覆盖点，取值须为非空字符串；只有 `usageLedgerCap` 额外受 `lib/usage-ledger.js` 自身预算钳制。
 
 ## 信任边界
 

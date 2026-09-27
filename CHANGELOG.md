@@ -1,0 +1,285 @@
+# Changelog
+
+结构参考 Keep a Changelog，版本号遵循 SemVer。v1.20.0 之前的条目见 git tag（本文件自 v1.20.0 起补记）。
+
+## [Unreleased]
+### Changed（Phase B3e：复选框换官方 Checkbox）
+
+- **11 个复选框全部改为官方 `Checkbox`**（面板源码里 `type: 'checkbox'` 归零，`UiCheckbox` 12 处）。官方原子要求一个 `label` 字符串（可见且可访问），所以每处都把**文案提升为原子的 label**：`label.check` / `label.checkbox-row` 包裹被原子取代，布局类改由 `className` 传给原子（`.check`、`.checkbox-row` 继续生效）。
+- **原子没有 `style` / `onClick` / `id` 属性**，三处因此用 `<span>` 包一层保留原有行为：`maxDepthManaged`（`flex:none`）、任务卡片上的启用开关（`title` + `onClick` 阻止冒泡到卡片）、cron 编辑器的启用（内联 flex 布局）。这不是妥协 —— 原子的 API 就是这六个属性，包裹层是它给的组合方式。
+- 顺带补上一个**原本没有可见标签**的复选框（Webhook 编辑器的启用开关），现在是「启用」并进入 i18n 词典。
+- 测试同步：`#reconnect-toggle` 不再存在（原子不转发 `id`），改为按 label 文案定位；harness 的 `Checkbox` 桩改成与真实原子同构（label 包 input + 文案 span）—— 原先的通用桩把 label 当 `<input>` 的子节点渲染，React 直接报 "void element"，这个报错正是本次迁移的哨兵。
+- i18n 门槛照旧抓到一条失去调用点的词条（`" 启用"`，带前导空格的老文案），已删除。
+
+### Phase B4b（输入类样式）结论
+
+- **不需要再删任何规则**：复选框迁移后，剩下的控件样式只剩 `select.input` / `textarea.input` —— 这两类**刻意保留原生**（官方没有 select/textarea 原子），规则仍在服役。原子化的控件通过 `className` 继续拿到布局类（`.check` / `.checkbox-row` / `.danger` / `.pin-active` …）。
+- 因此 B4 以"**按理由收口**"结束而非"删干净"：退役的是自绘控件外观（.btn/.pill 共 17 条已删），保留的是**非原子控件**与**布局语义**两类，且各自有明确归属。
+
+### Verified（Phase B3e + B4b）
+
+- `npm test` 全绿（tsc / oxlint / 产物一致性 / 33 个脚本 / 88 条接缝契约）。
+### Added（Phase G：接缝断言与多版本矩阵）
+
+- **接缝探测 78 → 88 条**：补上插件最新能力实际依赖的三条接缝 —— `slots.entries(key)`（Phase E 的官方优先自动让位靠它判断，读不到条目就不让位）、客户端 locale 运行时 `register/bind/subscribe/setLocale`（Phase C）、宿主 `WebRoute { kind: 'prefix' | 'exact', path, handler(req,res) }`（Webhook 入站，F4 的加固还要读 `req.socket.remoteAddress`）。探测仍只读 dsh 的 TypeScript 源码，无需构建。
+- **`scripts/check-matrix.mjs` + `npm run test:matrix`**：把同一份探测跑在多个 checkout 上（`DSH_CHECKOUTS`，逗号/分号分隔），逐个给出裁决 —— 没有 dsh 的目录记 SKIP 不算失败（与单版本探测的契约一致），**任何一个存在的 checkout 契约漂移则整体失败**。"支持哪些 dsh 版本"因此从文档承诺变成可执行事实。
+- `docs/COMPAT.md` 新增「接缝矩阵」：用法、以及三条承重接缝各自的来源文件与使用者。
+
+### Fixed
+
+- **修掉 F2 引入的一处真实回归**：cron 的写路径守卫当时用了 `loadTasks`（会**替换内存镜像**），多出来的镜像交换让调度器多arm 了一次定时器 —— 边界到点时任务**多触发一次**。因为该检查是时序敏感的，F2 那轮的绿灯掩盖了它，本轮重跑才炸出来（3/4 !== 2）。现在守卫换成**只读**的 `readTasksFile`：保护不变（更新文件依旧拒写），镜像与定时器的既有语义完全保留，`verify-cron-admin` 29/29。
+
+### Verified（Phase G）
+
+- 矩阵实测三个目录：真实 checkout ✅ 88 条契约；合成目录（只有 package.json）❌ 43 条漂移并逐条列出探测名；不存在的目录 ➖ SKIP。
+### Added（Phase F4：Webhook 入站加固）
+
+- **默认只收本机投递**：入站端点是本机集成能力，非 loopback 来源一律 403 并说明如何显式开启（新增 `webhookAllowRemote`，默认 `false`）。`::ffff:127.0.0.1` 这类 IPv4 映射地址按本机处理；传输层不暴露来源地址时**不拒绝**（判断不了就不诬告），但仍计入限速。
+- **限速与暴力破解封锁**：每个来源一个滑动窗口 —— 默认 60 请求/分钟（`webhookRateLimit` 可覆盖），超出答 **429 + `retry-after`**；**认证失败单独记账**，同一来源 10 次失败/分钟即封锁该窗口。这直接补上了模块自己注释里承认的空缺："端点没有按来源限速，所以密钥长度是唯一的暴力破解成本"。
+- **常量时间比较本来就已存在**（`secretMatches`：两侧各做 SHA-256 再 `timingSafeEqual`）。我没有重新实现它，而是**核实它是模块里唯一的真实比较**（其余 `===` 都只是判空），并用回归测试把它钉住（等长错误、变长错误都不抛异常）。
+- 配置直通键 **12 → 14**（`webhookAllowRemote` / `webhookRateLimit`），README 双语更新。
+- `scripts/verify-webhook-hardening.mjs`（6 项）：地址判定（127/8 全段、`::1`、IPv4 映射、传输层隐藏）、密钥比较的等长/变长行为、限速窗口滑动与按来源隔离、**非本机 403 / 显式开启后放行 / loopback 正常投递**、**连续失败封锁后即使密钥正确也 429**、请求预算封顶。
+
+### Fixed
+
+- `webhookRateLimit` 的校验一开始漏了"缺省即直通"的约定（`positiveInteger` 需要 fallback），导致**配置里没写这个键就挂载失败** —— 被 host-check 当场拦住，改为与其它直通键一致的 `if (cfg.x !== undefined)` 守卫。
+### Added（Phase F2：落盘文件版本化）
+
+- **`lib/store-version.js`**：每个存储本来就**写** `version`，但从来不**读**它 —— 于是更新版本插件写的文件会被当成当前格式解析，下一次保存再把误读的数据写回去，**静默丢数据**。现在读侧有契约：缺省版本按 v1（版本化之前写的所有文件）、更旧的文件按声明的迁移链逐级迁移并盖上新版本、**更新的文件大声拒绝**（`StoreVersionError`，带 code/实际版本/支持版本）、无法解析的文件报 `invalid` 让调用方保留自己的尽力策略（历史副作用是尽力而为，规则不是）。
+- 接入三个权威存储：`usage-ledger.json`、`webhook-triggers.json`、`cron-tasks.json`。**校验放在 JSON 解析的 try/catch 之外** —— 第一版塞在里面，拒绝被吞成"文件为空"，等于没做（这条是被测试逼出来的）。
+- **顺带修掉一个真实的数据丢失口子**：cron 的 `upsert`/`remove`/`toggle` 是**先写内存镜像、再回读文件** —— 覆盖发生时校验才触发，那边数据已经被抹掉了。现在统一改成 **先读并校验 → 再改 → 再写**；webhook 的 `persist` 与用量台账的 `persist` 也补上了"替换前先校验"。
+- `scripts/verify-store-version.mjs`（7 项）：分类（v1/相等/更新/非法）、迁移链顺序与盖版本、缺环报 `unmigratable`、三类错误类型化，以及**三条写路径各自的拒绝**（cron 挂载点与写入、webhook 保存、台账落盘）。脚本按仓库既有做法在结尾硬退出（webhook 挂载的 `fs.watch` 会吊住事件循环）。
+### Added（Phase F1：跨进程写保护）
+
+- **`withFileLock`（`lib/patch-utils.js`）**：`writePatch` 的"备份 + rename"现在跑在一把跨进程建议锁里。在此之前，同一 profile 上的两个 dsh 实例会各自读 patch、各自改、各自 rename —— 后写者胜，另一处修改**静默丢失**。
+- 三条刻意的性质：**失败开放**（等 3 秒后照写：原子 rename 仍保证文件不撕裂，而拒绝写入比丢一次更新更糟）；**过期可回收**（锁超过 30 秒、或持有者 pid 已死 → 抢占，崩溃的实例不会让 profile 卡死）；**同步**（用 `Atomics.wait` 真睡眠，不空转 CPU）。
+- `scripts/verify-file-lock.mjs`（4 项）：正常段落返回值不被吞、锁必被释放、过期锁被回收、**活锁只延迟不拒绝**（用父进程 pid 造锁，断言等待 ≥2.5s 后仍然写入）。
+
+### Added（Phase F3：特权动作审计日志）
+
+- **`lib/audit-log.js`**：每次特权 RPC 追加一行 JSON（`$DSH_HOME/admin-audit.jsonl`）。设计要点：**只追加不改写**（崩溃最多丢在途那一行）；**按参数键名脱敏**（`secret`/`token`/`apiKey`/`password`… 的值永不落盘，但留下 `[redacted]` 让"确实有敏感字段"这件事也可查）；超过 2000 行时压缩到一半（走同一条串行队列）；`AUDITED_METHODS` 只列**变更类**方法 —— 读路径不进日志，审计才是信号。
+- 接入：`pluginAdmin` / `mcpAdmin` / `sessionAdmin`（index.js 内联服务）+ `commandHookAdmin` / `webhookAdmin` / `cronAdmin` / `webSearchAdmin`（options.audit）。**记录是 await 的**：动作返回时日志里已经有它，读者不会和写者赛跑（这一点是先写成 fire-and-forget 后被 host-check 抓出来的）。
+- 新增只读 RPC **`pluginAdmin/auditLog`**（最新在前 + 文件路径 + 条数），插件面板新增「操作审计」卡片按需加载并展示。RPC 门禁随之更新：**90 个方法 / 72 处客户端调用点**。
+- `scripts/verify-audit-log.mjs`（5 项）：脱敏与长度上限、只记变更方法、失败调用也记为 `ok:false`、磁盘上是逐行 JSON、超过上限会压缩；host-check 追加**接线探针**（经真实 `apply()` 调 `cronAdmin/upsert`，验证成功与失败两条都进日志、条目带 pid、`pluginAdmin/auditLog` 能读回）。
+
+### Changed
+
+- 配置直通键 **+1：`auditLogPath`**（默认 `$DSH_HOME/admin-audit.jsonl`），fail-loud 校验列表 11 → 12 键，README/README.en 同步。
+### Added（Phase E：官方优先，面板自动让位）
+
+- **`src/client/native-coverage.js`**：一张探测表，逐面板写明"官方哪个界面覆盖了它"以及**客户端可见的探测信号**。策略是**自动让位**：探测命中的面板**根本不注册 slot**（不是隐藏、不是禁用），未命中的照常注册；`localStorage['dsh-admin-panels']`（逗号分隔面板 id）可强制要回某个面板。
+- 当前唯一命中的是 **扩展插件**：官方 0.1.7 的「插件」侧边栏页（`ui-plugin-manager`）与「插件列表」页签（`ui-settings-plugin-inventory`）已覆盖装/停/卸 —— 探测 `sidebar.panellist` 的 `plugins` 或 `settings.plugins.tab` 的 `all`，命中即让位。
+- **其余面板刻意保留**：MCP 管理、hooks 管理、文件化命令、子代理编写侧、批删/导出/体检、provider 切换、用量台账、宿主级 cron 与 Webhook 入站 —— 官方仍无对应界面（表里连"官方对应 = 无"也写清楚）。**探测不到就不让位**是硬规则：把看不见的东西当作已覆盖，会让功能凭空消失。
+- **宿主半无配置行可读**：浏览器半拿不到 profile 的 config，所以探测只用壳层在客户端 Context 上暴露的信号（slot 条目 / 服务）。这也意味着"面板级开关"目前是客户端 override（localStorage）而非 config 行 —— 见计划里的 E3 备注。
+- `docs/COMPAT.md` 新增「官方覆盖与让位」表，与该模块同源。
+
+### Verified（Phase E）
+
+- `self-check` 新增三个用例：无官方面板列表 → 扩展插件注册；`sidebar.panellist` 出现官方 `plugins` → 扩展插件**不注册**（其余 9 个照常注册，总数恰好 −1）；写入 `dsh-admin-panels=extensions` → 该面板被强制要回。
+### Changed（Phase B3d：文本框换官方 Input）
+
+- **47 个文本框改为官方 `Input`**：删除自绘 `input` 类（原子的 `className` 会落在包裹 span 上，不再是输入框自身的类），保留带语义的额外类名。
+- 三类保持原生，各有明确理由：**10 个 checkbox + 1 个 radio**（官方只有 `Checkbox`，需要 `label` 语义，属另一轮）；**5 个 workflow 面板的无类输入**（它们用面板自己的 `inputStyle()` 内联样式，从未使用共享 `.input` 外观）；**1 个 Picker 组合控件内的输入**——官方 `Input` 的 props 被解构，**不转发 `ref`**，而这个控件靠 ref 管理键盘与焦点，改用原子会让它失去 ref 能力。
+- 测试的选择器随之收敛：3 处 `input.input` → `input`（后续仍按 placeholder/value 过滤）。
+
+### 事故与恢复（Phase B3d）
+
+- 批量转换里"className 独占一行就整行删除"的规则，把**与 className 同行的其它属性一起删掉了**：12 个受控输入丢了 `value`（其中 MCP/子智能体表单的 id 还丢了 `disabled`），skills 过滤框丢了 `placeholder`。
+- 检出方式分三层，缺一不可：(1) 行为测试（子智能体编辑流断言"id 输入框在编辑时禁用"）；(2) **i18n 覆盖闸门**（丢弃的 placeholder 让词条变成孤儿，`verify-i18n` 直接点名 `按名称 / 描述 / 路径过滤…`）；(3) 结构化审计（扫描所有原子，比对 `value:` / `placeholder:` 是否成对存在）。
+- 丢失的属性按语义逐一还原：`value` 从各自的 `onChange` 键名与所在表单的 draft 字段推出（`onPatch({ id })` + draft 形状 → `value: draft.id`），`disabled` 从表单的 `form.editing` 推出，placeholder 从词条表取回。**教训与上一轮同源：批量改写的删除边界必须是"单个属性表达式"，不能用"整行"。**
+### Changed（Phase B4a：删除已退役的控件样式）
+
+- **17 条 `.btn*` / `.pill*` 纯外观规则删除**：官方原子的 `variant`/`size` 已覆盖基座、悬停、按下、焦点环、禁用态与主色填充 —— 插件侧再定义一遍就是"等着分叉的第二份定义"。
+- **承载布局/语义意图的规则改挂到原子的 `className` 上**（不是简单删除）：`.btn.pin-active` → `.pin-active`；`.group-header .btn` → `.group-header .group-action`（分组删除按钮改传 `className: 'group-action danger'`）；`.update-strip .btn.sm` → `.update-strip button`；`.cli-scan-card .btn` → `.cli-scan-card button`。另外删掉一条已死的 `[data-dsh-sa-section] .btn.sm.active`。
+- **测试里的 CSS 覆盖断言同步**："CH 按钮用统一蓝色主色"换成**回归守卫**——任一 sheet 若重新定义 `[scope] .btn` / `.pill` 就失败；共享类覆盖清单里去掉 `.btn` / `.btn.primary` / `.btn.sm`。
+
+### Verified（Phase B4a）
+
+- `npm test` 全绿；chunk 472.4 → 468.7 KB（控件样式退役带来的净减，剩余体积是面板逻辑与尚未迁移的 input/select 样式）。
+### Changed（Phase B3c：胶囊与剩余按钮换官方原子）
+
+- **9 个筛选胶囊改为官方 `Pill`**：用量页的日期范围（今天/24H/7D/30D/90D/全部）、会话页的状态筛选（在线/已归档/已结束/已置顶）、Webhook 与任务的「动作模式」二选一 —— 全部改为 `active` + `onClick` 属性，`pill`/`pill active` 类名与 `type: 'button'` 一并删除（原子自带）。
+- 最后 2 处 `btn` 也在全文检索面板里换掉了；`grep "className: 'btn"` 与 `"className: 'pill"` 现在都是 **0**，`UiButton`/`UiPill` 共 148 处。
+- 测试改为按语义识别胶囊：`.usage-toolbar .pill` → `.usage-toolbar button`，`className.includes('active')` → `aria-pressed === 'true'`（官方 `Pill` 的选中态是 CSS Modules 类名，测试断言不该依赖哈希类名）。
+
+### Verified（Phase B3c）
+
+- `npm test` 全绿。
+- **未做**：B4 的 CSS 清理。盘点后发现它不只是"删死规则"——`.group-header .btn { margin-left: auto }`、`.update-strip .btn.sm`、`.list.grid2 .card .btn.sm` 这类规则承载的是**布局意图**，删掉 `.btn` 会让按钮失去定位；`variant`/`size` 已覆盖纯外观规则（可删），布局与语义规则需要改挂到传给原子的 `className` 上。这一批（约 6 条规则）留到下一轮连同 CSS 覆盖断言一起改。
+### Changed（Phase B3b：按钮批量换官方 Button）
+
+- **127 个自绘按钮改为官方 `Button`**：按类名词表机械映射 —— `btn primary` → `variant: 'primary'`，`btn`/`btn sm`/`btn xs` → `variant: 'outline'`（`sm` 取 `size: 'sm'`），`danger` / `danger-solid` 作为语义类保留下来，CSS 选择器同步从 `.btn.danger` 改为 `.danger`（17 处规则），配色不失。
+- 变体补全：39 处按钮在转换中只剩 `size`，按标签语义回填（保存/创建/挂载/安装等确认动作 → `primary`，其余 → `outline`）。
+- 测试改为**按标签识别**控件而不是按类名：`button.btn`、`classList.contains('primary')` 这类断言在官方原子上不成立（CSS Modules 的类名是哈希的）。共改 5 处（self-check 的置顶按钮、verify-workspace-admin 的重命名/删除/保存/确认）。
+
+### 过程中的一次真实事故（记录在案）
+
+- 批量转换脚本用「行首到 className 之间」作为替换区，**对 className 与其它属性同行的内联写法会误删行首代码**；另有若干站点残留 `+ (...)`、双逗号、丢失的 `{`/`?`/`:` 与 `actionChildren.push(` 前缀。共有 100+ 处站点受损。
+- 恢复方式：以 `lib/client.panels.js`（转换前最后一次成功构建的产物）为**参照物**核对原始类名与属性，再逐类修复（缺失的 props 起始括号、孤立属性行、三元分支错位、粘在标识符上的残留字符），最后以 esbuild 的语法错误 + 28 个自检脚本收敛。**教训**：批量改写必须以「括号配平 + 逐站点验证」为边界，不能用行首做替换锚点；产物在关键时刻充当了最后一份可核对的快照。
+
+### Verified（Phase B3b）
+
+- `npm test` 全绿（tsc / oxlint / 产物一致性 / 28 个脚本），其中 `verify-workspace-admin` 的 7 个场景端到端跑通了新建/重命名/排序/两步删除的按钮路径。
+- 仍未迁移：9 个 pill、58 个 input、16 个 select（下一轮）。
+### Changed（Phase B3a：接入官方控件原子）
+
+- **平台基线保持 external**：`scripts/build-client.mjs` 现在把壳层种子表（`PLATFORM_MODULES`：react / cordis / client-store / ui-slots / **ui-primitives** / dockkit）整体列为 esbuild external，两个产物里因此只留 `require("@deepseek-ai/dsh-client-ui-primitives")` 一行，由加载器从种子表回答。**没有**写进 `dsh.client.external` —— 这是 package/client/AGENTS.md 明确禁止的：基线对所有动态 bundle 都是隐式的，重复声明等于把依赖边写错。
+- **`types/dsh-client-ui-primitives.d.ts`**：该包是本仓之外的构建输入，类型检查期无法解析，故用环境声明补齐插件用到/可能用到的原子（权限宽松，权威 props 在上游 catalog）。
+- **首批控件替换（插件面板 + 会话面板的同款控件）**：搜索框改官方 `Input`（自带前置图标），清空/安装/检查更新/全部更新改官方 `Button`（`toolbar` / `primary` / `outline` 三种 variant，`size` 取 `sm`），三个筛选胶囊改官方 `Pill`（`active` + `onClick`）。共 9 处；`btn`/`input`/`pill` 自绘类在这 9 处不再参与渲染。
+- 夹具补 `@deepseek-ai/dsh-client-ui-primitives` 替身：按名字**记忆化**每个原子（Proxy 每次返回新函数会让 React 每帧重挂 DOM，测试里表现为“同一个节点在两次断言之间被换掉”），并剥掉 `active`/`variant`/`size` 等非 DOM 属性。
+
+### 未完（B3b / B4）
+
+- 仍有约 148 个 `createElement('button')`、58 个 input、16 个 select、11 个 pill 未迁移（其余面板）。
+- B4 待办：迁移完成后删除随之失效的自绘 CSS（当前 chunk 里仍有约 76 KB 样式，其中一部分已是死规则）。
+
+### Verified（Phase B3a）
+
+- `npm test` 全绿；`self-check` 的两处搜索框选择器改为定位原子内部的原生 `input`（原子的包裹元素是 span，类名不再是 `input`）。
+### Changed（Phase B2：面板改懒加载 chunk）
+
+- **入口 bundle 与面板代码分家**：`src/client/impl.js` 现在只做三件事——注册 10 个 slot、注入样式、按需拉取面板；所有面板实现移到 `src/client/panels.js`，构建成包内 chunk `lib/client.panels.js`，由 `require.async('./client.panels.js')` 在**首次渲染**时加载。
+  - 体积：`lib/client.js` **592 KB → 116 KB（−80%）**，面板 + 样式 chunk 468 KB 只在真正打开管理面板时才下载/解析（目标 ≤150 KB 达成）；
+  - 协议：chunk 文件名必须匹配加载器的包内 chunk 文法（`client.<名>.js`）且与 `client.js` 同目录——加载器由 bundle URL 推导 chunk URL；`lib/client.panels.js` 因此与 `lib/client.js` 并列，随包发布；
+  - 跨包共享：chunk 是独立 bundle（不能引用主 bundle 的模块），locale 表与共享辅助函数（`dshT`/`sectionState`/`showToast`/剪贴板等 12 个）通过 `configure(env)` 一次性注入；四组注入样式也随 chunk 走——`configure()` 里注入，既让面板一定有样式，又把 76 KB CSS 挪出关键路径；
+  - 每个 slot 组件用 `lazyPanel(exportName)` 包装：首帧渲染一个小占位（“加载面板…”），chunk 到位后渲染真组件；宿主机不支持 chunk 时显示明确错误而不是空白面板。
+- **构建产物结构断言**：`build-client --check` 现在除了比对产物与源码，还断言面板代码**不在**入口产物里（`PluginsSection` 等标记不得出现）、入口保留了 chunk 加载器与 chunk 名、chunk 里确实有面板代码——防止一次误改把懒加载悄悄还原成 eager。
+- **测试夹具补上 chunk 面**：新增 `scripts/lib/harness-client.mjs`，给 11 处 `factory(...)` 提供带 `require.async` 的 loader 形 require（它按需评估 `lib/<chunk>`，与加载器同款注册再物化）；三个直接挂载面板的脚本改为先 `await loadPanels()`。
+- **两处扫描器改为枚举源文件**：`host-check` 的客户端调用点扫描与 `verify-i18n` 的文案扫描原先写死了 `['index.js','impl.js','i18n.js','styles.js']`；面板搬到 `panels.js` 后它们会**静默漏掉 800+ 个调用点**——现在改为读取 `src/client/*.js` 全集。这正是闸门存在的意义：`host-check` 当场以“workflowAdmin 等 4 个方法无人调用”报红。
+
+### Verified（Phase B2）
+
+- `npm test` 全绿：面板脚本全部经由 chunk 路径运行（栈里能看到 `req.async`），`self-check` 的 18 个面板用例、`verify-workflow-client`、`verify-workspace-admin` 直接挂载 chunk 组件。
+- 自查过程中被自己的闸门拦下两次：一次是改了源码忘了 `npm run build:client`（`--check` 报 stale），一次是上面那个写死的扫描清单——两条都不是“测试太严”，而是它们本来就要抓的东西。
+### Changed（Phase C：文案表接回 dsh 的语言服务）
+
+- **面板文案不再自成一岛**：`installLocaleRuntime(ctx)` 把中英对照表注册为 shell locale 服务的 `dshAdmin` 命名空间（`{ zh, en }`）并 bind，`dshT()` 改为在调用点读取绑定后的翻译函数 —— 生效语言就是 shell 的当前语言，切换语言**即时重绘、不再刷新页面**。
+- 注册的 zh 字典是**从 en 表的键派生**的恒等映射（`I18N_ZH[key] = key`），不是第二份手写表：locale 运行时按 fallback 链查找，只注册 `en` 会让中文读者读到英文。`verify-i18n` 现在断言这份派生关系，`self-check` 在运行时断言两份字典的键集完全一致。
+- 🌐 语言开关改为驱动 shell 的 `setLocale`（原来写 localStorage + `location.reload()`），标题从「面板语言（所有管理面板）」改为「界面语言 / Interface language」，`value` 读 shell 的当前语言而不是本地回退值。
+- slot 标签改为 **thunk**（`label: () => dshT('…')`）——这是 ui-slots 官方的 `SlotLabel` 形态，壳层每次读取都重新求值，因此导航行/页签标题跟随语言而不需要重新注册；各 panel 组件用一层 `withLocale()` 包裹，订阅语言变更后重绘整棵子树。
+- **软化依赖**：`locale` 不放进 `inject`（硬依赖会让没有该服务的宿主整个插件挂不上），改为 `ctx.get('locale')` + 能力探测，服务缺失时自动回落到原有的「localStorage / 浏览器语言 + 中文原文兜底」路径 —— 这正是测试环境走的路径。
+
+### Verified（Phase C）
+
+- `self-check` 新增 ctx.locale 用例：假 locale 服务 → 断言注册命名空间与键集一致 → zh 渲染中文 → `setLocale('en')` 后**同一个挂载**重绘为英文且无中文残留 → 🌐 开关只调用 `setLocale`（无刷新路径）。
+- `verify-todo-panel` / `self-check` 里所有 `options.label` 断言改为经 `slotLabel()` 解析 thunk。
+- 另外两处读 `declaration.label` 的断言（`verify-subagents-client` / `verify-cron-panel`）同样改为解析 thunk —— 全仓 18 处 label 断言现在都不假设标签是字符串。
+- 语言表注册加了**重复注册兜底**：同一页面第二次物化本 bundle（HMR、测试多次挂载）会命中 locale 的 "already has locale"，此时退化为直接 bind 已注册的同内容表，而不是让挂载失败。
+### Changed（Phase D1b：模块从表生成描述符）
+
+- **十四个命名空间的描述符全部改为 `invocationsFor(namespace)` 生成**，模块里的手写 `descriptor()`/`desc()`/内联对象清单（共 89 条）全部删除，`lib/rpc-manifest.js` 成为唯一真相：端点不可能只存在于模块而不在表里。
+- 顺带清掉随之失效的死代码：4 处 `DESCRIPTOR_PACKAGE` 与各模块的 `descriptor`/`param` 辅助函数。
+- 把描述符搬进表之后，两处"读 `lib/index.js` 源码文本找 id"的断言失效（`verify-todo-panel.mjs` 的 fileStats / exportSession / gitDiff）：这类断言现在改为直接读 `RPC_MANIFEST`，检查对象从"某个文件的字节"变成"线上契约"。这正是 D1b 想要的连带收益——测试不再把实现细节当契约。
+- `npm test` 全绿（含 tsc / oxlint / 产物一致性 / 28 个自检脚本）。
+
+- 迁移过程中的一次失误值得记录：用"非贪婪匹配到第一个 `\n}\n`"批量删除辅助函数声明时，正则跨过了函数边界，把 6 个模块的 `*Invocations()` 函数一起删掉了（webhook-triggers 还留下半截对象字面量）。host-check 的挂载断言立刻以 `ReferenceError` / 语法错误拦下，逐文件按行修复后恢复。教训：删除代码块要用括号配平，不能用"最近的花括号"——这也是为什么要先有闸门再重构。
+
+### Added（Phase D1：RPC 单一真相表 + 双向闸门）
+
+- **`lib/rpc-manifest.js`**：把 14 个命名空间、**89 个方法**及其线序参数名收进一张表（由挂载后的真实描述符导出，不再与模块里的 `*Invocations()` 手工并行维护）。表里同时登记：
+  - `RPC_DYNAMIC_CLIENT_TARGETS`——浏览器半用变量/字符串拼接调用的目标（`'sessionAdmin/' + method`、`'commandHookAdmin/' + verb`），静态扫描看不见，必须显式登记；
+  - `RPC_HOST_ONLY_TARGETS`——无 UI 入口的端点（CLI/SDK/兼容面），登记后新增一个"悄悄失去入口"的端点就会让闸门失败；
+  - `RPC_OPTIONAL_WIRES`——服务自己已用 `spec && …` 兜住的参数（amend/resume/listSaved 的 `spec`），客户端省略它们不再算漂移，但省略**未登记**的必填参数会失败。
+- `scripts/host-check.mjs` 新增契约块：挂载后的 89 条描述符必须与表逐条相等（命名空间/方法/参数线序/服务键/调用类型），同时扫描 `src/client/**` 的每个 `call('ns/method', …)` 调用点——目标必须已声明、字面量载荷的键必须是声明的线名、必填线名不得缺失。
+- 调试钩子：`DSH_ADMIN_DUMP_RPC=<file> node scripts/host-check.mjs` 导出挂载后的真实表面（表就是由它导出的，便于下次增量核对）。
+
+### Verified
+
+- 负向验证：把表里 `pluginAdmin/install` 的参数改成空数组，host-check 立即以 `pluginAdmin/install parameter wires` 失败——闸门不是空转。
+- 正向结果：89 条挂载描述符 ↔ 71 个客户端字面量调用点 ↔ 6 个动态目标 ↔ 12 个 host-only 端点，四者闭合，无未声明调用、无未达端点。
+
+### Changed（Phase B1：浏览器半源码化）
+
+- **`lib/client.js` 从手写入库改为构建产物**：源码拆到 `src/client/`（`index.js` 入口 / `impl.js` 面板与 slot 装配 / `i18n.js` 文案表 / `styles.js` 四组注入样式），`scripts/build-client.mjs` 用 esbuild 打包并保留加载器要求的 `window.__ModuleLoader__.load({ id, factory })` 外壳与 `require('react')` 外部化（React 必须仍是壳层那个实例）。
+- `npm test` 新增 `node scripts/build-client.mjs --check`：产物与源码不一致即失败，"改了源码忘重建"再也发不出去。
+- `verify-i18n.mjs` 改为读 `src/client/**` 源码（原先读产物），检查对象与人工编辑的对象一致。
+- `tsconfig.json` 纳入 `src/client/**`（补 DOM lib）：浏览器半首次进入 `checkJs` 覆盖。
+
+### Fixed（Phase B1 期间由静态检查抓出）
+
+- **`inputStyle()` 丢弃调用方的覆盖对象**：它声明无参，但两处调用传了 `{ flex: '1' }`，该覆盖在运行时被静默忽略（同文件的 `textareaStyle`/`preStyle` 都会合并覆盖）。已按兄弟函数的契约补上合并。
+- **文案表 5 组重复键**：`" 步"` 同时映射 " of the plan" 与 " steps"（后者胜出，前者是死条目），另有 4 组完全重复的条目；已删除先出现的死条目（行为不变），并消除 esbuild / oxlint 的重复键告警。
+
+### Added
+
+- 导出 `VALIDATED_CONFIG_KEYS` / `PASSTHROUGH_CONFIG_KEYS`：25 个文档化配置键的代码形态；`host-check` 断言前者与 `resolvePluginConfig` 实际填出的键集完全一致，新增旋钮若忘记登记会在测试里失败，而不是在挂载期被读成"未知键"。
+- 导出 `warnUnknownConfigKeys()`：未文档化的 config 键每进程告警一次（HMR 重复 apply 不会刷屏），日志形如 `plugin-admin: unknown config key(s) ignored: xxx — see README 可调配置键`。
+- 导出 `WEBHOOK_HISTORY_CAP_MIN` / `WEBHOOK_HISTORY_CAP_MAX`：挂载期校验与 `lib/webhook-triggers.js` 运行时钳制共用同一组边界。
+
+### Changed
+
+- **11 个直通配置键纳入 fail-loud 校验**（配置写错的行会挂载失败，属于有意的破坏性收紧）：`commandsDir` / `hooksPath` / `disabledPath` / `codexHooksPath` / `cronTasksPath` / `webhookTriggersPath` / `webhookHistoryPath` 须为非空字符串；`projectCommands` / `projectHooks` 须为布尔；`projectHooksTrust` 只接受 `confirm` / `allow-all`；`webhookHistoryCap` 须为 1–10000 的整数。此前这些键写错类型会被静默忽略（例如 `commandsDir: 5` 不报错也不生效）。
+- 缺省的直通键在解析结果里仍保持 undefined，各子模块继续沿用自身历史默认值，行为不变。
+- README / README.en.md 的配置键章节与实现对齐，去掉"已知的不对称"说明。
+
+### Fixed
+
+- **真实缺陷**：`lib/index.js` 的用量台账后台快照与实时事件观察在 catch 分支调用 `messageOf(error)`，但该标识符从未从 `lib/patch-utils.js` 导入 —— 一旦落盘失败，catch 自身会抛 `ReferenceError` 并掩盖原始错误。已补导入。
+- `lib/index.js` 的 `runGit()` 给 `child_process.spawn()` 传了 `encoding: 'utf8'` —— spawn 没有这个选项（那是 exec/execFile 的），运行时被忽略、类型上非法，已删除。
+- `lib/index.js` 工作区注册表告警一段的缩进（单空格 → 两空格）。
+- 大量 JSDoc 类型表达式修成合法 TS：`@returns { ok, action }` 这类解构式简写、`object[]`/`object|null`、缺 `Promise<>` 包裹的 async 返回类型、单花括号对象类型（应为双花括号）等 —— 它们此前从未被任何工具校验过。
+
+### Added（承上）
+
+- **静态检查闸门**：`tsconfig.json`（`allowJs` + `checkJs`，`lib/client.js` 与 Phase B1 的产物暂排除）、`types/dsh-seams.d.ts`（插件 duck-type 的宿主接缝声明）、`@types/node`、oxlint；`npm test` 现在先跑 `npm run check:types` 与 `npm run check:lint`。
+- 首次运行的收获：tsc 从 677 条错误降到 0，其中至少两条是真实缺陷（见上）；oxlint 0 error / 155 warning（warning 多为 `lib/client.js` 字典重复键与风格项，留待 Phase C 的 i18n 迁移一并处理）。
+
+## [1.24.1] - 2026-09-26
+
+### Changed
+
+- 注释与 README 对齐实现事实；`host-check` 补 workflowAdmin 面；cron 冒烟用例转正为 `verify-cron-panel`。
+- README 去掉版本兼容性（钳制）章节与版本沿革注记，徽章更新至 v1.24.0。
+
+### Fixed
+
+- 同步 `package-lock.json` 补齐 esbuild@0.28.2 依赖树（修复 v1.23.x / v1.24.0 `npm ci` 发布失败）。
+
+## [1.24.0] - 2026-09-25
+
+### Added
+
+- 自动化页签模板与新手引导；Webhook 规则密钥自动生成。
+- 适配 dsh 0.1.7-rc.2，设置侧边栏重组（自动化 / Web 与会话）。
+
+### Removed
+
+- 移除 Loader 运行时相关代码路径。
+
+## [1.23.1] - 2026-09-24
+
+### Fixed
+
+- 待办面板首行右对齐内容与悬浮铃铛重叠。
+
+## [1.23.0] - 2026-09-24
+
+### Added
+
+- 动态工作流模块（引擎 / 运行库 / RPC / agent 工具 / 面板）。
+- `/workflow` 斜杠命令（挂载自动注入）与保存作用域自动识别。
+- `/workflow create <任务描述>`：按描述自动创建工作流。
+
+### Fixed
+
+- 全插件审查整改：安全、边界与契约修复。
+
+## [1.22.0] - 2026-09-22
+
+### Added
+
+- 面板中英双语切换；MCP 已挂载条目热应用；容量可配与交付历史持久化。
+- 已归档会话注入面板美化。
+
+## [1.21.0] - 2026-09-22
+
+### Changed
+
+- 定时任务结构化调度编辑器；插件卡片分行排版；下拉统一样式；技能作用域摘要收敛。
+
+## [1.20.0] - 2026-09-22
+
+### Added
+
+- 技能预设作用域；用量台账持久化；统一 UI 设计系统；宿主级定时任务。
+- 归档会话面板：目录折叠 + 批量删除；原「工作区」面板合并进官方面板。
