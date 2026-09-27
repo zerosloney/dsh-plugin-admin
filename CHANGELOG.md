@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [1.25.4] - 2026-09-27
+
+冒烟再进两步：**写路径**与**真实浏览器**（14 → 28 项，dsh `0.1.7-rc.2` 上约 11–30 秒）。
+
+### Added
+
+- **写路径（步骤 6）**——此前冒烟只读，写入面（F1 锁、原子写、审计、HMR）只在替身 ctx 与假 `DSH_HOME` 上验证过：
+  - `cronAdmin/upsert` + `remove` 真的写进一次性 `$DSH_HOME` 的 `cron-tasks.json`，断言磁盘内容加了又删；
+  - `pluginAdmin/setEnabled` 在**真实 profile patch** 里写入 / 移除 `disabled: true` 行（走 `mutateProfilePatch` 的锁 + 原子 rename + hot-apply），并用**产品自己的读路径**（`pluginAdmin/list` 的 `disabled` 字段）做往返断言；
+  - 两次写都由 `admin-audit.jsonl` 记录（断言两个 action 都在）；
+  - 切换目标是**冒烟自己生成的 no-op 插件**（`smoke-toggle-target`，临时目录 + `dsh plugin add link:`）：切换我们自己的行会卸载正在服务这次调用的那个服务，所以不能拿它当靶子。顺带验证了 dsh 插件清单的一个细节——带 `exports` 映射时必须显式导出 `./package.json`，否则 `require.resolve('<name>/package.json')` 抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`，该插件的 bundle patch 就被当成"未声明 bundle patch"。
+- **真实浏览器（步骤 7）**——headless Chromium（Edge/Chrome/Chromium 任一，`SMOKE_BROWSER` 可覆盖）+ **原生 CDP**（Node 内置 `WebSocket`，零新依赖）打开真实 shell：
+  - 断言页面**无未捕获异常**、设置入口渲染并可点击；
+  - 点开后断言**我们自己的 `settings.section` 面板文案**（`用量仪表盘` / `自动化`）出现在 DOM 里 —— 这些文案只存在于我们的 i18n 表，出现即证明客户端 bundle 被真实 shell 执行并挂载了插槽；
+  - **踩过的坑写进注释**：侧栏的「插件 / 会话」是 **shell 自带** plugin manager 与会话列表的入口，拿它们当断言会在"我们的 bundle 什么都没渲染"时照样通过（第一版正是如此，已改正，并用改名的伪证锁住）；
+  - 缺浏览器时这一步 SKIP；CI 的 `host-smoke` 作业设 `SMOKE_REQUIRE_BROWSER=1` 让缺失变成失败（ubuntu runner 自带 Chrome）。
+
 ## [1.25.3] - 2026-09-27
 
 补丁版：把"真实宿主冒烟"从 1 条 RPC 扩到全命名空间，**它第一次跑就抓到一个生产 bug**，另一个静态闸门又抓出 4 处同类潜伏点。

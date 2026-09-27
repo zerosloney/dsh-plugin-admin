@@ -29,14 +29,14 @@
  * Run: npm run smoke:real-host      (or: node scripts/smoke-real-host.mjs)
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { relative } from 'node:path'
 import { join } from 'node:path'
 
 const PLUGIN_DIR = process.cwd().replace(/\\/g, '/')
 const PROFILE = 'smoke'
 const BOOT_TIMEOUT_MS = 120_000
-const RPC_ENVELOPE = (rpcId, method) => JSON.stringify({ type: 'client-request', rpcId, method, payload: { args: {} } })
 
 let checks = 0
 let failures = 0
@@ -82,6 +82,21 @@ const dshVersion = String(probe.stdout).trim().split(/\r?\n/).pop()
 console.log(`dsh ${dshVersion} | plugin ${join(PLUGIN_DIR, 'package.json')}`)
 const pluginVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
 
+// A Chromium for step 7. Optional by design: the browser half is proven to boot
+// and render there, but a machine without one still gets steps 1-6 (and CI can
+// demand it with SMOKE_REQUIRE_BROWSER=1).
+const BROWSER_CANDIDATES = [
+  process.env.SMOKE_BROWSER,
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
+].filter((candidate) => typeof candidate === 'string' && existsSync(candidate))
+const browserPath = BROWSER_CANDIDATES[0] ?? null
+
 const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-home-'))
 // Inherit the environment as-is EXCEPT NODE_OPTIONS: CI sets it to preload the
 // failure annotator for this script, and env inheritance would run that preload
@@ -90,8 +105,18 @@ const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-home-'))
 const env = { ...process.env, DSH_HOME: home }
 delete env.NODE_OPTIONS
 let booted = null
+let browser = null
+let browserProfile = null
 
 const teardown = () => {
+  if (browser !== null) {
+    try { browser.kill('SIGKILL') } catch { /* already gone */ }
+    browser = null
+  }
+  if (browserProfile !== null) {
+    try { rmSync(browserProfile, { recursive: true, force: true }) } catch { /* best effort */ }
+    browserProfile = null
+  }
   if (booted !== null && booted.pid !== undefined) {
     try {
       if (process.platform === 'win32') spawnSync(`taskkill /PID ${booted.pid} /T /F`, { shell: true, stdio: 'ignore' })
@@ -195,6 +220,25 @@ try {
     else fail('our bundle served with our bytes', `HTTP ${bundle.status}, ${bytes.length} bytes, markers=${ours}`)
   }
 
+  /**
+   * One unary call through the real gateway: `POST /api/<namespace>/<method>` with
+   * the `client-request` envelope the gateway's own validator demands.
+   * @param {string} endpoint - `<namespace>/<method>`.
+   * @param {Record<string, unknown>} args - wire-named arguments.
+   * @returns {Promise<{ ok: boolean, value: any, message: string, text: string, status: number }>}
+   */
+  const rpc = async (endpoint, args) => {
+    const response = await fetch(`${base}/api/${endpoint}`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: endpoint.replace('/', '-'), method: endpoint, payload: { args } }),
+    })
+    const text = await response.text()
+    let body = null
+    try { body = JSON.parse(text) } catch { /* reported by the caller */ }
+    return { ok: body?.result?.ok === true, value: body?.result?.value, message: String(body?.result?.error?.message ?? ''), text, status: response.status }
+  }
+
   /* -------------------------------- 4. RPC -------------------------------- */
   step('4. unary RPC through the real gateway')
   const bad = await fetch(`${base}/api/pluginAdmin/list`, {
@@ -204,22 +248,14 @@ try {
   if (badBody.includes('gateway/bad-request')) ok('the real gateway rejects a malformed envelope', 'gateway/bad-request')
   else fail('the real gateway rejects a malformed envelope', badBody.slice(0, 160))
 
-  const answer = await fetch(`${base}/api/pluginAdmin/list`, {
-    method: 'POST',
-    headers: { cookie, 'content-type': 'application/json' },
-    body: RPC_ENVELOPE('smoke-1', 'pluginAdmin/list'),
-  })
-  const raw = await answer.text()
-  let parsed = null
-  try { parsed = JSON.parse(raw) } catch { /* reported below */ }
-  const value = parsed?.result?.value
-  const listed = Array.isArray(value?.plugins) ? value.plugins.find((p) => p.name === 'dsh-plugin-admin') : undefined
-  if (parsed?.result?.ok === true && listed !== undefined) {
-    ok('pluginAdmin/list answered from the mounted service', `${value.plugins.length} plugins, ours version ${listed.version} via ${listed.localPath}`)
+  const answer = await rpc('pluginAdmin/list', {})
+  const listed = Array.isArray(answer.value?.plugins) ? answer.value.plugins.find((p) => p.name === 'dsh-plugin-admin') : undefined
+  if (answer.ok && listed !== undefined) {
+    ok('pluginAdmin/list answered from the mounted service', `${answer.value.plugins.length} plugins, ours version ${listed.version} via ${listed.localPath}`)
     if (listed.version === pluginVersion) ok('the served version matches the working tree', pluginVersion)
     else fail('the served version matches the working tree', `served ${listed.version}, expected ${pluginVersion}`)
   } else {
-    fail('pluginAdmin/list answered from the mounted service', raw.slice(0, 300))
+    fail('pluginAdmin/list answered from the mounted service', answer.text.slice(0, 300))
   }
 
   /* --------------------- 5. one read call per namespace -------------------- */
@@ -265,30 +301,22 @@ try {
   let answered = 0
   let injectGuards = 0
   for (const [namespace, method, args, options = {}] of SWEEP) {
-    const response = await fetch(`${base}/api/${namespace}/${method}`, {
-      method: 'POST',
-      headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId: `${namespace}-${method}`, method: `${namespace}/${method}`, payload: { args } }),
-    })
-    const text = await response.text()
-    let body = null
-    try { body = JSON.parse(text) } catch { /* reported below */ }
-    const message = String(body?.result?.error?.message ?? '')
+    const call = await rpc(`${namespace}/${method}`, args)
     // A Cordis scope guard ("cannot get property … without inject") means the
     // plugin read a service it never declared in its `inject` list. Real dsh
     // refuses that; a fake ctx does not — so it is a failure for EVERY entry,
     // which is how this sweep first caught it on projectAdmin/list.
-    const injectGuard = /without inject/.test(text)
+    const injectGuard = /without inject/.test(call.text)
     if (injectGuard) injectGuards += 1
     const passed = !injectGuard && (
-      body?.result?.ok === true
+      call.ok
       // A documented refusal still proves the namespace dispatched to OUR code:
       // the gateway wraps a thrown method as `gateway/internal`, so the message
       // (not the code) is what identifies whose error it is.
-      || (options.expect === 'refusal' && message.includes(options.refusalText))
+      || (options.expect === 'refusal' && call.message.includes(options.refusalText))
     )
     if (passed) { answered += 1; reached.add(namespace) }
-    else fail(`${namespace}/${method}`, `${injectGuard ? 'Cordis inject guard: ' : ''}${text.slice(0, 220)}`)
+    else fail(`${namespace}/${method}`, `${injectGuard ? 'Cordis inject guard: ' : ''}${call.text.slice(0, 220)}`)
   }
   if (injectGuards === 0) ok('no endpoint hit a Cordis inject guard', `${SWEEP.length} calls`)
   else fail('no endpoint hit a Cordis inject guard', `${injectGuards} call(s) read an undeclared service`)
@@ -302,6 +330,232 @@ try {
   }
   if (answered === SWEEP.length) ok('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} calls over ${reached.size} namespaces`)
   else fail('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} answered; reached ${[...reached].sort().join(', ')}`)
+
+  /* ----------------------------- 6. write paths ---------------------------- */
+  step('6. write paths on the real Host (JSON store + profile patch + audit)')
+  const auditFile = join(home, 'admin-audit.jsonl')
+  const cronFile = join(home, 'cron-tasks.json')
+  const patchPath = join(profileDir, 'cordis.patch.yml')
+  const auditText = () => (existsSync(auditFile) ? readFileSync(auditFile, 'utf8') : '')
+  const readIfPresent = (path) => (existsSync(path) ? readFileSync(path, 'utf8') : '')
+
+  // 6a. JSON store: the F1 cross-process lock, the atomic rename and the audit
+  // trail on a real Host (every one of those was only ever exercised against a
+  // fake DSH_HOME).
+  const upsert = await rpc('cronAdmin/upsert', {
+    entry: { id: 'smoke-task', cron: '0 3 * * *', enabled: false, action: { mode: 'steer', sessionId: 'smoke' }, promptTemplate: 'smoke tick' },
+  })
+  if (upsert.ok && readIfPresent(cronFile).includes('smoke-task')) {
+    ok('cronAdmin/upsert wrote the store on disk', relative(home, cronFile).replace(/\\/g, '/'))
+  } else {
+    fail('cronAdmin/upsert wrote the store on disk', `${upsert.text.slice(0, 200)} | store=${readIfPresent(cronFile).slice(0, 120)}`)
+  }
+  const remove = await rpc('cronAdmin/remove', { id: 'smoke-task' })
+  if (remove.ok && !readIfPresent(cronFile).includes('smoke-task')) ok('cronAdmin/remove took it back out', readIfPresent(cronFile).trim().slice(0, 80))
+  else fail('cronAdmin/remove took it back out', `${remove.text.slice(0, 200)} | store=${readIfPresent(cronFile).slice(0, 120)}`)
+  const auditAfterStore = auditText()
+  if (auditAfterStore.includes('cronAdmin/upsert') && auditAfterStore.includes('cronAdmin/remove')) {
+    ok('the audit trail recorded both store writes', `${auditAfterStore.split('\n').filter(Boolean).length} entries in admin-audit.jsonl`)
+  } else {
+    fail('the audit trail recorded both store writes', auditAfterStore.slice(-200) || '(no audit file)')
+  }
+
+  // 6b. Profile patch: `pluginAdmin/setEnabled` on a HERMETIC no-op plugin the
+  // smoke authors itself. Toggling our own row would be a fine test of hot-apply
+  // but unloads the very service serving the call, so the target is a throwaway
+  // package whose only job is to occupy a loader row.
+  const targetDir = join(home, 'toggle-target')
+  mkdirSync(targetDir, { recursive: true })
+  writeFileSync(join(targetDir, 'package.json'), JSON.stringify({
+    name: 'smoke-toggle-target', version: '1.0.0', private: true, main: 'index.js',
+    // `./package.json` MUST be exported: setEnabled resolves the manifest through
+    // `require.resolve('<name>/package.json')`, and an `exports` map without that
+    // subpath hides it (ERR_PACKAGE_PATH_NOT_EXPORTED → "未声明 bundle patch").
+    // Our own manifest exports it for exactly this reason.
+    exports: { '.': './index.js', './package.json': './package.json' },
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }, null, 2))
+  writeFileSync(join(targetDir, 'cordis.patch.yml'), '- insert:\n    - id: smoke-toggle-target\n      name: smoke-toggle-target\n')
+  writeFileSync(join(targetDir, 'index.js'), "export const name = 'smoke-toggle-target'\nexport function apply() {}\n")
+  const targetSpec = `link:${targetDir.replace(/\\/g, '/')}`
+  const targetAdd = cli(['plugin', '--profile', PROFILE, 'add', targetSpec], env)
+  if (targetAdd.status === 0) ok('hermetic toggle target installed', targetSpec.replace(home, '<temp>'))
+  else fail('hermetic toggle target installed', `${targetAdd.stdout ?? ''}${targetAdd.stderr ?? ''}`.slice(-200))
+
+  const disabled = await rpc('pluginAdmin/setEnabled', { name: 'smoke-toggle-target', disabled: true })
+  const patchDisabled = readIfPresent(patchPath)
+  if (disabled.ok && patchDisabled.includes('disabled: true')) {
+    ok('setEnabled wrote a disabled row into the profile patch', 'cordis.patch.yml now carries `disabled: true`')
+  } else {
+    fail('setEnabled wrote a disabled row into the profile patch', `${disabled.text.slice(0, 200)} | patch tail=${patchDisabled.slice(-160)}`)
+  }
+  // Ask the product's OWN read path whether the toggle took effect: parsing
+  // --dump-config would test the loader's text layout, not our feature, and the
+  // tree prints the row without the flag (other rows ship disabled, so a bare
+  // regex would have passed vacuously).
+  const listWhileDisabled = await rpc('pluginAdmin/list', {})
+  const targetRow = Array.isArray(listWhileDisabled.value?.plugins)
+    ? listWhileDisabled.value.plugins.find((p) => p.name === 'smoke-toggle-target')
+    : undefined
+  if (targetRow?.disabled === true) ok('pluginAdmin/list reports the target as disabled', `removable=${targetRow.removable === true}`)
+  else fail('pluginAdmin/list reports the target as disabled', `${listWhileDisabled.text.slice(0, 220)}`)
+
+  const reEnabled = await rpc('pluginAdmin/setEnabled', { name: 'smoke-toggle-target', disabled: false })
+  const patchEnabled = readIfPresent(patchPath)
+  const listWhileEnabled = await rpc('pluginAdmin/list', {})
+  const targetAfter = Array.isArray(listWhileEnabled.value?.plugins)
+    ? listWhileEnabled.value.plugins.find((p) => p.name === 'smoke-toggle-target')
+    : undefined
+  if (reEnabled.ok && !patchEnabled.includes('smoke-toggle-target') && targetAfter?.disabled === false) {
+    ok('the toggle round-trips (patch row removed, list reports enabled)', 'disabled: false')
+  } else {
+    fail('the toggle round-trips (patch row removed, list reports enabled)', `${reEnabled.text.slice(0, 160)} | disabled=${String(targetAfter?.disabled)} | patch mentions=${patchEnabled.includes('smoke-toggle-target')}`)
+  }
+  const auditAfterPatch = auditText()
+  if (auditAfterPatch.includes('pluginAdmin/setEnabled')) {
+    ok('the audit trail recorded the patch write', `${auditAfterPatch.split('\n').filter(Boolean).length} entries total`)
+  } else {
+    fail('the audit trail recorded the patch write', auditAfterPatch.slice(-200))
+  }
+
+  /* --------------------------- 7. real browser ---------------------------- */
+  step('7. the panel renders in a real browser')
+  if (browserPath === null) {
+    if (process.env.SMOKE_REQUIRE_BROWSER === '1') fail('a Chromium is available', 'SMOKE_REQUIRE_BROWSER=1 but no browser was found')
+    else console.log('  skip  no Chromium on this machine (set SMOKE_BROWSER to point at one)')
+  } else {
+    ok('a Chromium is available', browserPath)
+    browserProfile = mkdtempSync(join(tmpdir(), 'dsh-smoke-browser-'))
+    let cdpPort = null
+    browser = spawn(browserPath, [
+      '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${browserProfile}`,
+      '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--window-size=1440,900',
+      `${base}/?token=${token}`,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] })
+    let browserLog = ''
+    browser.stderr.on('data', (chunk) => {
+      browserLog += chunk
+      const found = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(browserLog)
+      if (found !== null && cdpPort === null) cdpPort = Number(found[1])
+    })
+    const browserDeadline = Date.now() + 30_000
+    let pageTarget = null
+    while (Date.now() < browserDeadline && pageTarget === null) {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      if (cdpPort === null) continue
+      try {
+        const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json()
+        pageTarget = list.find((t) => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string') ?? null
+      } catch { /* still starting */ }
+    }
+    if (pageTarget === null) {
+      fail('the browser exposed a CDP page target', browserLog.slice(-200) || '(no DevTools line)')
+    } else {
+      ok('the browser opened the shell', `CDP on 127.0.0.1:${cdpPort}`)
+      // Raw CDP over Node's built-in WebSocket: no dependency, and the assertions
+      // run in the page exactly as a user's browser would.
+      const socket = new WebSocket(pageTarget.webSocketDebuggerUrl)
+      const exceptions = []
+      let rpcId = 0
+      const pendingCalls = new Map()
+      socket.addEventListener('message', (event) => {
+        const message = JSON.parse(String(event.data))
+        if (message.id !== undefined && pendingCalls.has(message.id)) { pendingCalls.get(message.id)(message); pendingCalls.delete(message.id) }
+        if (message.method === 'Runtime.exceptionThrown') exceptions.push(message.params?.exceptionDetails?.text ?? 'exception')
+      })
+      await new Promise((resolve, reject) => {
+        socket.addEventListener('open', resolve)
+        socket.addEventListener('error', () => reject(new Error('CDP socket failed')))
+      })
+      const command = (method, params = {}) => new Promise((resolve) => {
+        rpcId += 1
+        pendingCalls.set(rpcId, resolve)
+        socket.send(JSON.stringify({ id: rpcId, method, params }))
+      })
+      const evaluate = async (expression) => {
+        const reply = await command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+        return reply.result?.result?.value
+      }
+      await command('Runtime.enable')
+
+      // The shell labels its icon buttons through aria-label/title (a first cut
+      // matched textContent only and found nothing), and connecting to CDP right
+      // after launch can beat React's first render — so wait for the trigger
+      // itself instead of a text-length heuristic (the empty-session shell paints
+      // under 120 chars).
+      const settingsLabels = ['设置', 'Settings']
+      const labelHelper = "const label = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim()"
+      const wantedJson = JSON.stringify(settingsLabels)
+      let triggerPresent = false
+      const readyDeadline = Date.now() + 30_000
+      while (Date.now() < readyDeadline && !triggerPresent) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        triggerPresent = (await evaluate(`(() => { ${labelHelper}
+          const wanted = ${wantedJson}
+          return Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
+            .some((el) => wanted.includes(label(el)))
+        })()`)) === true
+      }
+      if (triggerPresent) ok('the shell painted its settings trigger', `${settingsLabels.join('/')} is present and clickable`)
+      else fail('the shell painted its settings trigger', String(await evaluate('document.body.innerText')).slice(0, 160).replace(/\n/g, ' '))
+
+      // Reach OUR OWN panel. The sidebar's 插件/会话 entries belong to the SHELL's
+      // plugin manager and session list — clicking those would prove nothing about
+      // this plugin (a first cut of this step did exactly that). What is
+      // unambiguously ours: the sections this plugin registers into the shell's
+      // Settings dialog (`settings.section`: 用量仪表盘 / 自动化, plus the hooks tab
+      // in the plugins page), whose copy exists only in OUR i18n table.
+      const opened = await evaluate(`(() => { ${labelHelper}
+        const wanted = ${wantedJson}
+        const hit = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
+          .find((el) => wanted.includes(label(el)))
+        if (hit === undefined) return false
+        hit.click()
+        return true
+      })()`)
+      if (opened === true) ok('opened the shell settings dialog', 'clicked 设置/Settings')
+      else fail('opened the shell settings dialog', 'no settings trigger found')
+
+      const ourLabels = ['用量仪表盘', 'Usage Dashboard', '自动化', 'Automation']
+      let panelText = ''
+      // The shell's first-run announcement ("内测声明 … 继续") covers the window and
+      // EATS clicks, and a click can also land while React is still hydrating: so
+      // dismiss the notice, then retry the settings click while polling for OUR
+      // labels instead of trusting a single click (this flaked exactly that way).
+      for (let attempt = 0; attempt < 4 && !ourLabels.some((t) => panelText.includes(t)); attempt += 1) {
+        await evaluate(`(() => { ${labelHelper}
+          const dismiss = ['继续', 'Continue', '知道了', 'Got it']
+          const hit = Array.from(document.querySelectorAll('button,[role=button]'))
+            .find((el) => dismiss.includes(label(el)))
+          if (hit !== undefined) hit.click()
+          return true
+        })()`)
+        if (attempt > 0) {
+          await evaluate(`(() => { ${labelHelper}
+            const wanted = ${wantedJson}
+            const hit = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
+              .find((el) => wanted.includes(label(el)))
+            if (hit !== undefined) hit.click()
+            return true
+          })()`)
+        }
+        const attemptDeadline = Date.now() + 8_000
+        while (Date.now() < attemptDeadline && !ourLabels.some((t) => panelText.includes(t))) {
+          await new Promise((resolve) => setTimeout(resolve, 500))
+          panelText = String(await evaluate('document.body.innerText'))
+        }
+      }
+      const hitLabels = ourLabels.filter((t) => panelText.includes(t))
+      if (hitLabels.length > 0) {
+        ok('our own sections rendered in the real shell', `our labels on screen: ${[...new Set(hitLabels)].join(', ')}`)
+      } else {
+        fail('our own sections rendered in the real shell', panelText.slice(0, 200).replace(/\n/g, ' '))
+      }
+      if (exceptions.length === 0) ok('no uncaught exception in the page', 'Runtime.exceptionThrown was silent')
+      else fail('no uncaught exception in the page', exceptions.slice(0, 3).join(' | '))
+      try { socket.close() } catch { /* already closed */ }
+    }
+  }
 } catch (error) {
   if (failures === 0) fail('smoke run', error instanceof Error ? error.message : String(error))
 } finally {

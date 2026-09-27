@@ -90,6 +90,9 @@ jobs:
         env:
           # A missing CLI here is a broken pipeline, not an opt-out.
           SMOKE_REQUIRE_DSH: '1'
+          # ubuntu runners ship Chrome; require it so the browser half of the
+          # smoke cannot silently skip in CI.
+          SMOKE_REQUIRE_BROWSER: '1'
           # NOTE: no NODE_OPTIONS preload here — the script emits its own
           # `::error::` annotations, and inheriting the preload would run it inside
           # dsh/pnpm and pollute the output the script reports on failure.

@@ -172,7 +172,7 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（124 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
-- **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来，再用**21 次只读调用覆盖 13/14 个管理命名空间**（实测 dsh 0.1.7-rc.2 上 14/14 通过，约 6 秒；不碰你真实的 `$DSH_HOME`）。CI 里是独立的 `host-smoke` 作业。
+- **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（28 项断言，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**21 次只读调用覆盖 13/14 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
 - `verify-service-injects.mjs` 静态扫描 `lib/**`，断言每一处直接的 `ctx.<service>` 读取都在 `inject` 声明里 —— 少了这一条，真实宿主会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见（`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。

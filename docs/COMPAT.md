@@ -107,7 +107,12 @@ npm run smoke:real-host          # 需要 PATH 上有 dsh 与 pnpm（dsh 用它�
 | 3 浏览器半 | shell 的模块表里有 `plugins/??dsh-plugin-admin/client.js`，且取回的是**我们的字节**（`PluginsSection` 等标记） | `dsh.client` 清单被发现、产物被真实 web 服务端出来 |
 | 4 RPC | `POST /api/pluginAdmin/list` 返回 `ok:true` 且列表里是本插件；另用畸形信封确认网关回 `gateway/bad-request` | 服务真的挂上了、typert 描述符真的注册了（网关只受理已声明端点）、strict codec 真的校验了参数 |
 
-实测：dsh `0.1.7-rc.2` 上 **14/14 通过，约 6 秒**；其中第 5 步用 **21 次只读调用覆盖 14 个命名空间里的 13 个**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh → `npm run smoke:real-host`）。
+实测：dsh `0.1.7-rc.2` 上 **28/28 通过，约 11–30 秒**；其中第 5 步用 **21 次只读调用覆盖 14 个命名空间里的 13 个**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh + pnpm → `npm run smoke:real-host`，`SMOKE_REQUIRE_DSH=1`、`SMOKE_REQUIRE_BROWSER=1`）。
+
+v1.25.4 起还有两步：
+
+- **步骤 6 · 写路径**：`cronAdmin/upsert`/`remove` 真的写进一次性 `$DSH_HOME` 的 `cron-tasks.json`；`pluginAdmin/setEnabled` 在真实 profile patch 写/删 `disabled: true` 行（F1 锁 + 原子 rename + hot-apply），并用 `pluginAdmin/list` 的 `disabled` 字段做往返断言；两次写都由 `admin-audit.jsonl` 留痕。靶子是一个冒烟自己生成的 no-op 插件 —— **不能拿我们自己的行当靶子**：禁用它会卸载正在服务这次调用的服务。
+- **步骤 7 · 真实浏览器**：headless Chromium + 原生 CDP（Node 内置 `WebSocket`，零依赖）打开真实 shell，断言无未捕获异常，并在点开设置后断言**我们自己的 `settings.section` 文案**（`用量仪表盘` / `自动化`）出现在 DOM 中 —— 只存在于我们 i18n 表的文案出现，即证明客户端 bundle 被真实 shell 执行并挂载。**注意别用侧栏的「插件/会话」当断言**：那是 shell 自带 plugin manager 与会话列表的入口，第一版冒烟正是这样误判的（已改正并伪证锁住）。缺浏览器则 SKIP，CI 用 `SMOKE_REQUIRE_BROWSER=1` 强制。
 
 **它第一次跑就抓到一个生产 bug**（v1.25.3 修）：`projectAdmin/list` 直接读 `ctx.workspaceRegistry`，而该服务不在插件的 `inject` 声明里 —— 真实 Cordis 抛 `cannot get property "workspaceRegistry" without inject`，面板拿到 `gateway/internal`。**所有替身 ctx 的检查都看不见它**（假 ctx 没有 scope guard，host-check/self-check/30 个 verify 全绿）。同一类问题在 `lib/subagent-admin.js` 还有 4 处（`ctx.get(…) ?? ctx.<service>` 形式的回退），由随后的静态闸门抓出。因此这一层与 `scripts/verify-service-injects.mjs`（扫描 `lib/**` 里未声明的直接服务读取，进 `npm test`）是配套的：**冒烟覆盖它调用的路径，静态规则覆盖写入路径与冷分支**。
 
