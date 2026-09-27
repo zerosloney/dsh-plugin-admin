@@ -37,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, resolvePluginConfig, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -170,6 +170,127 @@ assert.deepEqual(
   ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
   'unified descriptor carries all fourteen namespaces',
 )
+/* ------------ one RPC table, both halves checked against it -------------
+ * lib/rpc-manifest.js owns the wire surface. The host side is the mounted
+ * descriptor captured above (namespace, method, parameter wires, service
+ * key); the client side is scanned out of src/client/**. A method may be
+ * absent from the browser half only through an explicit allow-list entry,
+ * so an endpoint that loses its UI cannot hide (and a UI that calls a
+ * method the host no longer mounts fails here instead of at click time).
+ */
+{
+  const { RPC_MANIFEST, RPC_OPTIONAL_WIRES, RPC_DYNAMIC_CLIENT_TARGETS, RPC_HOST_ONLY_TARGETS } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
+  const mounted = new Map(typertRegistrations[0].invocations.map((i) => [`${i.namespace}/${i.method}`, i]))
+  const manifestTargets = new Set()
+  for (const [ns, entry] of Object.entries(RPC_MANIFEST)) {
+    for (const method of Object.keys(entry.methods)) manifestTargets.add(`${ns}/${method}`)
+  }
+
+  // 1. host side: the mounted surface IS the manifest.
+  assert.deepEqual([...mounted.keys()].sort(), [...manifestTargets].sort(), 'mounted RPC surface matches lib/rpc-manifest.js')
+  for (const [target, invocation] of mounted) {
+    const [ns, method] = target.split('/')
+    assert.deepEqual(invocation.parameters.map((p) => p.name), RPC_MANIFEST[ns].methods[method].params, `${target} parameter wires`)
+    assert.equal(invocation.id, RPC_MANIFEST[ns].methods[method].id, `${target} invocation id`)
+    assert.equal(invocation.service, RPC_MANIFEST[ns].serviceKey, `${target} service key`)
+    assert.equal(invocation.invocation.kind, 'direct', `${target} invocation kind`)
+  }
+
+  // 2. client side: scan every call('ns/method', ...) site.
+  const clientDir = join(here, '..', 'src', 'client')
+  // Every module of the browser half (Phase B2 moved the panels into their own
+  // source file; a hardcoded list would silently stop seeing their call sites).
+  const clientFiles = readdirSync(clientDir).filter((file) => file.endsWith('.js')).sort()
+  const clientText = clientFiles.map((file) => readFileSync(join(clientDir, file), 'utf8')).join('\n')
+  const splitArgs = (text) => {
+    const parts = []
+    let depth = 0
+    let current = ''
+    let quote = ''
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i]
+      if (quote !== '') { current += ch; if (ch === quote && text[i - 1] !== '\\') quote = ''; continue }
+      if (ch === "'" || ch === '"' || ch === '`') { quote = ch; current += ch; continue }
+      if ('([{'.includes(ch)) depth += 1
+      else if (')]}'.includes(ch)) depth -= 1
+      if (ch === ',' && depth === 0) { parts.push(current); current = ''; continue }
+      current += ch
+    }
+    parts.push(current)
+    return parts
+  }
+  const clientSites = new Map()
+  for (const match of clientText.matchAll(/\b(?:call|callRemote)\s*\(/g)) {
+    const open = match.index + match[0].length - 1
+    let depth = 0
+    let end = -1
+    let quote = ''
+    for (let i = open; i < clientText.length; i += 1) {
+      const ch = clientText[i]
+      if (quote !== '') { if (ch === quote && clientText[i - 1] !== '\\') quote = ''; continue }
+      if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue }
+      if (ch === '(') depth += 1
+      else if (ch === ')') { depth -= 1; if (depth === 0) { end = i; break } }
+    }
+    if (end < 0) continue
+    const args = splitArgs(clientText.slice(open + 1, end))
+    const literal = /^'([A-Za-z]+)\/([A-Za-z0-9_]+)'$/.exec((args[0] ?? '').trim())
+    if (literal === null) continue   // composed at runtime (see RPC_DYNAMIC_CLIENT_TARGETS)
+    const target = `${literal[1]}/${literal[2]}`
+    const payload = (args[1] ?? '').trim()
+    let kind = 'none'
+    let keys = []
+    if (payload.startsWith('{')) {
+      kind = 'object'
+      keys = splitArgs(payload.slice(1, payload.lastIndexOf('}'))).map((part) => {
+        const t = part.trim()
+        if (t === '' || t.startsWith('...')) return null
+        const km = /^([A-Za-z_$][\w$]*)\s*:/.exec(t) ?? /^([A-Za-z_$][\w$]*)\s*$/.exec(t)
+        return km === null ? null : km[1]
+      }).filter((k) => k !== null)
+    } else if (payload !== '') kind = 'expr'   // variable/call: target check only
+    if (!clientSites.has(target)) clientSites.set(target, [])
+    clientSites.get(target).push({ kind, keys })
+  }
+  const clientTargets = new Set(clientSites.keys())
+  const errors = []
+  for (const target of clientTargets) {
+    if (!manifestTargets.has(target)) errors.push(`client calls ${target} but the manifest does not declare it`)
+  }
+  for (const [target, sites] of clientSites) {
+    if (!manifestTargets.has(target)) continue
+    const wires = RPC_MANIFEST[target.split('/')[0]].methods[target.split('/')[1]].params
+    const optional = new Set(RPC_OPTIONAL_WIRES[target] ?? [])
+    for (const site of sites) {
+      if (site.kind !== 'object') continue
+      for (const key of new Set(site.keys)) {
+        if (!wires.includes(key)) errors.push(`${target} sends undeclared wire '${key}' (declared: ${wires.join(', ') || 'none'})`)
+      }
+      for (const wire of wires) {
+        if (!optional.has(wire) && !site.keys.includes(wire)) errors.push(`${target} omits required wire '${wire}'`)
+      }
+    }
+  }
+  const exempt = new Set([...RPC_DYNAMIC_CLIENT_TARGETS, ...RPC_HOST_ONLY_TARGETS, ...Object.keys(RPC_OPTIONAL_WIRES).filter((t) => !clientTargets.has(t))])
+  for (const target of [...RPC_DYNAMIC_CLIENT_TARGETS, ...RPC_HOST_ONLY_TARGETS]) {
+    if (!manifestTargets.has(target)) errors.push(`allow-list entry ${target} is stale (not in the manifest)`)
+  }
+  for (const target of RPC_HOST_ONLY_TARGETS) {
+    if (clientTargets.has(target)) errors.push(`host-only ${target} now has a client call site — move it out of RPC_HOST_ONLY_TARGETS`)
+  }
+  for (const target of manifestTargets) {
+    if (!clientTargets.has(target) && !exempt.has(target)) errors.push(`${target} is mounted but no client surface reaches it (declare it dynamic or host-only)`)
+  }
+  assert.deepEqual(errors, [], `RPC surface drift:\n  ${errors.join('\n  ')}`)
+  console.log(`host-check RPC: ${manifestTargets.size} methods across ${Object.keys(RPC_MANIFEST).length} namespaces match lib/rpc-manifest.js and ${clientTargets.size} client call targets`)
+}
+// Debug aid: `DSH_ADMIN_DUMP_RPC=<file> node scripts/host-check.mjs` writes the
+// mounted RPC surface to that file as JSON (namespace, method, parameter
+// names) — the raw material lib/rpc-manifest.js is authored from and checked
+// against by the manifest block below.
+if (typeof process.env.DSH_ADMIN_DUMP_RPC === 'string' && process.env.DSH_ADMIN_DUMP_RPC !== '') {
+  writeFileSync(process.env.DSH_ADMIN_DUMP_RPC, JSON.stringify(typertRegistrations[0].invocations.map((i) => [i.namespace, i.method, i.parameters.map((p) => p.name), i.id]), null, 1))
+}
 // The workflow surface rides the same descriptor. What host-check uniquely
 // guards here is that the mount REACHES the descriptor at all: the workflow
 // mount reads `ctx.get('subagents')` and early-returns when it is missing, so
@@ -527,11 +648,13 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
 }
 
 /* ------------ the Config schema is what the Loader resolves ------------
- * dsh resolves a plugin's config through `Config['~standard'].validate`
+ * dsh resolves a plugin config through `Config['~standard'].validate`
  * (vendor/cordis resolveConfig, Standard Schema v1) before apply mounts:
- * an absent row must yield the defaults, a mistyped one issues a message
- * the Loader turns into a ValidationError. Unknown keys ride through — the
- * command-hook admin reads its overrides off the same row.
+ * an absent row must yield the defaults, a mistyped one issues a message the
+ * Loader turns into a ValidationError. Every DOCUMENTED key — the 14 tunables
+ * and the 11 passthrough overrides — is validated; keys outside the
+ * documented set ride through untouched and are reported once by
+ * warnUnknownConfigKeys.
  */
 {
   const resolved = Config['~standard'].validate(undefined)
@@ -545,11 +668,55 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
     Array.isArray(negativeSweep.issues) && /config\.usageSnapshotIntervalMs must be a non-negative/.test(negativeSweep.issues[0].message),
     'a negative sweep interval reports an issue: ' + JSON.stringify(negativeSweep),
   )
-  assert.deepEqual(resolvePluginConfig({ commandsDir: 'x' }).commandsDir, 'x', 'unknown keys pass through the resolution')
   const bad = Config['~standard'].validate({ sessionSearchLimit: 1.5 })
   assert.ok(Array.isArray(bad.issues) && /config\.sessionSearchLimit must be an integer/.test(bad.issues[0].message), 'mistyped knob reports an issue: ' + JSON.stringify(bad))
   const notMapping = Config['~standard'].validate('soon')
   assert.ok(Array.isArray(notMapping.issues) && /config must be a mapping/.test(notMapping.issues[0].message), 'non-mapping config reports an issue: ' + JSON.stringify(notMapping))
+
+  // The exported key lists are the contract the unknown-key report rides: the
+  // resolved object must expose exactly the validated tunables, so a knob added
+  // to the resolver without joining VALIDATED_CONFIG_KEYS (or the reverse) fails
+  // here instead of reading as unknown at mount.
+  assert.deepEqual(
+    Object.keys(resolvePluginConfig(undefined)).sort(),
+    [...VALIDATED_CONFIG_KEYS].sort(),
+    'VALIDATED_CONFIG_KEYS matches the keys resolvePluginConfig actually fills in',
+  )
+  assert.equal(PASSTHROUGH_CONFIG_KEYS.length, 14, 'the documented passthrough list stays at 14 keys (auditLogPath in F3; webhookAllowRemote/webhookRateLimit in F4)')
+
+  // Documented passthrough overrides keep their raw identity when valid...
+  assert.equal(resolvePluginConfig({ commandsDir: 'x' }).commandsDir, 'x', 'a documented passthrough override keeps its raw value')
+  assert.deepEqual(
+    (({ projectCommands, projectHooksTrust, webhookHistoryCap }) => ({ projectCommands, projectHooksTrust, webhookHistoryCap }))(resolvePluginConfig({ projectCommands: false, projectHooksTrust: 'allow-all', webhookHistoryCap: 10 })),
+    { projectCommands: false, projectHooksTrust: 'allow-all', webhookHistoryCap: 10 },
+    'passthrough booleans, enums and caps survive resolution untouched',
+  )
+  // ...and mistyped ones fail the mount instead of silently doing nothing.
+  for (const [label, row, pattern] of [
+    ['commandsDir type', { commandsDir: 5 }, /config\.commandsDir must be a non-empty string/],
+    ['hooksPath empty', { hooksPath: '' }, /config\.hooksPath must be a non-empty string/],
+    ['projectCommands type', { projectCommands: 'yes' }, /config\.projectCommands must be a boolean/],
+    ['projectHooksTrust domain', { projectHooksTrust: 'maybe' }, /config\.projectHooksTrust must be one of/],
+    ['webhookHistoryCap type', { webhookHistoryCap: 'many' }, /config\.webhookHistoryCap must be a positive finite number/],
+    ['webhookHistoryCap range', { webhookHistoryCap: 10_001 }, /config\.webhookHistoryCap must be between 1 and 10000/],
+  ]) {
+    const outcome = Config['~standard'].validate(row)
+    assert.ok(
+      Array.isArray(outcome.issues) && pattern.test(outcome.issues[0].message),
+      label + ' reports an issue: ' + JSON.stringify(outcome),
+    )
+  }
+
+  // Unknown keys are reported (once) but never fatal: the same row also carries
+  // keys other readers own, and a typo must be visible without blocking a mount.
+  const warned = []
+  const unknown = warnUnknownConfigKeys({ commandsDir: 'x', pnpmTimoutMs: 1, sessionSearchLimmit: 2 }, { warn: (message) => warned.push(message) })
+  assert.deepEqual(unknown, ['pnpmTimoutMs', 'sessionSearchLimmit'], 'unknown keys are returned sorted')
+  assert.equal(warned.length, 1, 'unknown keys warn exactly once per call')
+  assert.ok(/unknown config key\(s\) ignored: pnpmTimoutMs, sessionSearchLimmit/.test(warned[0]), 'the warn names the keys: ' + warned[0])
+  warnUnknownConfigKeys({ pnpmTimoutMs: 1 }, { warn: (message) => warned.push(message) })
+  assert.equal(warned.length, 1, 'a key is reported only once per process (an HMR re-apply stays quiet)')
+  assert.deepEqual(warnUnknownConfigKeys(undefined, { warn: () => { throw new Error('must not warn') } }), [], 'an absent row reports nothing')
 }
 
 /* ------------ read() shape drift stays visible ------------
@@ -1907,6 +2074,30 @@ try {
   }
   if (savedNodeUseEnvProxy === undefined) delete process.env.NODE_USE_ENV_PROXY
   else process.env.NODE_USE_ENV_PROXY = savedNodeUseEnvProxy
+}
+
+/* ---------- Phase F3: privileged actions reach the audit trail ------------ */
+// Mounted through the real apply(): this is the WIRING check (the module
+// contract lives in scripts/verify-audit-log.mjs). cronAdmin/upsert writes
+// only into the temp $DSH_HOME, so the probe leaves the repo untouched.
+{
+  const auditFile = join(chaHome, 'admin-audit.jsonl')
+  const cronAdmin = fakeCtx.provided.cronAdmin
+  assert.ok(cronAdmin !== undefined, 'cronAdmin service provided for the audit probe')
+  const before = existsSync(auditFile) ? readFileSync(auditFile, 'utf8') : ''
+  await cronAdmin.upsert({ id: 'host-check-audit', cron: '0 9 * * *', action: { mode: 'steer', sessionId: 'audit-probe' }, promptTemplate: 'audit probe' })
+  await assert.rejects(() => cronAdmin.upsert({ id: 'host-check-audit-bad', cron: 'not a cron', action: { mode: 'steer', sessionId: 'audit-probe' } }))
+  const added = readFileSync(auditFile, 'utf8').slice(before.length).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  assert.ok(added.some((entry) => entry.action === 'cronAdmin/upsert' && entry.ok === true), 'the accepted action is in the trail')
+  assert.ok(added.some((entry) => entry.action === 'cronAdmin/upsert' && entry.ok === false), 'the rejected action is in the trail too')
+  assert.ok(added.every((entry) => entry.pid === process.pid), 'every entry carries the writing pid')
+  const trail = await fakeCtx.provided.pluginAdmin.auditLog()
+  assert.ok(Array.isArray(trail.entries) && trail.entries.length > 0, 'pluginAdmin/auditLog returns entries')
+  assert.equal(trail.entries[0].action, 'cronAdmin/upsert', 'the reader answers newest first')
+  assert.ok(String(trail.path).endsWith('admin-audit.jsonl'), 'the reader names the file it read')
+  // The file may carry entries from earlier probes in this run, so assert against
+  // what THIS probe wrote rather than the whole trail.
+  assert.ok(trail.count >= added.length, 'the reader reports a trail size covering the new entries')
 }
 
 // Release every mounted command-hook fs.watch before removing the temp
