@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [1.25.1] - 2026-09-27
+
+补丁版：修复 1.25.0 引入的锁缺陷（在 Windows 双实例争用同一存储锁时必现），并补上 CI 失败的可诊断性。
+
 ### Fixed
 
 - **`withFileLock` 把 Windows 上的非 `EEXIST` 竞争误判成致命错误**（1.25.0 里就存在的真实缺陷，被新的跨进程用例触发）：`open(lock, 'wx')` 在另一个进程正创建/删除锁文件时，Windows 会报 `EPERM` / `EACCES` / `EBUSY`，而不只是 `EEXIST`；原实现只放行 `EEXIST`，其余直接抛出 —— 表现是 `scripts/verify-cron-admin.mjs exited 1`、异常带 `path: '…cron-tasks.json.dsh-admin.lock'`（windows-latest / Node 22 一腿）。现在四种码都视为"有人持锁"而继续等待（`ENOSPC` / `EISDIR` / `EROFS` 等仍照抛），判定抽成 `isLockContention()` 并有单测覆盖两个方向；顺带把"open 成功但写 pid 失败"留下的半锁自行清理，不再让下一个调用者白等一个 stale 窗口。
