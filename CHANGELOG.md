@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **真实宿主冒烟（L3）：`npm run smoke:real-host`**（`scripts/smoke-real-host.mjs`，零依赖）。此前所有检查都在替身 ctx / jsdom / 只读源码这一层：能证明契约还在，但证明不了"loader 组出了我们的行、服务却没挂上"、"客户端 bundle 没进模块表"、"网关不认我们的描述符"。这个脚本用**一次性 `DSH_HOME`**（dsh 自带 web 模板生成 profile + `dsh plugin … add link:<repo>` 装本插件）把真实宿主机跑起来，断言四件事：
+  1. `--dump-config` 里出现 `- id: plugin-admin / name: dsh-plugin-admin`（宿主读到了我们包里的 `dsh.bundle.patch`）；
+  2. Host 打印带 token 的 URL（插件存在时能正常 boot）；
+  3. shell 的模块表列出 `plugins/??dsh-plugin-admin/client.js`，且取回的是**我们的字节**（`PluginsSection` 等标记）；
+  4. `POST /api/pluginAdmin/list` 经真实网关返回 `ok:true` 且列表里是本插件（服务挂上 + typert 描述符注册 + strict codec 校验都成立），另用畸形信封确认网关回 `gateway/bad-request`。
+
+  实测 dsh `0.1.7-rc.2` 上 **11/11 通过、约 5 秒**；跑完 `finally` 杀进程树并删临时目录，**绝不碰真实 `$DSH_HOME`**（已在真机上核对：你的 `~/.dsh/profiles` 与实时实例不受影响）。它**不进 `npm test`**（需要真实 dsh + 起进程），CI 里作为独立 `host-smoke` 作业（装 pin 住的 dsh，`SMOKE_REQUIRE_DSH=1` 让"缺 CLI"变成失败而不是静默跳过）。`docs/COMPAT.md` 新增「真实宿主冒烟（L3）」一节，README 中英同步。
+
 ### Changed
 
 - **补齐"钉得比用到的浅"的 5 条接缝探针**（接缝矩阵 112 → **124 条契约**）：这几条原本有探针或替身，但**没钉住插件真正调用的那个成员**：

@@ -172,6 +172,7 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（124 条断言，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝）。
+- **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、`POST /api/pluginAdmin/list` 经真实网关返回 `ok:true`（实测 dsh 0.1.7-rc.2 上 11/11 通过，约 5 秒；不碰你真实的 `$DSH_HOME`）。CI 里是独立的 `host-smoke` 作业。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。

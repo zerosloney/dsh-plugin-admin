@@ -173,6 +173,7 @@ Static gates (run first; the suite aborts on the first failure):
 
 
 - `integration-check.mjs` probes the real dsh checkout source for contract drift (124 assertions across every admin RPC namespace and the workflow engine seams).
+- **`npm run smoke:real-host`** — the only check that boots a **real dsh**: it builds a throwaway `DSH_HOME` from dsh's own shipped template, installs this plugin into it, boots it, and asserts the loader composed our row, the client bundle reached the shell's module table and is served with our bytes, and `POST /api/pluginAdmin/list` answers `ok:true` through the real gateway (measured 11/11 in ~5s on dsh 0.1.7-rc.2; your real `$DSH_HOME` is never touched). CI runs it as its own `host-smoke` job.
 - `verify-i18n.mjs` asserts that the English copy table and every `dshT()` call site cover each other (so a new string cannot ship untranslated) and that no English value keeps Chinese text.
 - `self-check.mjs` ends with an **en-mode smoke**: it materializes a second client under the English locale and asserts the nav/toolbar chrome translations plus the language switch.
 - `verify-cron-panel.mjs` really mounts the Automation page in jsdom and drives its Cron Tasks tab (list / toggle / manual editor: typed id + hourly frequency → `0 * * * *` → save); the template-card path is covered by self-check case 15y1, so the two are complementary.

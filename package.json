@@ -25,7 +25,8 @@
     "check:types": "tsc --noEmit",
     "check:lint": "oxlint lib src scripts",
     "build:client": "node scripts/build-client.mjs",
-    "test:matrix": "node scripts/check-matrix.mjs"
+    "test:matrix": "node scripts/check-matrix.mjs",
+    "smoke:real-host": "node scripts/smoke-real-host.mjs"
   },
   "exports": {
     ".": "./lib/index.js",

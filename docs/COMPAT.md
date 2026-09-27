@@ -89,6 +89,27 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 
 **未实现的探测**：上表中标 "—" 的行目前 `detect` 恒为 false，即面板保留。这是刻意的：**探测不到就不让位**——把看不见的东西当作"已覆盖"会让功能凭空消失。后续上游补齐（例如官方 MCP 管理页）时，只需给对应行加一条探测。
 
+## 真实宿主冒烟（L3）
+
+前面三节都是"不启动宿主"的验证：`host-check` 用替身 ctx 挂载、`self-check` 用 jsdom 跑面板、`integration-check` 只**读** dsh 源码。它们能证明契约还在，但证明不了"loader 组出了我们的行、服务却根本没挂上"、"客户端 bundle 没进模块表"、"网关不认我们的描述符"这类事。`scripts/smoke-real-host.mjs` 补的就是这一层：
+
+```
+npm run smoke:real-host          # 需要 PATH 上有 dsh；没有则 SKIP（CI 里用 SMOKE_REQUIRE_DSH=1 变成失败）
+```
+
+它**只用一次性目录**（`mkdtempSync` 做 `DSH_HOME`，从 dsh 自带的 web 模板生成 profile，用 `dsh plugin … add link:<repo>` 装本插件），跑完在 `finally` 里杀掉进程树并删目录 —— **绝不碰你真实的 `$DSH_HOME`**。断言四件事：
+
+| 阶段 | 断言 | 抓的是什么 |
+|---|---|---|
+| 1 组合 | `dsh <profile> --dump-config` 里出现 `- id: plugin-admin / name: dsh-plugin-admin` | 宿主 loader 读到了我们包里的 `dsh.bundle.patch` 并把行组合进配置树 |
+| 2 启动 | Host 打印带 token 的 URL | 插件存在时宿主能正常 boot（挂载抛错就会在这里断） |
+| 3 浏览器半 | shell 的模块表里有 `plugins/??dsh-plugin-admin/client.js`，且取回的是**我们的字节**（`PluginsSection` 等标记） | `dsh.client` 清单被发现、产物被真实 web 服务端出来 |
+| 4 RPC | `POST /api/pluginAdmin/list` 返回 `ok:true` 且列表里是本插件；另用畸形信封确认网关回 `gateway/bad-request` | 服务真的挂上了、typert 描述符真的注册了（网关只受理已声明端点）、strict codec 真的校验了参数 |
+
+实测：dsh `0.1.7-rc.2` 上 **11/11 通过，约 5 秒**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh → `npm run smoke:real-host`）。
+
+这条不放进 `npm test`：它需要真实 `dsh` 且要起进程，属于"重量级但承重"的独立闸门，而不是每个开发者每次都要跑的 34 个脚本之一。
+
 ## 已知边界（并发写）
 
 跨进程写保护（Phase F1/F2）的适用面是**明确的**，不等于"所有落盘都安全"：
