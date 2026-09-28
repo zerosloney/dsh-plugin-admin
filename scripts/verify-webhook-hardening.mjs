@@ -222,11 +222,102 @@ await check('repeated authentication failures are throttled (429 + retry-after)'
   }
   const throttled = mockRes()
   await m.handler(jsonReq({ secret: 'wrong-secret-16chars' }), throttled)
-  assert.equal(throttled.statusCode, 429, 'the lockout answers 429')
+  assert.equal(throttled.statusCode, 429, 'the lockout answers a wrong secret with 429')
   assert.ok(Number(throttled.headers['retry-after']) >= 1, 'retry-after is set')
+  // …but a CORRECT secret ends the lockout. The brake exists to stop guessing,
+  // and an attacker reaching this branch must already hold the secret; refusing
+  // it only locked the operator's own integrations out for the whole window
+  // (the shared-bucket variant of that turned one caller into everyone's outage).
   const good = mockRes()
   await m.handler(jsonReq(), good)
-  assert.equal(good.statusCode, 429, 'a locked-out caller cannot retry with the right secret either')
+  assert.equal(good.statusCode, 202, 'a correct secret is admitted even while the bucket is locked out')
+  // The lockout is genuinely cleared, not bypassed once: a wrong secret right
+  // after is a plain 401 again, not a permanent 429.
+  const afterwards = mockRes()
+  await m.handler(jsonReq({ secret: 'wrong-secret-16chars' }), afterwards)
+  assert.equal(afterwards.statusCode, 401, 'the failure counter was reset by the successful authentication')
+  m.dispose()
+})
+
+await check('an address-less transport keeps per-CALLER request budgets', async () => {
+  // The transport reports no peer address, so each request carries its own
+  // socket object (this mock does; a real keep-alive connection reuses one).
+  // Budgeting them as a single shared 'unknown' caller meant one flood starved
+  // every other delivery; per-connection keys keep them apart.
+  const m = mount({
+    webhookTriggersPath: join(dir, 'h-rules.json'),
+    webhookHistoryPath: join(dir, 'h-history.json'),
+    webhookAllowRemote: true,
+    webhookRateLimit: 3,
+  })
+  await m.service.saveRule(RULE)
+  const socketA = { remoteAddress: undefined }
+  const socketB = { remoteAddress: undefined }
+  const deliver = (socket) => {
+    const res = mockRes()
+    const req = jsonReq({ remote: null })
+    req.socket = socket
+    return m.handler(req, res).then(() => res)
+  }
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await deliver(socketA)).statusCode, 202, 'caller A delivery ' + (i + 1) + ' accepted')
+  }
+  assert.equal((await deliver(socketA)).statusCode, 429, 'caller A exhausts ITS request budget')
+  assert.equal((await deliver(socketB)).statusCode, 202, 'caller B has its own budget and is not starved')
+  m.dispose()
+})
+
+await check('an address-less transport still brakes brute force, and a real delivery releases it', async () => {
+  // The mirror image of the case above: per-connection FAILURE budgets alone
+  // would be no brake at all (a fresh connection per guess = a fresh allowance),
+  // so address-less callers share one failure key. The operator's own delivery
+  // proves the transport works and clears it, so an attacker cannot hold it.
+  const m = mount({
+    webhookTriggersPath: join(dir, 'i-rules.json'),
+    webhookHistoryPath: join(dir, 'i-history.json'),
+    webhookAllowRemote: true,
+    webhookRateLimit: 500,
+  })
+  await m.service.saveRule(RULE)
+  const guess = () => {
+    const res = mockRes()
+    const req = jsonReq({ remote: null, secret: 'wrong-secret-16chars' })
+    req.socket = { remoteAddress: undefined }   // a NEW connection per guess
+    return m.handler(req, res).then(() => res)
+  }
+  for (let i = 0; i < 10; i += 1) assert.equal((await guess()).statusCode, 401, 'guess ' + (i + 1) + ' is a 401')
+  assert.equal((await guess()).statusCode, 429, 'the 11th guess on a new connection is still braked')
+  // A genuine delivery (correct secret) is admitted and clears the shared brake.
+  const genuine = mockRes()
+  const genuineReq = jsonReq({ remote: null })
+  genuineReq.socket = { remoteAddress: undefined }
+  await m.handler(genuineReq, genuine)
+  assert.equal(genuine.statusCode, 202, 'a correct secret is admitted while the shared brake is on')
+  assert.equal((await guess()).statusCode, 401, 'and the brake was released, not merely bypassed once')
+  m.dispose()
+})
+
+await check('rejected-traffic history rows are capped per window (each one rewrites the file)', async () => {
+  const logs = []
+  const m = mount({
+    webhookTriggersPath: join(dir, 'j-rules.json'),
+    webhookHistoryPath: join(dir, 'j-history.json'),
+    webhookAllowRemote: true,
+    webhookRateLimit: 500,
+  }, logs)
+  await m.service.saveRule(RULE)
+  // 30 DISTINCT callers, each getting one 401: every one used to push a history
+  // row, and every row rewrites the whole history sidecar synchronously.
+  for (let i = 0; i < 30; i += 1) {
+    const res = mockRes()
+    await m.handler(jsonReq({ remote: `198.51.100.${i + 1}`, secret: 'wrong-secret-16chars' }), res)
+    assert.equal(res.statusCode, 401)
+  }
+  const view = await m.service.list()
+  const rows = view.history.filter((entry) => entry.ok === false)
+  assert.ok(rows.length > 0, 'the attack is still visible in the history')
+  assert.ok(rows.length <= 10, `at most 10 rejection rows per window (got ${rows.length})`)
+  assert.equal(logs.filter((line) => line.includes('401')).length, 30, 'every caller still leaves a log line')
   m.dispose()
 })
 

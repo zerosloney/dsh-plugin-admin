@@ -655,6 +655,33 @@ await check('apply(): generic cliUpsert/cliRemove persist cli.json and register 
       /保留名/,
     )
 
+    // Secrets in a generic backend's env are write-only, and the panel never
+    // sends `env` at all: the list payload must carry KEY NAMES ONLY, and a save
+    // must inherit the stored map instead of wiping it (the old
+    // `env: rawConfig.env !== undefined ? … : {}` erased every variable on the
+    // first panel save, silently).
+    const secretMounted = await service.cliUpsert({
+      payload: { kind: 'generic', backendId: 'cli-secret', config: { command: 'gemini', providerName: 'cli-secret', env: { GEMINI_API_KEY: 'sk-secret-value' } } },
+    })
+    assert.equal(secretMounted.ok, true)
+    const listedSecret = secretMounted.backends.find(item => item.id === 'cli-secret')
+    assert.deepEqual(listedSecret.env, { GEMINI_API_KEY: '' }, 'env comes back as key names with empty values')
+    assert.ok(!JSON.stringify(secretMounted).includes('sk-secret-value'), 'the stored value is nowhere in the payload')
+    // No env field → inherit (this is the panel's actual save shape).
+    const savedWithoutEnv = await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-secret', config: { command: 'gemini', providerName: 'cli-secret' } } })
+    assert.deepEqual(savedWithoutEnv.backends.find(item => item.id === 'cli-secret').env, { GEMINI_API_KEY: '' }, 'still listed as set')
+    const onDisk = JSON.parse(readFileSync(join(dir, 'subagent-admin.cli.json'), 'utf8'))
+    const storedRow = onDisk.backends.find(item => item.id === 'cli-secret')
+    assert.equal(storedRow.env.GEMINI_API_KEY, 'sk-secret-value', 'an env-less save does not wipe the stored credential')
+    // An explicitly empty value inherits; a real value replaces.
+    await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-secret', config: { command: 'gemini', providerName: 'cli-secret', env: { GEMINI_API_KEY: '', EXTRA: 'added' } } } })
+    const inheritedRow = JSON.parse(readFileSync(join(dir, 'subagent-admin.cli.json'), 'utf8')).backends.find(item => item.id === 'cli-secret')
+    assert.deepEqual(inheritedRow.env, { GEMINI_API_KEY: 'sk-secret-value', EXTRA: 'added' }, 'empty inherits the stored value; new keys are written')
+    await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-secret', config: { command: 'gemini', providerName: 'cli-secret', env: { GEMINI_API_KEY: 'rotated' } } } })
+    const rotatedRow = JSON.parse(readFileSync(join(dir, 'subagent-admin.cli.json'), 'utf8')).backends.find(item => item.id === 'cli-secret')
+    assert.deepEqual(rotatedRow.env, { GEMINI_API_KEY: 'rotated' }, 'a real value replaces, and the omitted key is removed')
+    await service.cliRemove({ id: 'cli-secret' })
+
     // cliInstall: unknown backend rejected before any npm call; missing-package
     // computation honors the resolver result.
     await assert.rejects(() => service.cliInstall({ backendId: 'nope' }), /未知的 CLI 后端/)

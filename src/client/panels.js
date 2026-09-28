@@ -272,10 +272,10 @@ function PluginsSection(props) {
         // Failure reasons ride the summary (bounded per entry) so a failed
         // batch is diagnosable without re-running it one by one.
         bulkNoteRef.current = dshT('✅ 批量更新完成：') + (targets.length - failedTotal) + dshT(' 个已更新') + (failedTotal > 0
-          ? '，' + failedTotal + dshT(' 个失败：') + failures.map(function (row) {
-            return row.name + '（' + String(row.reason).split('\n')[0].slice(0, 120) + '）'
-          }).join('；')
-          : '') + (compatTotal > 0 ? '，' + compatTotal + dshT(' 个与当前 dsh 不兼容（重启将被跳过）') : '') + dshT('。更改在重启 dsh 后生效')
+          ? dshT('，') + failedTotal + dshT(' 个失败：') + failures.map(function (row) {
+            return row.name + dshT('（') + String(row.reason).split('\n')[0].slice(0, 120) + dshT('）')
+          }).join(dshT('；'))
+          : '') + (compatTotal > 0 ? dshT('，') + compatTotal + dshT(' 个与当前 dsh 不兼容（重启将被跳过）') : '') + dshT('。更改在重启 dsh 后生效')
         return
       }
       var target = targets[index]
@@ -1601,7 +1601,7 @@ function renderPluginsView(view, patch, install, remove, checkUpdates, upgrade, 
       onClick: function () { upgradeAll() },
     },
       view.bulkUpdate !== null
-        ? dshT('更新中 ') + view.bulkUpdate.done + ' / ' + view.bulkUpdate.total + (view.bulkUpdate.failed.length > 0 ? '（' + view.bulkUpdate.failed.length + dshT(' 失败）') : '')
+        ? dshT('更新中 ') + view.bulkUpdate.done + ' / ' + view.bulkUpdate.total + (view.bulkUpdate.failed.length > 0 ? dshT('（') + view.bulkUpdate.failed.length + dshT(' 失败）') : '')
         : dshT('⬆⬆ 全部更新') + (upgradeAllCount > 0 ? ' (' + upgradeAllCount + ')' : '')
     ),
   ))
@@ -1783,7 +1783,7 @@ function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp
       ]
       if (ok && Array.isArray(r.tools) && r.tools.length > 0) {
         detailChildren.push(createElement('span', { key: 'tools-hint', style: { color: 'var(--dsw-alias-label-secondary, #61666b)' } },
-          dshT('工具：') + r.tools.join('、')))
+          dshT('工具：') + r.tools.join(dshT('、'))))
       }
       if (r.warning) {
         detailChildren.push(createElement('span', { key: 'warn', className: 'mcp-test-warn', title: r.warning },
@@ -1898,6 +1898,8 @@ function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp
     var d = view.mcpDraft
     var fieldStyle = { display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }
     var labelStyle = { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #666)' }
+    /** Write-only-field note under the env / headers textareas. */
+    var secretHintStyle = { fontSize: '10px', lineHeight: '1.45', color: 'var(--dsw-alias-label-tertiary, #999)' }
     // 'mcp-editor' is the scroll-viewport class (max-height + overflow-y +
     // sticky actions in CSS): a tall add/edit form scrolls inside the bounded
     // settings dialog instead of pushing the 取消/保存 row out of reach.
@@ -1963,6 +1965,7 @@ function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp
           value: d.headers,
           onChange: function (e) { patchDraft({ headers: e.target.value, headersChanged: true }) },
         }),
+        createElement('div', { style: secretHintStyle }, dshT('已存的 header 只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该键。')),
       ) : null,
       d.transport === 'stdio' ? createElement('div', { style: fieldStyle, key: 'f-args' },
         createElement('label', { style: labelStyle }, dshT('args（空格分隔，可选）')),
@@ -1979,6 +1982,7 @@ function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp
           value: d.env,
           onChange: function (e) { patchDraft({ env: e.target.value, envChanged: true }) },
         }),
+        createElement('div', { style: secretHintStyle }, dshT('已存的环境变量只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该变量。')),
       ) : null,
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', marginBottom: '4px', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.3))', paddingTop: '8px' }, key: 'f-reconnect-header' },
         createElement(UiCheckbox, {
@@ -2120,7 +2124,7 @@ function renderPluginCard(plugin, view, remove, patch, upgrade, setEnabled) {
     updateBadge = createElement('span', {
       className: 'tag update',
       key: 'update-badge',
-      title: dshT('远程 registry 有新版本：v') + updateInfo.latest + dshT('（当前 v') + plugin.version + '）'
+      title: dshT('远程 registry 有新版本：v') + updateInfo.latest + dshT('（当前 v') + plugin.version + dshT('）')
         + (typeof updateInfo.at === 'number' && updateInfo.at > 0 ? dshT('，检测于 ') + formatTestTime(updateInfo.at) + dshT('，更新后提醒自动消除') : ''),
     }, dshT('⬆ 有新版本 v') + updateInfo.latest)
   } else if (updateInfo && updateInfo.error) {
@@ -2164,7 +2168,7 @@ function renderPluginCard(plugin, view, remove, patch, upgrade, setEnabled) {
         variant: 'outline',
         size: 'sm',
         disabled: view.busy,
-        title: dshT('升级到 v') + updateInfo.latest + '（npm install ' + plugin.name + '@' + updateInfo.latest + '）',
+        title: dshT('升级到 v') + updateInfo.latest + '（npm install ' + plugin.name + '@' + updateInfo.latest + dshT('）'),
         onClick: function () { upgrade(plugin.name) },
       }, dshT('⬆ 更新')))
     }
@@ -2281,7 +2285,8 @@ function formatTokenCount(n) {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return ''
   if (n === 0) return '0'
   if (n < 1000) return String(n)
-  if (n < 1000000) return (Math.round(n / 100) / 10) + 'k'
+  // 999_999 must not wear a 'k': rounding to one decimal crosses the unit.
+  if (n < 999_950) return (Math.round(n / 100) / 10) + 'k'
   return (Math.round(n / 100000) / 10) + 'M'
 }
 
@@ -2343,7 +2348,7 @@ function UsageDashboardSection(props) {
   var sweepHint = sweepOn
     ? dshT('每 ') + sweepCadence + dshT('自动快照会话用量到台账')
       + (usage.lastSnapshotAt !== null ? dshT('；最近一次 ') + new Date(usage.lastSnapshotAt).toLocaleTimeString() : '')
-      + (usage.storagePath ? '（' + usage.storagePath + '）' : '')
+      + (usage.storagePath ? dshT('（') + usage.storagePath + dshT('）') : '')
     : dshT('后台自动快照已关闭（config.usageSnapshotIntervalMs = 0）——只有打开本页时才会记录用量')
 
   return createElement('div', { 'data-dsh-admin-section': '' },
@@ -2483,7 +2488,7 @@ function renderUsageDashboard(usage, patch) {
     var busiest = dayKeys.reduce(function (a, b) {
       return (dayMap[b].input + dayMap[b].output) > (dayMap[a].input + dayMap[a].output) ? b : a
     })
-    insights.push(dshT('💡 用量最高的一天是 ') + busiest + '（' + dayMap[busiest].input + dshT(' 入 / ') + dayMap[busiest].output + dshT(' 出）。'))
+    insights.push(dshT('💡 用量最高的一天是 ') + busiest + dshT('（') + dayMap[busiest].input + dshT(' 入 / ') + dayMap[busiest].output + dshT(' 出）。'))
   }
 
   // --- KPI card builder ---
@@ -3644,7 +3649,7 @@ function SubagentsPanel(props) {
         draft: Object.assign({}, prev.draft, { provider: providerName }, adjustment.patch),
         error: null,
         capabilityNotice: adjustment.adjusted.length > 0
-          ? dshT('已按「') + providerName + dshT('」的能力清除或调整：') + adjustment.adjusted.join('、')
+          ? dshT('已按「') + providerName + dshT('」的能力清除或调整：') + adjustment.adjusted.join(dshT('、'))
           : null,
       })
     })
@@ -4946,7 +4951,7 @@ function ChCommandsTab(props) {
       if (queue.length === 0) {
         setBusy(false)
         setImporting(null)
-        setNote(dshT('导入完成：') + saved + dshT(' 条新增') + (skipped > 0 ? '，' + skipped + dshT(' 条同名跳过') : '') + (failed > 0 ? '，' + failed + dshT(' 条失败') : ''))
+        setNote(dshT('导入完成：') + saved + dshT(' 条新增') + (skipped > 0 ? dshT('，') + skipped + dshT(' 条同名跳过') : '') + (failed > 0 ? dshT('，') + failed + dshT(' 条失败') : ''))
         load()
         return
       }
@@ -7077,22 +7082,32 @@ function WorkflowSection(props) {
 
   kit.mount(reload)
 
-  // 有运行中的任务时轮询（2s），否则停轮询省电。
+  // 有运行中的任务时轮询（2s 起），否则停轮询省电。
+  var pollFailures = 0
   function schedulePoll() {
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null }
     var anyRunning = (runsRef.current || []).some(function (r) { return r.status === 'running' || r.status === 'pending' })
-    if (!anyRunning) return
+    if (!anyRunning) { pollFailures = 0; return }
+    // 失败也要退避：原先成功与失败都按固定 2s 重排，于是"宿主半没有该接口 /
+    // 传输一直失败"会变成每秒半次的永久重试，日志和控制台被刷满。
+    var delay = Math.min(2000 * Math.pow(2, pollFailures), 30000)
     pollTimerRef.current = setTimeout(function () {
       if (!alive.current) return
       call('workflowAdmin/listRuns', {}).then(function (res) {
         if (!alive.current) return
         if (res.ok) {
+          pollFailures = 0
           runsRef.current = (res.value && res.value.active) || []
           patch({ runs: runsRef.current })
+        } else {
+          pollFailures += 1
         }
         schedulePoll()
-      }, function () { schedulePoll() })
-    }, 2000)
+      }, function () {
+        pollFailures += 1
+        schedulePoll()
+      })
+    }, delay)
   }
   schedulePoll()
 
@@ -7103,6 +7118,11 @@ function WorkflowSection(props) {
       if (!alive.current) return
       if (res.ok) patch({ runDetail: res.value })
       else patch({ runDetail: { error: messageOf(res.error) } })
+    }, function (error) {
+      // 详情卡只在 `state.runDetail` 有值时渲染：传输失败/宿主半未注册该接口时，
+      // 没有这个失败分支就只是"点了没反应"，外加一个未处理的 rejection。
+      if (!alive.current) return
+      patch({ runDetail: { error: messageOf(error) } })
     })
   }
 
@@ -7879,7 +7899,7 @@ function WebSearchSection(props) {
   // ---------- Render ----------
   var elements = []
   elements.push(createElement('div', { className: 'hint', key: 'restart-banner',
-    style: { background: 'var(--dsw-alias-bg-elevated, rgba(245,245,250,0.5))', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4))' } },
+    style: { background: 'var(--dsw-alias-bg-layer-2)', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4))' } },
     dshT('🔁 切换 provider / 安装 / 卸载 后需**重启 dsh** 生效；⚙ 配置里带 settings 命名空间的 provider 保存后即时生效，写 cordis 行的需重启'),
   ))
   if (state.busy) {
@@ -8009,7 +8029,7 @@ function renderProviderConfig(view, ui) {
     var input
     if (field.kind === 'enum') {
       var options = [createElement('option', { key: '__inherit', value: '' },
-        dshT('继承默认') + (field.default === null || field.default === undefined ? '' : '（' + field.default + '）'))]
+        dshT('继承默认') + (field.default === null || field.default === undefined ? '' : dshT('（') + field.default + dshT('）')))]
       for (var c = 0; c < choices.length; c++) {
         options.push(createElement('option', { key: choices[c], value: choices[c] }, choices[c]))
       }
@@ -8233,7 +8253,7 @@ function SkillsSection(props) {
       }, 1500)
     }, function (err) {
       if (!alive.current) return
-      showToast('error', dshT('❌ 复制失败：') + messageOf(err) + dshT('（可手动复制 /') + name + '）')
+      showToast('error', dshT('❌ 复制失败：') + messageOf(err) + dshT('（可手动复制 /') + name + dshT('）'))
     })
   }
 
@@ -8356,7 +8376,7 @@ function SkillsSection(props) {
       actionChildren.push(createElement(UiButton, {
         variant: 'outline',
         size: 'sm', key: 'btn-open',
-        title: dshT('在系统资源管理器中打开 SKILL.md 所在目录（') + skill.path + '）',
+        title: dshT('在系统资源管理器中打开 SKILL.md 所在目录（') + skill.path + dshT('）'),
         onClick: function () { openPath(skill.path) },
       }, dshT('📂 打开目录')))
     }
@@ -8377,7 +8397,7 @@ function SkillsSection(props) {
     }
     var seenIn = Array.isArray(skill.scopes) ? skill.scopes : []
     subChildren.push(createElement('div', { key: 'scopes', className: 'card-sub', style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #61666b)' } },
-      dshT('可见于：') + seenIn.map(function (label) { return scopeShortByLabel[label] || label }).join('、')
+      dshT('可见于：') + seenIn.map(function (label) { return scopeShortByLabel[label] || label }).join(dshT('、'))
       + (skill.provider ? ' · provider: ' + skill.provider : '')))
     cardNodes.push(createElement('div', { className: 'card', key: 'skill-' + skill.name },
       createElement('div', { className: 'card-header', key: 'h' },
@@ -8420,7 +8440,7 @@ function SkillsSection(props) {
       if (presetScopes[ppi].error) failedPresetCount++
     }
     if (presetScopes.length > 0) {
-      emptyDiagnose.push(dshT('预设作用域：') + presetScopes.length + dshT(' 个') + (failedPresetCount > 0 ? '（' + failedPresetCount + dshT(' 个解析失败）') : ''))
+      emptyDiagnose.push(dshT('预设作用域：') + presetScopes.length + dshT(' 个') + (failedPresetCount > 0 ? dshT('（') + failedPresetCount + dshT(' 个解析失败）') : ''))
     }
     var sessionScopeCount = 0
     var failedScopeCount = 0
@@ -8429,7 +8449,7 @@ function SkillsSection(props) {
       if (sessionScopes[sci].error) failedScopeCount++
     }
     if (sessionScopeCount > 0) {
-      emptyDiagnose.push(dshT('会话作用域：') + sessionScopeCount + dshT(' 个') + (failedScopeCount > 0 ? '（' + failedScopeCount + dshT(' 个解析失败）') : ''))
+      emptyDiagnose.push(dshT('会话作用域：') + sessionScopeCount + dshT(' 个') + (failedScopeCount > 0 ? dshT('（') + failedScopeCount + dshT(' 个解析失败）') : ''))
     } else if (state.sessions.length === 0) {
       emptyDiagnose.push(dshT('会话作用域：无（dsh 当前没有已知会话）'))
     }
@@ -8484,7 +8504,7 @@ function WebhookRender(view, actions) {
     var sampleId = (view.rules.length > 0 ? view.rules[0].id : 'my-rule')
     elements.push(createElement('div', { className: 'card', key: 'endpoint-hint', style: { padding: '8px 12px', fontSize: '12px' } },
       createElement('span', { style: { fontWeight: 600 } }, 'POST '), view.endpointPrefix, '/', createElement('code', null, sampleId),
-      '  ', createElement('span', { style: { color: 'var(--dsw-alias-label-secondary, #61666b)' } }, '（headers: ', createElement('code', null, 'x-webhook-secret'), ', ', createElement('code', null, 'x-webhook-event'), ', ', createElement('code', null, 'x-webhook-delivery'), '）'),
+      '  ', createElement('span', { style: { color: 'var(--dsw-alias-label-secondary, #61666b)' } }, '（headers: ', createElement('code', null, 'x-webhook-secret'), ', ', createElement('code', null, 'x-webhook-event'), ', ', createElement('code', null, 'x-webhook-delivery'), dshT('）')),
     ))
   }
 
@@ -8895,9 +8915,14 @@ function describeSchedule(mode, time, dow) {
   return dshT('每天 ') + time
 }
 
+/** Local UTC offset as a conventional label: GMT+8, GMT-5, GMT+5:30. */
 function tzLabel() {
-  var offset = -new Date().getTimezoneOffset() / 60
-  return 'GMT' + (offset >= 0 ? '+' : '-') + offset
+  var minutes = -new Date().getTimezoneOffset()
+  var sign = minutes < 0 ? '-' : '+'
+  var abs = Math.abs(minutes)
+  var hours = Math.floor(abs / 60)
+  var rest = abs % 60
+  return 'GMT' + sign + hours + (rest === 0 ? '' : ':' + (rest < 10 ? '0' : '') + rest)
 }
 
 function renderCronEditor(view, actions) {
@@ -8926,7 +8951,7 @@ function renderCronEditor(view, actions) {
       ),
     ),
     createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('调度（本地时区 ') + tzLabel() + '）'),
+      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('调度（本地时区 ') + tzLabel() + dshT('）')),
       createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
         createElement('select', {
           className: 'input', style: schedSelectStyle,

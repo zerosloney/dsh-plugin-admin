@@ -12,10 +12,10 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atomicRename, hotApplyFiberConfig, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -129,6 +129,30 @@ await check('each write uses its own temp path and leaves none behind', async ()
     'no temp file survives a completed write',
   )
   assert.equal(readFileSync(target, 'utf8'), '# three\n', 'the last write won')
+})
+
+await check('the patch and its rolling backup are created owner-only', async () => {
+  // The profile patch carries whatever an operator wrote into a plugin row
+  // (web-search API keys, MCP env/headers, hook commands) and the `.bak` holds
+  // the revision it replaced — the same rows. `mode` only applies at CREATION
+  // and a rename carries the TEMP's mode onto the destination, so asserting the
+  // end state covers both halves of the recipe.
+  const target = join(dir, 'private-mode.yml')
+  writeFileSync(target, '# seed\n', 'utf8')
+  writePatch(target, ['# first'])
+  assert.ok(existsSync(target + PATCH_BACKUP_SUFFIX), 'the replaced revision was kept')
+  if (process.platform === 'win32') {
+    // Windows has no POSIX mode bits to assert; existence is the whole contract.
+    assert.ok(existsSync(target), 'patch written')
+  } else {
+    assert.equal(statSync(target).mode & 0o777, 0o600, 'the patch file is owner-only')
+    assert.equal(statSync(target + PATCH_BACKUP_SUFFIX).mode & 0o777, 0o600, 'so is its backup')
+    // A pre-existing loose file (an older build, or a hand-made config) is
+    // tightened by the next write rather than left world-readable.
+    chmodSync(target, 0o644)
+    writePatch(target, ['# second'])
+    assert.equal(statSync(target).mode & 0o777, 0o600, 'a loose patch file is tightened on the next write')
+  }
 })
 
 await check('lock contention is read from every code Windows actually reports', () => {

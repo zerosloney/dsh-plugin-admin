@@ -10,7 +10,7 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,45 @@ await check('summarizeArgs redacts sensitive values by key and caps the detail',
   assert.ok(summary.includes(REDACTED), 'redaction is visible, not silent')
   const long = summarizeArgs(['x'.repeat(2000)])
   assert.ok(long.length <= 401, 'detail is capped (got ' + long.length + ')')
+})
+
+await check('redaction covers hyphenated keys AND secret-looking VALUES under benign keys', () => {
+  // Key-name matching alone let two real leaks through:
+  //  1. `x-api-key` — the spelling MCP headers actually use (and the header
+  //     DeepSeek's own web-search provider sends);
+  //  2. a secret pasted into a free-text field, where the KEY is `command` /
+  //     `args` / `promptTemplate` and only the VALUE looks like a credential.
+  const byKey = summarizeArgs([{ headers: { 'x-api-key': 'live-header-value' } }])
+  assert.ok(!byKey.includes('live-header-value'), 'x-api-key (hyphenated) is redacted: ' + byKey)
+  const byValue = summarizeArgs([{ command: 'curl -H "Authorization: Bearer sk-live-abcdefghijklmnop" https://example.test' }])
+  assert.ok(!byValue.includes('sk-live-abcdefghijklmnop'), 'a bearer token inside a command is redacted: ' + byValue)
+  assert.match(byValue, /Bearer \[redacted\]/, 'the scheme survives so the trail still says what happened')
+  const named = summarizeArgs([{ env: { GITHUB_PAT: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' } }])
+  assert.ok(!named.includes('ghp_'), 'a non-matching KEY still loses its token-shaped value: ' + named)
+  const urlUserinfo = summarizeArgs([{ url: 'https://alice:hunter2@example.test/mcp' }])
+  assert.ok(!urlUserinfo.includes('hunter2'), 'URL userinfo is redacted: ' + urlUserinfo)
+  assert.ok(urlUserinfo.includes('https://'), 'the scheme/host stay readable')
+})
+
+await check('the audit file is created private (0600) where the filesystem has modes', async () => {
+  const privateFile = join(dir, 'private-audit.jsonl')
+  const log = createAuditLog({ path: privateFile, now: () => 1 })
+  await log.record({ action: 'pluginAdmin/install', ok: true })
+  const mode = statSync(privateFile).mode & 0o777
+  if (process.platform === 'win32') {
+    assert.ok(mode !== undefined, 'Windows reports a synthesized mode; nothing to assert beyond existence')
+  } else {
+    assert.equal(mode, 0o600, 'the trail holds privileged arguments and must not be world-readable (got ' + mode.toString(8) + ')')
+  }
+  // An existing 0644 file is tightened on first use rather than left as-is
+  // (`mode` in writeFileSync only applies at creation).
+  if (process.platform !== 'win32') {
+    writeFileSync(privateFile, '', { mode: 0o644 })
+    chmodSync(privateFile, 0o644)
+    const reopened = createAuditLog({ path: privateFile, now: () => 2 })
+    await reopened.record({ action: 'pluginAdmin/remove', ok: true })
+    assert.equal(statSync(privateFile).mode & 0o777, 0o600, 'a pre-existing loose file is tightened')
+  }
 })
 
 await check('auditService records mutating calls and leaves read paths alone', async () => {

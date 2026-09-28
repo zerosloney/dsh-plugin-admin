@@ -1,12 +1,18 @@
 /**
- * verify-workflow-engine.mjs — P1 自检：转译 / 信号量 / 沙箱 / facade
+ * verify-workflow-engine.mjs — P1 自检：转译 / 信号量 / realm 边界 / facade
  *
  * 跑法：node scripts/verify-workflow-engine.mjs
  * 全部断言通过打印 OK，任一失败非零退出。
  *
- * 不依赖真实 dsh 宿主：subagents / shell 用最小 mock，只校验引擎自身的
- * 调用约定（参数归一化、并发上限、失败降级、沙箱隔离），真实宿主集成
- * 由 integration-check.mjs 那一层覆盖。
+ * 不依赖真实 dsh 宿主：subagents / shell 用最小 mock，只校验引擎自身的调用约定
+ * （参数归一化、并发上限、失败降级、sandbox 策略透传）与 **realm 边界**——后者三组
+ * 断言各自对应一条曾经的缺陷：
+ *   - `args` / facade 返回值 / rejection 里的宿主对象都不许进 realm（旧接线用同一个
+ *     探针会打印 ESCAPED，见 CHANGELOG 的负样本记录）；
+ *   - 宿主全局（process / fetch / require / import）不可达；
+ *   - 首个 await 之前的**同步死循环**被 vm timeout 掐断（eval 与 run 两条入口），
+ *     以及掐断之后宿主与 runner 都还能用。
+ * 真实宿主集成由 integration-check.mjs 那一层覆盖。
  */
 
 import assert from 'node:assert/strict'
@@ -94,12 +100,14 @@ await checkAsync('parallel returns results in input order', async () => {
 
 console.log('createRunner:')
 
-function mockCtx({ agentResults = [], shellResult = null } = {}) {
+function mockCtx({ agentResults = [], shellResult = null, sandboxMode = undefined, sandboxPolicy = undefined } = {}) {
   let agentCalls = 0
   let shellCalls = []
+  let shellSpecs = []
   return {
     ctx: {
       get: (key) => {
+        if (key === 'sandboxPolicy') return sandboxPolicy
         if (key === 'subagents') return {
           start: async (name, request) => {
             agentCalls += 1
@@ -114,15 +122,29 @@ function mockCtx({ agentResults = [], shellResult = null } = {}) {
           _calls: () => agentCalls,
         }
         if (key === 'shell') return {
+          // Undefined = a NON-confining executor (the default stub shape).
+          sandboxMode,
           resolve: (request) => request,
-          run: async (spec) => {
+          // The dsh ≥0.1.7 seam: execute(spec) → handle, handle.result() →
+          // foreground result. The removed `run(spec)` verb is deliberately
+          // absent so a regression fails here (see lib/workflow-engine.js).
+          execute: async (spec) => {
             shellCalls.push(spec.command)
-            return shellResult || {
+            shellSpecs.push(spec)
+            const outcome = shellResult || {
               exitCode: 0, stdout: { text: `out:${spec.command}` }, stderr: { text: '' },
               timedOut: false, aborted: false,
             }
+            return {
+              result: async () => outcome,
+              status: 'completed',
+              kill: () => false,
+              done: Promise.resolve(),
+              readOutput: () => ({ delta: '', lossy: false }),
+            }
           },
           _calls: () => shellCalls,
+          _specs: () => shellSpecs,
         }
         return undefined
       },
@@ -237,6 +259,41 @@ await checkAsync('shell() throws on abort (propagates to script)', async () => {
   await assert.rejects(() => facade.agent('x'), /aborted/)
 })
 
+await checkAsync('shell() carries the calling session sandbox policy into the spec', async () => {
+  // A confining executor + ctx.sandboxPolicy: the spec must carry the policy
+  // resolved from the RUN'S PARENT session. Without it the executor resolves
+  // session-less and a session switched to read-only is silently ignored.
+  const resolved = []
+  const policy = { mode: 'read-only', workspaceRoot: '/ws' }
+  const session = { header: { id: 's1', cwd: '/ws' } }
+  const { ctx } = mockCtx({
+    sandboxMode: 'read-only',
+    sandboxPolicy: { resolve: (request) => { resolved.push(request); return policy } },
+  })
+  const controller = new AbortController()
+  const { facade } = createRunner({ ctx, parent: { session }, signal: controller.signal, semaphore: createSemaphore(1) })
+  await facade.shell('echo hi')
+  assert.deepEqual(resolved, [{ session }], 'the parent session is what gets resolved')
+  assert.deepEqual(ctx.get('shell')._specs().at(-1).sandboxPolicy, policy, 'the policy reaches the execution spec')
+})
+
+await checkAsync('a confining executor without ctx.sandboxPolicy refuses to run', async () => {
+  const { ctx } = mockCtx({ sandboxMode: 'workspace-write' })   // no sandboxPolicy mounted
+  const controller = new AbortController()
+  const { facade } = createRunner({ ctx, parent: { session: { header: { cwd: '/ws' } } }, signal: controller.signal, semaphore: createSemaphore(1) })
+  await assert.rejects(() => facade.shell('echo hi'), /'sandboxPolicy' service is missing/)
+  assert.equal(ctx.get('shell')._calls().length, 0, 'the command never reaches the executor')
+})
+
+await checkAsync('a non-confining executor runs with no sandbox policy service', async () => {
+  const { ctx } = mockCtx()   // sandboxMode undefined, no sandboxPolicy
+  const controller = new AbortController()
+  const { facade } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const result = await facade.shell('echo hi')
+  assert.equal(result.exitCode, 0)
+  assert.ok(!('sandboxPolicy' in ctx.get('shell')._specs().at(-1)), 'no policy field is fabricated for a non-confining executor')
+})
+
 await checkAsync('require / import are blocked in sandbox', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
@@ -269,6 +326,87 @@ await checkAsync('vm realm hides host globals (process/fetch unreachable, realm 
   assert.ok(value.escaped === 'undefined' || value.escaped === 'threw', `realm-Function escape probe must not reach host process (got ${value.escaped})`)
 })
 
+await checkAsync('no HOST object crosses into the realm (args / facade results / rejections)', async () => {
+  // The escape this test pins (it was live until the JSON bridge landed): every
+  // value the host hands the script used to keep its HOST prototype chain, so
+  // `value.constructor.constructor('return process')()` returned the host
+  // process in one step. Each probe below reports 'host:<pid>' if it wins.
+  const { ctx } = mockCtx({ sandboxMode: undefined })
+  const controller = new AbortController()
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+    onAsk: async () => 'answer',
+  })
+  const probe = (expr) => `
+    let ${expr.id}
+    try {
+      const got = ${expr.value}
+      ${expr.id} = (got === undefined || got === null) ? 'none' : typeof got.constructor?.constructor === 'function' ? 'HOST-PROTOTYPE' : 'ok'
+      if (${expr.id} === 'HOST-PROTOTYPE') {
+        try { ${expr.id} = (got.constructor.constructor('return process')() === undefined ? 'host:undefined' : 'ESCAPED') } catch { ${expr.id} = 'ok' }
+      }
+    } catch (error) { ${expr.id} = 'threw' }
+  `
+  const { code } = await compileScript([
+    probe({ id: 'fromArgs', value: 'args' }),
+    probe({ id: 'fromAgent', value: "await agent('x')" }),
+    probe({ id: 'fromParallel', value: "await parallel([async () => 1])" }),
+    probe({ id: 'fromPipeline', value: "await pipeline([1], async (x) => x)" }),
+    probe({ id: 'fromShellError', value: "await shell('boom').then(() => 'no-error', (e) => e)" }),
+    probe({ id: 'fromAsk', value: "await ask('q')" }),
+    // The void members return nothing today; probing them keeps a future
+    // member from silently starting to hand back a host object.
+    probe({ id: 'fromLog', value: "await log('m')" }),
+    probe({ id: 'fromPhase', value: "await phase('p')" }),
+    probe({ id: 'fromReport', value: "await report('k', { a: 1 })" }),
+    `return { fromArgs, fromAgent, fromParallel, fromPipeline, fromShellError, fromAsk, fromLog, fromPhase, fromReport }`,
+  ].join('\n'))
+  const value = await run(code, { nested: { deep: [1, 2, 3] } })
+  for (const [key, got] of Object.entries(value)) {
+    assert.notEqual(got, 'ESCAPED', `${key}: a HOST object reached the script and yielded the host process`)
+    assert.notEqual(got, 'HOST-PROTOTYPE', `${key}: the value kept its host prototype chain`)
+    assert.notEqual(got, 'threw', `${key}: the probe itself threw (the value was not usable at all)`)
+  }
+  // And the values are still USABLE (the bridge must not turn data into junk):
+  // args keeps its shape, a structured agent() result stays a plain JSON value,
+  // and a parallel() fan-out still returns its results in order.
+  const { ctx: dataCtx } = mockCtx({
+    agentResults: [{ stopReason: 'completed', structured: { deep: { list: [1, 2] } }, output: [] }],
+  })
+  const dataRunner = createRunner({ ctx: dataCtx, parent: {}, signal: new AbortController().signal, semaphore: createSemaphore(2) })
+  const dataCode = await compileScript(`
+    const structured = await agent('x')
+    const fan = await parallel([async () => 7, async () => 'two'])
+    return {
+      n: args.nested.deep.length,
+      deep: structured.deep.list[0],
+      fan,
+      proto: Object.getPrototypeOf(args) === Object.prototype,
+    }
+  `)
+  const data = await dataRunner.run(dataCode.code, { nested: { deep: [1, 2, 3] } })
+  assert.deepEqual(data, { n: 3, deep: 1, fan: [7, 'two'], proto: true }, 'args / agent() / parallel() results survive the JSON bridge as realm values')
+})
+
+await checkAsync('a synchronous infinite loop is cut off instead of freezing the host', async () => {
+  // Before the timed invocation this test could not exist: `while(true){}` in
+  // the sync prefix blocked the event loop, so neither the run-level abort nor
+  // any setTimeout ever fired and the whole process hung.
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1), syncTimeoutMs: 200,
+  })
+  const { code } = await compileScript(`const n = { value: 0 }; while (true) { n.value += 1 }`)
+  const start = Date.now()
+  await assert.rejects(() => run(code, {}), /synchronous code without reaching an await/)
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 5_000, `the budget must cut the loop near syncTimeoutMs, took ${elapsed}ms`)
+  // The host is still alive and the runner still works afterwards.
+  const after = await run(await compileScript(`return 'alive'`).then((c) => c.code), {})
+  assert.equal(after, 'alive', 'the runner stays usable after a terminated script')
+})
+
 await checkAsync('dynamic import() does not reach host modules', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
@@ -283,6 +421,27 @@ await checkAsync('unserializable result rejects instead of poisoning persistence
   const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
   const { code } = await compileScript(`const a = {}; a.self = a; return a`)
   await assert.rejects(() => run(code, {}), /JSON-serializable/)
+})
+
+await checkAsync('a SHARED but acyclic reference is not mistaken for a cycle', async () => {
+  // The guard used to be a "visited" set instead of an ancestor stack, so any
+  // DAG-shaped result (`{ p: x, q: x }`) was reported as a circular reference and
+  // the run errored — a false positive on perfectly JSON-serializable data. The
+  // real cycle case above must keep failing.
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`
+    const shared = { a: 1 }
+    const wrapper = { inner: shared, again: shared }
+    return { p: wrapper, q: shared, list: [shared, shared] }
+  `)
+  const value = await run(code, {})
+  assert.deepEqual(value, {
+    p: { inner: { a: 1 }, again: { a: 1 } },
+    q: { a: 1 },
+    list: [{ a: 1 }, { a: 1 }],
+  }, 'each occurrence is copied, and no occurrence is read as a cycle')
 })
 
 await checkAsync('result crosses the realm as a plain host object', async () => {
@@ -323,7 +482,7 @@ await checkAsync('args are passed through', async () => {
 await checkAsync('onStep cache hook short-circuits the call', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
-  const { facade, stepCache } = createRunner({
+  const { facade } = createRunner({
     ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
     onStep: (e) => {
       if (e.phase === 'before' && e.kind === 'agent') return { cached: true, value: 'cached!' }
@@ -332,7 +491,8 @@ await checkAsync('onStep cache hook short-circuits the call', async () => {
   })
   const value = await facade.agent('anything')
   assert.equal(value, 'cached!')
-  assert.equal(stepCache.size, 0) // 引擎自己不记缓存，命中记录在上层 runs
+  // The engine deliberately keeps NO cache of its own: the hit is recorded by the
+  // upper layer (workflow-runs), which owns the journal.
 })
 
 await checkAsync('onStep non-cache return is ignored', async () => {
@@ -448,6 +608,22 @@ await checkAsync('a hung script is cut off by the timeout', async () => {
   )
   const elapsed = Date.now() - start
   assert.ok(elapsed < 2000, `timeout should fire near timeoutMs, took ${elapsed}ms`)
+})
+
+await checkAsync('a SYNCHRONOUS infinite loop is cut off in eval too (the race cannot do this)', async () => {
+  // `Promise.race` only settles when the event loop turns, so before the timed
+  // invocation this dry run froze the whole host process — the tool's own
+  // timeoutMs was unreachable for exactly the script shape it was documented to
+  // bound. The vm budget cuts it inside the isolate instead.
+  const start = Date.now()
+  await assert.rejects(
+    () => evalSnippet(`while (true) {}`, { timeoutMs: 150 }),
+    /synchronous code without reaching an await/,
+  )
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 2000, `the vm budget should cut the loop near timeoutMs, took ${elapsed}ms`)
+  // The process is still healthy: a normal eval runs right after.
+  assert.equal(await evalSnippet(`return 1 + 1`, { timeoutMs: 1000 }), 2)
 })
 
 await checkAsync('caller abort cuts eval well before the hard timeout', async () => {

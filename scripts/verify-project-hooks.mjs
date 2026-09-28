@@ -32,7 +32,11 @@
  * 13. trust gate: absent approval service fails closed with one warning;
  * 14. trust gate: disposing a session drops its decisions (a resumed session
  *     id re-asks);
- * 15. `projectHooksTrust: 'allow-all'` runs hooks without any ask.
+ * 15. `projectHooksTrust: 'allow-all'` runs hooks without any ask;
+ * 16. sandbox policy: the resolved policy rides every spec (addressed to the
+ *     CALLING SESSION), a confining executor without the policy service skips
+ *     the event with a warning, and a non-confining executor needs no service —
+ *     plus the resolver's own subject/agentless contract.
  *
  * Run: node scripts/verify-project-hooks.mjs
  */
@@ -41,6 +45,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyProjectHooks, applyProjectAdmin } from '../lib/project-hooks.js'
+import { resolveShellSandboxPolicy } from '../lib/shell-policy.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -59,20 +64,47 @@ const signalOf = () => new AbortController().signal
 
 /* ── stubs ────────────────────────────────────────────────────────────────── */
 
-function makeShell() {
+function makeShell(options = {}) {
   const calls = []
+  const specs = []
   const scripted = []
+  /**
+   * One scripted outcome as the foreground result the handle projects.
+   * @returns {Record<string, any>} a ShellRunResult-shaped stub.
+   */
+  const nextOutcome = () => (scripted.length > 0
+    ? scripted.shift()
+    : { exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
   return {
     calls,
+    /** The resolved specs handed to execute() — what the policy assertions read. */
+    specs,
+    /** Undefined here = a NON-confining executor (the default stub shape). */
+    sandboxMode: options.sandboxMode,
     queue(result) {
       scripted.push(result)
     },
     resolve: (request) => request,
-    async run(request) {
+    /**
+     * The dsh ≥0.1.7 seam: execute(spec) → live handle, handle.result() →
+     * foreground ShellRunResult. Mirrored exactly (and NOT the removed
+     * `run(spec)` verb) so a regression back to shell.run() fails here instead
+     * of passing silently against a stub that shared the bug.
+     * @param request - the resolved spec.
+     * @returns {Promise<Record<string, any>>} the handle stub.
+     */
+    async execute(request) {
       calls.push(request)
-      return scripted.length > 0
-        ? scripted.shift()
-        : { exitCode: 0, stdout: { text: '' }, stderr: { text: '' } }
+      specs.push(request)
+      const outcome = nextOutcome()
+      return {
+        ...outcome,
+        status: 'completed',
+        kill: () => false,
+        done: Promise.resolve(),
+        readOutput: () => ({ delta: '', lossy: false }),
+        result: async () => outcome,
+      }
     },
   }
 }
@@ -93,7 +125,7 @@ function makeApproval(scripted = []) {
   }
 }
 
-function makeStubCtx(shell, approval) {
+function makeStubCtx(shell, approval, sandboxPolicy) {
   // An omitted approval stubs an auto-approving service (the happy path);
   // pass null explicitly for "no approval service mounted" (fail-closed).
   const approvalSvc = approval === null
@@ -127,7 +159,9 @@ function makeStubCtx(shell, approval) {
         ? approvalSvc
         : name === 'workspaceRegistry'
           ? { list: () => [{ path: tempRoot }] }
-          : undefined),
+          : name === 'sandboxPolicy'
+            ? sandboxPolicy
+            : undefined),
     shell,
   }
 }
@@ -261,7 +295,7 @@ try {
     const passed = await ctx.listeners.get('agent/pre-step')({ agent, messages: [], signal: signalOf() }, async () => ({ kind: 'enter', messages: [downstreamMessage] }))
     assert.deepEqual(passed, { kind: 'enter', messages: [downstreamMessage] }, 'downstream decision forwarded untouched')
     // 显式消费掉脚本条目：既证明空批次没碰它，也不让残留泄漏进后续用例。
-    const leftover = await ctx.shell.run({ argv: ['drain'] })
+    const leftover = await (await ctx.shell.execute(ctx.shell.resolve({ command: 'drain' }))).result()
     assert.equal(leftover.stderr.text, 'hook must not run', 'the queued hook command was never executed by the empty batch')
   })
 
@@ -602,6 +636,85 @@ try {
     const payload = JSON.parse(shell.calls.at(-1).stdin)
     assert.equal(payload.transcript_path, '', 'transcript_path degrades to empty when locate is missing')
     assert.equal(shell.calls.at(-1).command, 'no-locate.sh', 'hook still runs when locate is missing')
+  })
+
+  await check('the resolved sandbox policy rides every hook spec (session-addressed)', async () => {
+    // A confining executor + ctx.sandboxPolicy: the hook command must carry the
+    // policy resolved from the CALLING SESSION, not the executor's own
+    // session-less fallback (which drops a session's read-only override).
+    const resolved = []
+    const policy = { mode: 'read-only', workspaceRoot: projectDir }
+    const shell = makeShell({ sandboxMode: 'read-only' })
+    const sbCtx = makeStubCtx(shell, null, {
+      resolve: (request) => { resolved.push(request); return policy },
+    })
+    applyProjectHooks(sbCtx, { settings: { projectHooksTrust: 'allow-all' } })
+    const sbAgent = makeAgent('sandbox-session', projectDir)
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'sb.sh' }] }] })
+    shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await sbCtx.listeners.get('tools/pre-execute')(execOf(sbAgent, 'Bash', {}), async () => ({ kind: 'allow' }))
+    assert.equal(resolved.length, 1, 'the policy service is asked exactly once per event')
+    assert.equal(resolved[0].session, sbAgent.session, 'the CALLING SESSION is what gets resolved')
+    assert.deepEqual(shell.specs.at(-1).sandboxPolicy, policy, 'the policy reaches the execution spec')
+  })
+
+  await check('a confining executor without ctx.sandboxPolicy skips hooks (never runs unconfined)', async () => {
+    const shell = makeShell({ sandboxMode: 'workspace-write' })
+    const gapCtx = makeStubCtx(shell, null, undefined)   // no sandboxPolicy mounted
+    applyProjectHooks(gapCtx, { settings: { projectHooksTrust: 'allow-all' } })
+    const gapAgent = makeAgent('sandbox-gap', projectDir)
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'gap.sh' }] }] })
+    shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await gapCtx.listeners.get('tools/pre-execute')(execOf(gapAgent, 'Bash', {}), async () => ({ kind: 'allow' }))
+    assert.equal(shell.calls.length, 0, 'the command never runs without a resolvable policy')
+    assert.ok(
+      gapCtx.warns.some((w) => w.includes("'sandboxPolicy' service is missing")),
+      `expected the composition gap to be warned about, saw: ${JSON.stringify(gapCtx.warns)}`,
+    )
+  })
+
+  await check('a non-confining executor needs no sandbox policy service', async () => {
+    // sandboxMode undefined = the executor does not confine (e.g. pwsh-local):
+    // there is nothing to fence with, so an absent ctx.sandboxPolicy is fine and
+    // the spec carries no policy field at all.
+    const shell = makeShell()
+    const plainCtx = makeStubCtx(shell, null, undefined)
+    applyProjectHooks(plainCtx, { settings: { projectHooksTrust: 'allow-all' } })
+    const plainAgent = makeAgent('sandbox-none', projectDir)
+    writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'plain.sh' }] }] })
+    shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await plainCtx.listeners.get('tools/pre-execute')(execOf(plainAgent, 'Bash', {}), async () => ({ kind: 'allow' }))
+    assert.equal(shell.calls.at(-1).command, 'plain.sh', 'the hook still runs')
+    assert.ok(!('sandboxPolicy' in shell.specs.at(-1)), 'no policy field is fabricated for a non-confining executor')
+  })
+
+  await check('sandbox-policy resolver: subject shapes, agentless fallback, confining gap', () => {
+    // The resolver is a pure function; pin its whole contract rather than only
+    // the two paths the listeners exercise.
+    const seen = []
+    const policy = { mode: 'read-only', workspaceRoot: '/ws' }
+    const confining = { sandboxMode: 'read-only' }
+    const plain = {}
+    const service = { resolve: (request) => { seen.push(request); return policy } }
+    const ctxOf = (value) => ({ get: (key) => (key === 'sandboxPolicy' ? value : undefined) })
+
+    const session = { header: { id: 's1', cwd: '/ws' } }
+    assert.equal(resolveShellSandboxPolicy(ctxOf(service), confining, { session }), policy, 'an Agent subject resolves its session')
+    assert.equal(resolveShellSandboxPolicy(ctxOf(service), confining, session), policy, 'a bare Session subject works too')
+    assert.deepEqual(seen, [{ session }, { session }], 'both shapes resolve to { session }')
+
+    assert.equal(resolveShellSandboxPolicy(ctxOf(service), confining, { not: 'a session' }), policy, 'a non-session subject still resolves (agentless)')
+    assert.deepEqual(seen.at(-1), {}, 'agentless: no session key at all')
+
+    assert.equal(resolveShellSandboxPolicy(ctxOf(service), plain, { session }), undefined, 'a non-confining executor gets no policy')
+    assert.equal(resolveShellSandboxPolicy(ctxOf(service), undefined, { session }), undefined, 'no shell service → no policy')
+    assert.deepEqual(seen.length, 3, 'neither of the last two called the service')
+
+    assert.throws(
+      () => resolveShellSandboxPolicy(ctxOf(undefined), confining, { session }),
+      /'sandboxPolicy' service is missing/,
+      'a confining executor without the service refuses rather than passing through unconfined',
+    )
   })
 
   await check('teardown aborts detached runs and clears the cache', () => {

@@ -8,11 +8,12 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse, resolve } from 'node:path'
 import { createWorkflowLibrary, createWorkflowAdmin } from '../lib/workflow-library.js'
 import { applyWorkflowAdmin, workflowAuditOk } from '../lib/workflow-admin.js'
+import { assertTrustedWorkspacePath, canonicalWorkspacePath } from '../lib/workspace-path.js'
 
 let failures = 0
 async function check(name, fn) {
@@ -48,6 +49,10 @@ await check('save + read global scope', async () => {
 await check('save + read project scope', async () => {
   const home = join(tmpBase, 'b')
   const ws = join(tmpBase, 'ws-b')
+  // The library refuses to INVENT a project root (a `mkdir -p` at an arbitrary
+  // path was exactly the S2 write primitive), so the workspace exists first —
+  // which is the real-world case: a project root is a directory the user has.
+  mkdirSync(ws, { recursive: true })
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
   await lib.saveSaved({
     name: 'migrate',
@@ -64,6 +69,7 @@ await check('save + read project scope', async () => {
 await check('project scope overrides global on list', async () => {
   const home = join(tmpBase, 'c')
   const ws = join(tmpBase, 'ws-c')
+  mkdirSync(ws, { recursive: true })
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
   await lib.saveSaved({ name: 'dup', scope: 'global', script: 'global-version' })
   await lib.saveSaved({ name: 'dup', scope: 'project', script: 'project-version', workspacePath: ws })
@@ -78,6 +84,7 @@ await check('project scope overrides global on list', async () => {
 await check('listSaved merges both scopes', async () => {
   const home = join(tmpBase, 'd')
   const ws = join(tmpBase, 'ws-d')
+  mkdirSync(ws, { recursive: true })
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
   await lib.saveSaved({ name: 'alpha', scope: 'global', script: 'a' })
   await lib.saveSaved({ name: 'beta', scope: 'project', script: 'b', workspacePath: ws })
@@ -89,6 +96,7 @@ await check('listSaved merges both scopes', async () => {
 await check('delete removes the right scope', async () => {
   const home = join(tmpBase, 'e')
   const ws = join(tmpBase, 'ws-e')
+  mkdirSync(ws, { recursive: true })
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
   await lib.saveSaved({ name: 'gone', scope: 'global', script: 'x' })
   await lib.saveSaved({ name: 'gone', scope: 'project', script: 'y', workspacePath: ws })
@@ -348,6 +356,129 @@ await check('an audited workflow service lands failures as ok:false and skips re
   await holder.workflowAdmin.saveSaved({ name: 'audited-save', scope: 'global', script: 'return 1' })
   const save = entries.find((e) => e.action === 'workflowAdmin/saveSaved')
   assert.equal(save.ok, true, '成功的 saved 写入记 ok:true')
+})
+
+// ─── 项目作用域路径闸门（S2）─────────────────────────────────────────────────
+//
+// `workspacePath` 在两个入口是**不可信输入**：模型传给 `workflow_admin` 的参数，
+// 以及浏览器 RPC 载荷。此前 `join(workspacePath, '.dsh', 'workflows')` +
+// `mkdirSync(recursive)` 让它们可以在任意目录建树写文件、`delete_saved` 可以在任意
+// 路径 unlink。这一节把形状检查与信任检查都钉住。
+
+console.log('project-scope workspace path gate:')
+
+await check('shape: relative / missing / non-directory / filesystem root are refused', async () => {
+  const home = join(tmpBase, 'gate-a')
+  const lib = createWorkflowLibrary({ dshHome: home, enqueue })
+  const outside = join(tmpBase, 'gate-a-outside')
+  mkdirSync(outside, { recursive: true })
+  const filePath = join(outside, 'a-file.txt')
+  writeFileSync(filePath, 'not a directory')
+
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'rel', scope: 'project', script: 'return 1', workspacePath: 'relative/dir' }),
+    /must be an absolute path/,
+  )
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'missing', scope: 'project', script: 'return 1', workspacePath: join(outside, 'nope') }),
+    /does not exist/,
+  )
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'afile', scope: 'project', script: 'return 1', workspacePath: filePath }),
+    /must be a directory/,
+  )
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'root', scope: 'project', script: 'return 1', workspacePath: parse(resolve(outside)).root }),
+    /filesystem root/,
+  )
+  // Reads and deletes go through the same choke point.
+  assert.throws(() => lib.listSaved('relative/dir'), /must be an absolute path/)
+  assert.throws(() => lib.getSaved('x', join(outside, 'nope')), /does not exist/)
+  assert.throws(() => lib.deleteSaved('x', 'project', parse(resolve(outside)).root), /filesystem root/)
+  // No side effects: the library never invented a tree anywhere.
+  assert.equal(existsSync(join(outside, '.dsh')), false, 'no .dsh tree was created beside the file')
+  assert.equal(existsSync(join(outside, 'nope')), false, 'the missing path was not created')
+})
+
+await check('a `.dsh` junction inside a project cannot redirect the write outside it', async () => {
+  const home = join(tmpBase, 'gate-j')
+  const ws = join(tmpBase, 'gate-j-ws')
+  const target = join(tmpBase, 'gate-j-target')
+  mkdirSync(ws, { recursive: true })
+  mkdirSync(target, { recursive: true })
+  // A cloned repository can ship `.dsh` as a link; the write must not follow it.
+  symlinkSync(target, join(ws, '.dsh'), process.platform === 'win32' ? 'junction' : 'dir')
+  const lib = createWorkflowLibrary({ dshHome: home, enqueue })
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'esc', scope: 'project', script: 'return 1', workspacePath: ws }),
+    /outside the project root/,
+  )
+  assert.equal(existsSync(join(target, 'workflows', 'esc.json')), false, 'nothing was written through the junction')
+  assert.equal(existsSync(join(ws, '.dsh', 'workflows')), false, 'nothing was created through the junction either')
+})
+
+await check('trust: an explicit path must be inside the session tree or a known workspace', () => {
+  const sessionRoot = canonicalWorkspacePath(mkdtempSync(join(tmpdir(), 'wf-session-')))
+  const inside = join(sessionRoot, 'nested')
+  mkdirSync(inside, { recursive: true })
+  const outside = canonicalWorkspacePath(mkdtempSync(join(tmpdir(), 'wf-outside-')))
+
+  assert.equal(assertTrustedWorkspacePath(inside, { sessionCwd: sessionRoot }), canonicalWorkspacePath(inside), 'a path inside the session tree is accepted')
+  assert.equal(assertTrustedWorkspacePath(inside, { sessionCwd: sessionRoot }).length > 0, true)
+  assert.throws(
+    () => assertTrustedWorkspacePath(outside, { sessionCwd: sessionRoot }),
+    /outside the calling session and outside every workspace/,
+  )
+  // The registry branch is what lets a panel act on a user-registered workspace.
+  assert.equal(
+    assertTrustedWorkspacePath(outside, { registry: { list: () => [{ path: outside }] } }),
+    outside,
+    'a registered workspace is accepted without a session',
+  )
+  assert.throws(
+    () => assertTrustedWorkspacePath(join(outside, 'sub') === '' ? outside : outside, { registry: { list: () => [] } }),
+    /outside the calling session/,
+  )
+  rmSync(sessionRoot, { recursive: true, force: true })
+  rmSync(outside, { recursive: true, force: true })
+})
+
+await check('RPC refuses a forged project root that is not a registered workspace', async () => {
+  const home = join(tmpBase, 'gate-rpc')
+  const ws = join(tmpBase, 'gate-rpc-ws')
+  const outside = join(tmpBase, 'gate-rpc-outside')
+  mkdirSync(ws, { recursive: true })
+  mkdirSync(outside, { recursive: true })
+  const lib = createWorkflowLibrary({ dshHome: home, enqueue })
+  const ctx = {
+    get: (key) => (key === 'workspaceRegistry' ? { list: () => [{ path: ws }] } : undefined),
+  }
+  const admin = createWorkflowAdmin({
+    registry: { list: () => [], STATUS: {}, get: () => null, stop: async () => ({}) },
+    library: lib,
+    ctx,
+  })
+
+  const forgedSave = await admin.saveSaved({ name: 'evil', scope: 'project', script: 'return 1', workspacePath: outside })
+  assert.equal(forgedSave.ok, false, 'the forged save is refused')
+  assert.match(forgedSave.error, /outside the calling session and outside every workspace/)
+  assert.equal(existsSync(join(outside, '.dsh')), false, 'no tree was created at the forged path')
+  assert.match(admin.listSaved({ workspacePath: outside }).error, /outside the calling session/, 'listSaved refuses too')
+  assert.equal(admin.getSaved({ name: 'x', workspacePath: outside }).error !== undefined, true, 'getSaved refuses too')
+  const forgedDelete = admin.deleteSaved({ name: 'x', scope: 'project', workspacePath: outside })
+  assert.equal(forgedDelete.ok, false, 'deleteSaved refuses too')
+  assert.match(forgedDelete.error, /outside the calling session/)
+  const forgedRun = await admin.runSaved({ name: 'x', workspacePath: outside })
+  assert.match(forgedRun.error, /outside the calling session/, 'runSaved refuses too')
+
+  // The same call against a REGISTERED workspace is the feature, not the attack.
+  const legit = await admin.saveSaved({ name: 'legit', scope: 'project', script: 'return 1', workspacePath: ws })
+  assert.equal(legit.ok, true, 'a registered workspace is accepted')
+  assert.ok(existsSync(join(ws, '.dsh', 'workflows', 'legit.json')), 'written under the registered workspace')
+  assert.equal(admin.listSaved({ workspacePath: ws }).length, 1, 'and readable back')
+  // No path at all keeps the previous behaviour (global scope).
+  const glob = await admin.saveSaved({ name: 'glob', scope: 'global', script: 'return 1' })
+  assert.equal(glob.ok, true, 'a pathless global save still works')
 })
 
 // ─── 清理 ─────────────────────────────────────────────────────────────────────

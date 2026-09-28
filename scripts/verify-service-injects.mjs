@@ -17,6 +17,14 @@
  * matches the literal identifier `ctx.` — a module that renamed its parameter
  * would slip past, so keep the repo convention (`applyX(ctx, options)`).
  *
+ * Second axis (added after the 0.1.7 shell regression slipped through every
+ * gate): a declared service can still be driven through a REMOVED METHOD.
+ * `ctx.shell.run(spec)` type-checked, linted, mounted and green-lit the whole
+ * suite while the real seam had been `execute()` since 0.1.7 — project hooks
+ * were a silent no-op and workflow `shell()` threw. The service-name scan below
+ * therefore also pins the shell verb names; `integration-check.mjs` pins the
+ * same contract from the dsh side.
+ *
  * Run: node scripts/verify-service-injects.mjs
  */
 import assert from 'node:assert/strict'
@@ -88,6 +96,38 @@ check('every direct ctx.<service> read is declared in inject', () => {
 check('the scan is not vacuous (it really sees service reads)', () => {
   assert.ok(direct.length >= 10, `expected a meaningful number of direct reads, saw ${direct.length}`)
   assert.ok(direct.some((d) => declared.includes(d.member)), 'no read matched a declared service — the scan is probably broken')
+})
+
+/* ------------------- shell seam: the METHOD names, not just the key -------- */
+
+/** Every `shell.<verb>(` call site in the host half (comments already stripped). */
+const shellVerbs = []
+for (const name of hostFiles) {
+  const lines = stripComments(readFileSync(join(ROOT, 'lib', name), 'utf8')).split(/\r?\n/)
+  for (let i = 0; i < lines.length; i += 1) {
+    for (const match of lines[i].matchAll(/\b(?:ctx\.)?shell\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+      shellVerbs.push({ verb: match[1], where: `lib/${name}:${i + 1}`, line: lines[i].trim().slice(0, 100) })
+    }
+  }
+}
+
+check('no shell call site uses the removed run()/start() verbs', () => {
+  const stale = shellVerbs.filter((v) => v.verb === 'run' || v.verb === 'start')
+  const detail = stale.map((v) => `${v.where} calls shell.${v.verb}() — ${v.line}`).join('\n      ')
+  assert.equal(
+    stale.length,
+    0,
+    `dsh ≥0.1.7 ShellExecutor exposes resolve() + execute() only; drive it as `
+    + `execute(resolve(request)) then await handle.result()\n      ${detail}`,
+  )
+})
+
+check('the shell verb scan is not vacuous and uses the current seam', () => {
+  assert.ok(shellVerbs.length >= 2, `expected the shell call sites to be scanned, saw ${shellVerbs.length}`)
+  assert.ok(
+    shellVerbs.some((v) => v.verb === 'execute'),
+    'no shell.execute() call site found — the seam check is probably broken',
+  )
 })
 
 console.log(`verify-service-injects: ${direct.length} direct service reads across ${hostFiles.length} host files`)

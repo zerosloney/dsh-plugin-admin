@@ -637,19 +637,47 @@ function loadPanels() {
  */
 function lazyPanel(exportName) {
   return function LazyPanel(props) {
-    var pair = useState(panelsModule)
-    var setModule = pair[1]
+    var statePair = useState(panelsModule)
+    var loaded = statePair[0]
+    var setModule = statePair[1]
+    var errorPair = useState(panelsError)
+    var failure = errorPair[0]
+    var setFailure = errorPair[1]
+    var attemptPair = useState(0)
+    var attempt = attemptPair[0]
+    var setAttempt = attemptPair[1]
     useEffect(function () {
       var alive = true
-      if (panelsModule === null) {
-        loadPanels().then(function () { if (alive) setModule(panelsModule) }).catch(function () {})
+      if (loaded === null) {
+        loadPanels().then(function () {
+          if (alive) setModule(panelsModule)
+        }).catch(function (error) {
+          // The failure is STATE, not a module variable: the placeholder used to
+          // read `panelsError` directly, but nothing re-rendered when it was set,
+          // so a chunk that failed to arrive (a stale immutable cache entry after
+          // an upgrade, a dev-server restart, a CSP block) left every panel on
+          // "加载面板…" forever with no explanation and no way to retry.
+          if (alive) setFailure(messageOf(error) || dshT('未知错误'))
+        })
       }
       return function () { alive = false }
-    }, [])
-    var Component = pair[0] === null ? null : pair[0][exportName]
+    }, [attempt, loaded])
+    var Component = loaded === null ? null : loaded[exportName]
     if (Component === undefined || Component === null) {
-      return createElement('div', { className: 'card', style: { padding: '12px', opacity: 0.7 } },
-        panelsError === null ? dshT('加载面板…') : dshT('面板加载失败：') + panelsError)
+      return createElement('div', { className: 'card', style: { padding: '12px', opacity: failure === null ? 0.7 : 1 } },
+        failure === null
+          ? dshT('加载面板…')
+          : [dshT('面板加载失败：') + failure,
+            createElement('button', {
+              key: 'retry',
+              className: 'btn',
+              style: { marginLeft: '8px' },
+              onClick: function () {
+                panelsLoad = null
+                setFailure(null)
+                setAttempt(attempt + 1)
+              },
+            }, dshT('重试'))])
     }
     return createElement(Component, props)
   }
@@ -666,7 +694,6 @@ function apply(ctx) {
   if (coverage.yielded.length > 0) {
     ctx.logger?.info?.('plugin-admin: 官方已覆盖，让位面板：' + coverage.yielded.map(function (row) { return row.panel }).join(', '))
   }
-  var yielded = function (panel) { return coverage.active[panel] === false }
   // Shell locale service (soft dependency): register the panel table and
   // bind dshT to the shell's active locale. Absent on headless mounts — the
   // two-language fallback inside i18n.js keeps working either way.

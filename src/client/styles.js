@@ -14,7 +14,7 @@ var CSS_TEXT = [
   // + insights stack far past one dialog) must scroll to their tail, not clip.
   '[data-dsh-admin-section] { display: flex; flex-direction: column; width: 100%; gap: 14px; padding: 2px; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-primary, #222); max-height: calc(100vh - 140px); overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l2, rgba(200,200,210,0.4)) transparent; }',
   '[data-dsh-admin-section] *, [data-dsh-sa-section] *, [data-cha-section] *, [data-dsh-admin-todo] * { box-sizing: border-box; }',
-  '[data-dsh-admin-section] .toolbar, [data-dsh-sa-section] .toolbar, [data-cha-section] .toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 20px 10px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 1px 2px rgba(0,0,0,0.02); }',
+  '[data-dsh-admin-section] .toolbar, [data-dsh-sa-section] .toolbar, [data-cha-section] .toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 20px 10px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); box-shadow: 0 1px 2px rgba(0,0,0,0.02); }',
   // Phase B3e follow-up: the workflow fields are the official Input now, so the
 // width/margin their inline style used to carry lives here (the atom's wrapper is
 // inline-flex and would otherwise shrink to content).
@@ -35,7 +35,7 @@ var CSS_TEXT = [
   // across the admin, sub-agent and command-hook panels.
   '[data-dsh-admin-section] select.input, [data-dsh-sa-section] select.input, [data-cha-section] select.input { appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer; text-overflow: ellipsis; background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%20viewBox=%270%200%2010%206%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20stroke=%27%239aa0a6%27%20stroke-width=%271.5%27%20fill=%27none%27%20stroke-linecap=%27round%27%20stroke-linejoin=%27round%27/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }',
   // The popup list itself is native, but option colors still follow the theme.
-  '[data-dsh-admin-section] select.input option, [data-dsh-sa-section] select.input option, [data-cha-section] select.input option { background: var(--dsw-alias-bg-elevated, #fff); color: var(--dsw-alias-label-primary, #222); }',
+  '[data-dsh-admin-section] select.input option, [data-dsh-sa-section] select.input option, [data-cha-section] select.input option { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary, #222); }',
   // Horizontal inset matched to the toolbar's (left = the toolbar's 10px, so
   // the pills line up with the search box) and to the LIST's content inset on
   // the right (scrollbar gutter 10 + list padding 4 + group-header padding 6),
@@ -44,7 +44,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .filter-bar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 0 0 0 10px; }',
   // The injected archived-sessions panel renders as ONE framed card on the
   // host page; the flex gap on .session-panel provides the vertical rhythm.
-  '[data-dsh-admin-section] .session-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; border: 1px solid var(--dsh-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); }',
+  '[data-dsh-admin-section] .session-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; border: 1px solid var(--dsh-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); }',
   // Inside that card the search row is a plain row, not a nested box.
   '[data-dsh-admin-section] .session-panel .toolbar { border: none; border-radius: 0; background: transparent; padding: 0; }',
   // The filter bar's tail actions stay one group: `margin-left: auto` pushes
@@ -79,7 +79,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .list::-webkit-scrollbar { width: 6px; }',
   '[data-dsh-admin-section] .list::-webkit-scrollbar-thumb { border-radius: 99px; background: var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); }',
   '[data-dsh-admin-section] .session-group { display: flex; flex-direction: column; gap: 6px; }',
-  '[data-dsh-admin-section] .group-header { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 10px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 1px 2px rgba(0,0,0,0.02); margin-bottom: 6px; }',
+  '[data-dsh-admin-section] .group-header { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2); box-shadow: 0 1px 2px rgba(0,0,0,0.02); margin-bottom: 6px; }',
   '[data-dsh-admin-section] .group-header:first-child { margin-top: 2px; }',
   '[data-dsh-admin-section] .group-title { display: inline-flex; align-items: center; gap: 6px; }',
   '[data-dsh-admin-section] .group-count { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.3)); color: var(--dsw-alias-label-secondary, #555); font-weight: 500; }',
@@ -96,7 +96,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(239,68,68,0.25); background: var(--dsw-alias-interactive-bg-hover-danger, rgba(239,68,68,0.06)); font-size: 12px; }',
   '[data-dsh-admin-section] .bulk-bar .bulk-text { color: var(--dsw-alias-state-error-primary, #ef4444); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
   '[data-dsh-admin-section] .bulk-bar .bulk-actions { display: flex; gap: 5px; flex: none; }',
-  '[data-dsh-admin-section] .card, [data-dsh-sa-section] .card { display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 1px 2px rgba(0,0,0,0.02); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
+  '[data-dsh-admin-section] .card, [data-dsh-sa-section] .card { display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2); box-shadow: 0 1px 2px rgba(0,0,0,0.02); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
   // MCP editor: the section root is height-bounded, but the editor form must
   // not scroll the WHOLE panel — a tall form (e.g. with reconnect fields
   // expanded) would push its bottom action row, including the 保存 button,
@@ -106,7 +106,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .mcp-editor::-webkit-scrollbar-thumb { border-radius: 99px; background: var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); }',
   // Keep the action row (取消 / 保存) pinned at the bottom of the editor card
   // and always within the scroll viewport, even on short windows.
-  '[data-dsh-admin-section] .usage-dash { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--dsw-static-blue-500, #3b82f6); border-radius: 12px; background: var(--dsw-specific-tip, var(--dsw-alias-bg-elevated, transparent)); box-shadow: 0 0 0 2px rgba(59,130,246,0.10); }',
+  '[data-dsh-admin-section] .usage-dash { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--dsw-static-blue-500, #3b82f6); border-radius: 12px; background: var(--dsw-specific-tip, var(--dsw-alias-bg-layer-2)); box-shadow: 0 0 0 2px rgba(59,130,246,0.10); }',
   '[data-dsh-admin-section] .usage-chart { display: flex; align-items: flex-end; gap: 4px; height: 88px; padding: 4px 2px 0 2px; }',
   '[data-dsh-admin-section] .usage-bar-col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; }',
   '[data-dsh-admin-section] .usage-bar-label { font-size: 9px; color: var(--dsw-alias-label-secondary, #61666b); white-space: nowrap; }',
@@ -213,7 +213,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .mcp-playground { border-color: var(--dsw-static-blue-500, #3b82f6); box-shadow: 0 0 0 2px rgba(59,130,246,0.12); }',
   '[data-dsh-admin-section] .mcp-playground textarea.input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; resize: vertical; }',
   '[data-dsh-admin-section] .mcp-playground-out { margin: 6px 0 0 0; padding: 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 8px; background: var(--dsw-alias-bg-base, transparent); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow-y: auto; color: var(--dsw-alias-label-primary, #222); }',
-  '[data-dsh-admin-section] .mcp-editor .card-actions { position: sticky; bottom: 0; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, #fff)); padding-top: 10px; margin-top: 4px; }',
+  '[data-dsh-admin-section] .mcp-editor .card-actions { position: sticky; bottom: 0; background: var(--dsw-alias-bg-layer-2); padding-top: 10px; margin-top: 4px; }',
   // When the editor is open alongside the list (editing an existing entry), the
   // list must not compete for the bounded section height or the editor's 保存
   // button gets pushed below the clipped region. Let the list shrink to its
@@ -294,10 +294,10 @@ var SA_CSS_TEXT = [
   '[data-dsh-sa-section] .tabs, [data-cha-section] .tabs { display: flex; padding: 3px; background: var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.2)); border-radius: 9px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.3)); gap: 3px; }',
   '[data-dsh-sa-section] .tab, [data-cha-section] .tab { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 7px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-secondary, #666); transition: all 0.15s ease; font-family: inherit; }',
   '[data-dsh-sa-section] .tab:hover:not(.active), [data-cha-section] .tab:hover:not(.active) { color: var(--dsw-alias-label-primary, #222); background: var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.3)); }',
-  '[data-dsh-sa-section] .tab.active, [data-cha-section] .tab.active { background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); color: var(--dsw-alias-label-primary, #333); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04); }',
+  '[data-dsh-sa-section] .tab.active, [data-cha-section] .tab.active { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary, #333); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04); }',
   '[data-dsh-sa-section] .tab-count { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.4)); color: var(--dsw-alias-label-secondary, #555); }',
   '[data-dsh-sa-section] .tab.active .tab-count { background: var(--dsw-static-blue-500, #3b82f6); color: #fff; }',
-  '[data-dsh-sa-section] .filterbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); }',
+  '[data-dsh-sa-section] .filterbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); }',
   '[data-dsh-sa-section] .filter-label { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary, #666); flex: none; margin-right: 2px; }',
   '[data-dsh-sa-section] textarea.input, [data-cha-section] textarea.input { resize: vertical; min-height: 80px; font-family: var(--dsw-font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.55; }',
   '[data-dsh-sa-section] select.input, [data-cha-section] select.input { height: 32px; padding: 0 8px; cursor: pointer; }',
@@ -311,8 +311,8 @@ var SA_CSS_TEXT = [
   '[data-dsh-sa-section] .chip { font-size: 10px; font-family: var(--dsw-font-mono, ui-monospace, monospace); padding: 1px 6px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.3)); border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); color: var(--dsw-alias-label-secondary, #555); }',
   '[data-dsh-sa-section] .chip.deny { background: rgba(239, 68, 68, 0.08); border-color: rgba(220,38,38,0.25); color: #b91c1c; }',
   '[data-dsh-sa-section] .chip.allow { background: rgba(16, 185, 129, 0.08); border-color: rgba(16,185,129,0.3); color: #047857; }',
-  '[data-dsh-sa-section] .form, [data-cha-section] .form { flex: 1 1 auto; min-height: 0; max-height: calc(100vh - 220px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; border: 1px solid var(--dsw-static-blue-500, #3b82f6); background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 4px 14px rgba(59,130,246,0.08); }',
-  '[data-dsh-sa-section] .form-actions, [data-cha-section] .form-actions { position: sticky; bottom: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 6px; padding-top: 10px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); border-top: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); }',
+  '[data-dsh-sa-section] .form, [data-cha-section] .form { flex: 1 1 auto; min-height: 0; max-height: calc(100vh - 220px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; border: 1px solid var(--dsw-static-blue-500, #3b82f6); background: var(--dsw-alias-bg-layer-2); box-shadow: 0 4px 14px rgba(59,130,246,0.08); }',
+  '[data-dsh-sa-section] .form-actions, [data-cha-section] .form-actions { position: sticky; bottom: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 6px; padding-top: 10px; background: var(--dsw-alias-bg-layer-2); border-top: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); }',
   '[data-dsh-sa-section] .form-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); display: flex; align-items: center; gap: 6px; }',
   '[data-dsh-sa-section] .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }',
   '[data-dsh-sa-section] .form-grid .full { grid-column: 1 / -1; }',
@@ -350,14 +350,14 @@ var SA_CSS_TEXT = [
   '[data-dsh-sa-section] .warn-strip div { display: flex; gap: 6px; align-items: flex-start; }',
   '[data-dsh-sa-section] .empty .big { font-size: 26px; }',
   '[data-dsh-sa-section] .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 10000; max-width: 520px; padding: 10px 16px; border-radius: 10px; font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0,0,0,0.18); background: rgba(239,68,68,0.96); color: #fff; word-break: break-word; white-space: pre-line; }',
-  '[data-dsh-sa-section] .history-row { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); }',
+  '[data-dsh-sa-section] .history-row { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2); }',
   '[data-dsh-sa-section] .history-head { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }',
   '[data-dsh-sa-section] .history-time { font-family: var(--dsw-font-mono, ui-monospace, monospace); font-size: 10px; color: var(--dsw-alias-label-secondary, #61666b); margin-left: auto; }',
   '[data-dsh-sa-section] .history-detail { font-size: 11px; color: var(--dsw-alias-label-secondary, #61666b); font-family: var(--dsw-font-mono, ui-monospace, monospace); word-break: break-all; max-height: 60px; overflow: hidden; }',
   '[data-dsh-sa-section] .footer-note { font-size: 10px; color: var(--dsw-alias-label-secondary, #61666b); line-height: 1.5; padding: 0 2px; }',
   '[data-dsh-sa-section] .sa-picker { position: relative; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }',
   '[data-dsh-sa-section] .sa-picker-input { border: 0; outline: none; background: transparent; color: inherit; font: inherit; font-size: 12px; flex: 1; min-width: 120px; padding: 2px 4px; }',
-  '[data-dsh-sa-section] .sa-picker-list { width: 100%; margin-top: 4px; max-height: 220px; overflow-y: auto; background: var(--dsh-alias-bg-elevated, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.5)); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.14); padding: 3px; scrollbar-width: thin; }',
+  '[data-dsh-sa-section] .sa-picker-list { width: 100%; margin-top: 4px; max-height: 220px; overflow-y: auto; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.5)); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.14); padding: 3px; scrollbar-width: thin; }',
   '[data-dsh-sa-section] .sa-picker-opt { padding: 6px 9px; font-size: 12px; cursor: pointer; border-radius: 5px; color: var(--dsw-alias-label-primary, #222); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
   '[data-dsh-sa-section] .sa-picker-opt.active, [data-dsh-sa-section] .sa-picker-opt:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,0.14)); color: var(--dsw-static-blue-500, #3b82f6); }',
   '[data-dsh-sa-section] .sa-picker-empty { padding: 6px 9px; font-size: 11px; color: var(--dsw-alias-label-secondary, #61666b); }',
@@ -370,6 +370,13 @@ function injectSaStyles() {
   if (document.querySelector('style[data-dsh-sa-styles]') !== null) return
   var style = document.createElement('style')
   style.setAttribute('data-dsh-sa-styles', '')
+  // Ownership markers, exactly like the other three injectors. The client module
+  // system CLAIMS every untagged <style> for whichever plugin materializes next
+  // and removes it again when that plugin unloads — this table would then vanish
+  // for good, because injectSaStyles only runs when the panel chunk loads
+  // (configure() is not re-run on a language switch either).
+  style.dataset.plugin = 'dsh-plugin-admin'
+  style.dataset.pluginCss = 'dsh-plugin-admin/subagents.css'
   style.textContent = SA_CSS_TEXT.join('\n')
   document.head.appendChild(style)
 }
@@ -390,7 +397,7 @@ var CH_CSS_TEXT = [
   '[data-cha-section] .notice .notice-text { flex: 1 1 240px; }',
   '[data-cha-section] .notice .notice-actions { display: flex; gap: 5px; flex: none; }',
   // Rows — card elevation + hover lift like the other list cards.
-  '[data-cha-section] .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent)); box-shadow: 0 1px 2px rgba(0,0,0,0.02); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
+  '[data-cha-section] .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); box-shadow: 0 1px 2px rgba(0,0,0,0.02); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
   '[data-cha-section] .row:hover { transform: translateY(-1px); border-color: var(--dsw-alias-label-tertiary, rgba(180,180,195,0.6)); box-shadow: 0 8px 20px rgba(0,0,0,0.06); }',
   '[data-cha-section] .row.off { opacity: 0.55; }',
   '[data-cha-section] .row .main { flex: 1; min-width: 0; }',
@@ -444,7 +451,7 @@ var TODO_CSS_TAG = 'dsh-plugin-admin/todo-dock.css'
 var TODO_CSS_TEXT = [
   // Stock-strip suppression: only active while this panel is mounted with data.
   'body.dsh-admin-todo-live [data-testid="todo-panel"] { display: none !important; }',
-  '[data-dsh-admin-todo] { display: flex; flex-direction: column; position: relative; width: calc(100% - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px)); max-width: calc(var(--dsh-composer-card-max-width, 100%) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px)); margin: 0 auto; border: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-border-l2, rgba(200,200,210,0.4))); border-radius: 12px; background: var(--dsw-specific-tip, var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base, transparent))); box-shadow: 0 1px 3px rgba(0,0,0,0.04); overflow: hidden; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-primary, #222); --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2, var(--dsw-alias-border-l2, rgba(200,200,210,0.4))); --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2, var(--dsw-alias-label-tertiary, rgba(180,180,195,0.6))); }',
+  '[data-dsh-admin-todo] { display: flex; flex-direction: column; position: relative; width: calc(100% - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px)); max-width: calc(var(--dsh-composer-card-max-width, 100%) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px)); margin: 0 auto; border: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-border-l2, rgba(200,200,210,0.4))); border-radius: 12px; background: var(--dsw-specific-tip, var(--dsw-alias-bg-layer-2)); box-shadow: 0 1px 3px rgba(0,0,0,0.04); overflow: hidden; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-primary, #222); --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2, var(--dsw-alias-border-l2, rgba(200,200,210,0.4))); --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2, var(--dsw-alias-label-tertiary, rgba(180,180,195,0.6))); }',
   // Slim completion bar across the panel top; turns green at 100%.
   '[data-dsh-admin-todo] .todo-progress { flex: none; width: 100%; height: 3px; background: var(--dsw-alias-border-l2, rgba(200,200,210,0.35)); }',
   '[data-dsh-admin-todo] .todo-progress-fill { height: 100%; width: 0; background: var(--dsw-static-blue-500, #3b82f6); border-radius: 0 2px 2px 0; transition: width 0.3s ease, background 0.3s ease; }',

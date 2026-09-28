@@ -287,6 +287,75 @@ const PROBES = [
     ],
   },
   {
+    id: 'shell executor verbs (resolve + execute, never run)',
+    // lib/project-hooks.js:664 and lib/workflow-engine.js:364 drive the seam as
+    // execute(resolve(request)) then await handle.result(). The 0.1.7
+    // convergence replaced the old run(spec)/start(spec) pair, so probing only
+    // types.ts FIELDS (the entry above) let `shell.run(...)` ship dead against
+    // the very baseline docs/COMPAT.md declares — this entry pins the METHOD
+    // names, which is the axis that drifted.
+    file: 'packages/shell/shell/src/index.ts',
+    checks: [
+      ['abstract resolve(request) → spec', t => t.includes('abstract resolve(request: ShellExecRequest): ShellExecSpec')],
+      ['abstract execute(spec) → ShellExecution handle', t => t.includes('abstract execute(spec: ShellExecSpec): Promise<ShellExecution>')],
+      ['the removed run()/start() verbs stay removed', t => !/abstract (run|start)\(/.test(t)],
+      ['the service key stays shell', t => t.includes("super(ctx, 'shell')")],
+    ],
+  },
+  {
+    id: 'shell execution handle foreground projection',
+    // The result shape the two call sites read: exitCode/stdout.text/stderr.text
+    // (project-hooks) and exitCode/stdout/stderr/timedOut/aborted
+    // (workflow-engine), reached only through result().
+    file: 'packages/shell/shell/src/types.ts',
+    checks: [
+      ['execute() handle exposes result(): Promise<ShellRunResult>', t => t.includes('result(): Promise<ShellRunResult>')],
+      ['ShellRunResult keeps exitCode/timedOut/aborted', t => has('exitCode: number | null', 'timedOut: boolean', 'aborted: boolean')(blockOf(t, 'export interface ShellRunResult'))],
+      ['ShellRunResult streams stay CollectedOutput (read through .text)', t => has('stdout: CollectedOutput', 'stderr: CollectedOutput')(blockOf(t, 'export interface ShellRunResult'))],
+      ['ShellExecRequest accepts a resolved sandboxPolicy (lib/shell-policy.js passes one)', t => t.includes('sandboxPolicy?: SandboxExecutionPolicy | undefined')],
+    ],
+  },
+  {
+    id: 'sandbox policy service (session-addressed resolve)',
+    // lib/shell-policy.js resolves the CALLING SESSION's policy. Three contracts
+    // make that necessary, and each drifting silently changes the security
+    // meaning of the plugin's shell use.
+    file: 'packages/sandbox/sandbox-policy/src/index.ts',
+    checks: [
+      ['SandboxPolicyRequest carries an optional session', t => has('session?: Session', 'mode?: SandboxMode')(blockOf(t, 'export interface SandboxPolicyRequest'))],
+      ['resolve(request = {}) stays callable without a session (agentless fallback)', t => t.includes('resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {')],
+      ['the session cwd becomes the workspace boundary', t => t.includes('session?.header.cwd ?? this.workspaceRoot')],
+    ],
+  },
+  {
+    id: 'sandbox policy reference call sites (parity with the tool layer)',
+    // tool-bash resolves the policy from the session and fails loud when a
+    // confining executor has no ctx.sandboxPolicy — the behaviour this plugin
+    // now mirrors. If it changes, the parity argument must be revisited.
+    file: 'packages/shell/tool-bash/src/index.ts',
+    checks: [
+      ['the tool layer resolves the policy per call from the agent session', t => t.includes('sandboxPolicy?.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })')],
+      ['a confining executor without ctx.sandboxPolicy fails loud there too', t => t.includes('the mounted bash executor confines but ctx.sandboxPolicy is missing')],
+    ],
+  },
+  {
+    id: 'confining executor falls back to a SESSION-LESS policy',
+    // This fallback is exactly what an omitted `sandboxPolicy` hits: the
+    // deployment default, with the calling session's override dropped. Pinning
+    // it documents why the plugin must pass a policy rather than rely on it.
+    file: 'packages/shell/pwsh-sandbox/src/index.ts',
+    checks: [
+      ['request.sandboxPolicy wins; the service default is only the fallback', t => t.includes('sandboxPolicy: request.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()')],
+    ],
+  },
+  {
+    id: 'shell executor confinement advertisement',
+    file: 'packages/shell/shell/src/index.ts',
+    checks: [
+      ['a confining executor advertises it through the sandboxMode getter', t => t.includes('get sandboxMode(): SandboxMode | undefined {')],
+    ],
+  },
+  {
     id: 'shell service key',
     file: 'packages/shell/shell/src/index.ts',
     checks: [

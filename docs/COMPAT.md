@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，CI 另 pin `deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`）· 插件 v1.25.5。
+> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，CI 另 pin `deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`）· 插件 v1.26.0。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
 > 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
@@ -26,7 +26,7 @@
 | 钩子（hooks.json / 双桥） | 宿主 hooks + claude-code / codex 桥（无 UI） | **独占** | `hooks.json` + patch 行 + ⚠ `fiber.update` | verify-hooks-codex-bridge |
 | 定时任务 | `ui-schedule` + `packages/schedule`（会话级任务） | 增量（宿主级 cron，语义不同） | `~/.dsh/cron-tasks.json` + 每任务 timer | verify-cron-admin / verify-cron-panel |
 | Webhook 入站规则 | `packages/webhook`、`webhook-github`（无规则管理 UI） | **独占** | prefix route + `x-webhook-secret` + 去重历史；**默认仅本机**（非 loopback 与"报不出对端地址"的传输层都 403，远程需 `webhookAllowRemote`） | verify-webhook-triggers / verify-webhook-hardening |
-| 工作流（journal / 续跑 / 工作库） | `workflow` + `tool-workflow` + `ui-workflow-run` | 增量 | `node:vm` realm + `$DSH_HOME/workflows` | verify-workflow-* |
+| 工作流（journal / 续跑 / 工作库） | `workflow` + `tool-workflow` + `ui-workflow-run` | 增量 | `node:vm` realm + JSON 桥 + 同步前缀 vm timeout + `$DSH_HOME/workflows`（同进程，非硬隔离） | verify-workflow-* |
 | 历史会话（批删 / 导出 / 体检 / 置顶） | `ui-workspace`（会话管理）、`session-query` | 增量 | `sessionPersistence` + ⚠ `workspaceRegistry` 归档集 | host-check |
 | Web 搜索（provider 切换） | `ui-settings-web-search`（DeepSeek provider 配置） | 增量（exa / perplexity 装卸） | profile patch row + `settings.mutate`（有 settings 命名空间时） | verify-web-search-admin |
 | 用量仪表盘 | 无 | **独占** | `session/event` 事件流 + `$DSH_HOME/usage-ledger.json` | verify-usage-ledger |

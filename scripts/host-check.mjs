@@ -26,7 +26,7 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -37,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows, shouldIgnoreScripts, withInstallScriptsPolicy, scrubbedPnpmEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -512,6 +512,49 @@ assert.equal(localSpecPath('file:./pkg.tgz'), './pkg.tgz', 'file: resolves to it
 assert.equal(localSpecPath('^1.2.3'), null, 'semver range is not local')
 assert.equal(localSpecPath('1.2.3'), null, 'plain version is not local')
 
+/* ------------- install-time lifecycle scripts (config.installScripts) -------------
+ * A dependency's prepare/postinstall runs with the operator's environment, and
+ * `dsh plugin add` runs it too — so the default stays `allow` (no surprise for an
+ * existing profile). `deny` and `local-only` are the operator's controls, and
+ * only `add` is touched: no other verb runs lifecycle scripts.
+ */
+assert.deepEqual(withInstallScriptsPolicy(['add', 'some-plugin'], 'allow'), ['add', 'some-plugin'], 'allow: no flag, exactly the CLI behaviour')
+assert.deepEqual(
+  withInstallScriptsPolicy(['add', 'some-plugin', '--save-dev'], 'deny'),
+  ['add', '--ignore-scripts', 'some-plugin', '--save-dev'],
+  'deny: the flag is inserted right after `add`, keeping the other operands and flags',
+)
+assert.deepEqual(withInstallScriptsPolicy(['add', 'E:/work/my-plugin'], 'local-only'), ['add', 'E:/work/my-plugin'], 'local-only: the operator\'s own path may build')
+assert.deepEqual(withInstallScriptsPolicy(['add', 'link:../pkg'], 'local-only'), ['add', 'link:../pkg'], 'local-only: link: counts as local')
+assert.deepEqual(withInstallScriptsPolicy(['add', 'file:./pkg.tgz'], 'local-only'), ['add', 'file:./pkg.tgz'], 'local-only: file: counts as local')
+assert.deepEqual(
+  withInstallScriptsPolicy(['add', 'dsh-plugin-remote@1.2.3'], 'local-only'),
+  ['add', '--ignore-scripts', 'dsh-plugin-remote@1.2.3'],
+  'local-only: a registry spec is denied',
+)
+assert.deepEqual(
+  withInstallScriptsPolicy(['add', 'git+https://host/repo.git'], 'local-only'),
+  ['add', '--ignore-scripts', 'git+https://host/repo.git'],
+  'local-only: a git URL is denied',
+)
+assert.deepEqual(withInstallScriptsPolicy(['remove', 'some-plugin'], 'deny'), ['remove', 'some-plugin'], 'deny never touches a non-add verb')
+assert.deepEqual(withInstallScriptsPolicy(['install'], 'deny'), ['install'], 'a bare install is not an add')
+assert.equal(shouldIgnoreScripts('some-plugin', 'allow'), false)
+assert.equal(shouldIgnoreScripts('some-plugin', 'local-only'), true)
+assert.equal(shouldIgnoreScripts('E:/work/pkg', 'local-only'), false)
+assert.equal(shouldIgnoreScripts('E:/work/pkg', 'deny'), true, 'deny beats local-ness')
+
+/* ------------- the pnpm child env drops the harness namespace -------------
+ * DSH_* carries harness internals (sandbox tokens, ACL identities) that no
+ * dependency's build script has a use for; everything else — including registry
+ * credentials a private registry may need — is inherited deliberately.
+ */
+const pnpmEnv = scrubbedPnpmEnv({ PATH: '/usr/bin', NPM_TOKEN: 'keep-me', DSH_HOME: '/home/.dsh', DSH_SANDBOX_TOKEN: 'drop-me' })
+assert.equal(pnpmEnv.PATH, '/usr/bin', 'ordinary variables pass through')
+assert.equal(pnpmEnv.NPM_TOKEN, 'keep-me', 'credential-shaped variables stay (registry auth is legitimate)')
+assert.equal('DSH_HOME' in pnpmEnv, false, 'DSH_* is dropped')
+assert.equal('DSH_SANDBOX_TOKEN' in pnpmEnv, false, 'every DSH_* variable is dropped')
+
 /* ------------ layout encoders mirror the JSONL backend ------------
  * sessionLogDirFor derives the physical session directory through the
  * projectKey/encodeSegment algorithms. The vectors below pin the exact
@@ -570,6 +613,54 @@ await assert.doesNotReject(
   () => missingDirCtx.provided.sessionAdmin.deleteSession('session-unmaterialized'),
   'an unmaterialized session (no durable bytes) deletes cleanly',
 )
+
+/* -------- a link-shaped session directory is never recursively deleted --------
+ * The log directory is DERIVED (the seam has no delete/path API), so the delete
+ * must not follow a symlink/junction: a recursive rm on one acts on its target.
+ * The platform rule is lstat + unlink for link-shaped paths, recursive rm only
+ * for known real directories.
+ */
+const symlinkHome = join(here, '../.host-check-tmp/session-symlink-home')
+rmSync(symlinkHome, { recursive: true, force: true })
+mkdirSync(symlinkHome, { recursive: true })
+const symlinkHeader = { id: 'session-linked', cwd: 'E:/nowhere-b', createdAt: 1 }
+const linkedDir = join(symlinkHome, 'sessions', projectKeyOf('E:/nowhere-b'), encodeSegmentOf('session-linked'))
+const linkTarget = join(symlinkHome, 'outside-target')
+mkdirSync(linkTarget, { recursive: true })
+writeFileSync(join(linkTarget, 'precious.jsonl'), '{}\n')
+mkdirSync(dirname(linkedDir), { recursive: true })
+symlinkSync(linkTarget, linkedDir, process.platform === 'win32' ? 'junction' : 'dir')
+const originalHome = process.env.DSH_HOME
+process.env.DSH_HOME = symlinkHome
+try {
+  const linkCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    get: () => undefined,
+    on: (name, fn) => () => {},
+    typert: { register: () => () => {} },
+    workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+    sessionPersistence: {
+      list: async () => [],
+      stat: async () => ({ header: symlinkHeader, revision: 'r', sizeBytes: 3 }),
+      open: async () => ({ read: async () => [], close: async () => {} }),
+    },
+  }
+  apply(linkCtx)
+  await assert.rejects(
+    () => linkCtx.provided.sessionAdmin.deleteSession('session-linked'),
+    /symlink\/junction/,
+    'a link-shaped session directory refuses the recursive delete',
+  )
+  assert.equal(existsSync(join(linkTarget, 'precious.jsonl')), true, 'the link target survived')
+} finally {
+  if (originalHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = originalHome
+  rmSync(symlinkHome, { recursive: true, force: true })
+}
 
 /* --------------- archive() validates session existence ---------------
  * Archiving an unknown id would pollute the archived set with garbage
@@ -1020,11 +1111,56 @@ assert.equal(afterUpsert.length, 2, 'two MCP entries after upserts')
 assert.equal(afterUpsert[0].id, 'mcp-github', 'first entry id preserved')
 assert.equal(afterUpsert[0].serverName, 'github', 'serverName preserved')
 assert.deepEqual(afterUpsert[0].config, {
-  transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: 'tok' },
+  transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'],
+  // SECRET FENCE: env/header VALUES never cross the RPC boundary (an MCP entry's
+  // env is where a third-party API key lives) — list() returns the key set with
+  // empty values, exactly like the webhook rule's secret and web-search's
+  // `kind: 'secret'` fields. No `raw` YAML either: it carried the same values.
+  env: { GITHUB_TOKEN: '' },
   cwd: 'E:/Demo', toolCallTimeoutMs: 45_000, failOnStartupError: true,
   reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
-}, 'list returns complete editable stdio config')
+}, 'list returns complete editable stdio config with masked secret values')
+assert.ok(!JSON.stringify(afterUpsert).includes('tok'), 'the stored env value is nowhere in the list payload')
+assert.ok(!('raw' in afterUpsert[0]), 'the raw YAML block (same secrets, as text) is not shipped either')
 assert.equal(afterUpsert[1].serverName, 'web', 'http serverName preserved')
+// …and the write half of that contract: an EMPTY incoming value inherits the
+// stored one (the panel can only ever send back what it received), while a key
+// omitted from the map is removed.
+const inherited = await mcp.upsert({
+  id: 'mcp-github',
+  config: { transport: 'stdio', serverName: 'github', command: 'npx', env: { GITHUB_TOKEN: '', EXTRA: 'added' } },
+})
+assert.equal(inherited.hotApplied, true, 'the inherit write hot-applies like any other update')
+assert.deepEqual(
+  mcpFiberUpdates.at(-1).config.env,
+  { GITHUB_TOKEN: 'tok', EXTRA: 'added' },
+  'the merged env (stored value + new key) is what reaches the live fiber',
+)
+assert.ok(
+  /GITHUB_TOKEN:\s*"?tok"?/.test(readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8')),
+  'the stored secret survives the round-trip on disk',
+)
+const maskedAgain = (await mcp.list()).entries.find(e => e.id === 'mcp-github')
+assert.deepEqual(maskedAgain.config.env, { GITHUB_TOKEN: '', EXTRA: '' }, 'both keys go back out masked')
+await mcp.upsert({
+  id: 'mcp-github',
+  config: { transport: 'stdio', serverName: 'github', command: 'npx', env: {} },
+})
+assert.ok(
+  !readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8').includes('GITHUB_TOKEN'),
+  'omitting the key removes it (that is how the editor deletes a line)',
+)
+// Restore the entry the later assertions expect, and reset the hot-apply ledger
+// so the "exactly one fiber.update" assertion below measures only its own upsert.
+await mcp.upsert({
+  id: 'mcp-github',
+  config: {
+    transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'],
+    env: { GITHUB_TOKEN: 'tok' }, cwd: 'E:/Demo', toolCallTimeoutMs: 45_000, failOnStartupError: true,
+    reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
+  },
+})
+mcpFiberUpdates.length = 0
 // Update in place — and the live fiber must be hot-restarted with the new
 // config (matched by the PREVIOUS serverName, so renames still find it).
 const updated = await mcp.upsert({
@@ -2176,6 +2312,19 @@ try {
   assert.throws(() => resolvePluginConfig({ panels: { nope: 'off' } }), /not a panel id/, 'unknown panel id fails the mount')
   assert.throws(() => resolvePluginConfig({ panels: { mcp: 'maybe' } }), /must be one of/, 'unknown state fails the mount')
   assert.throws(() => resolvePluginConfig({ panels: ['mcp'] }), /must be a mapping/, 'a list is not a mapping')
+  // `installScripts` rides the same fail-loud contract: a typo must not silently
+  // leave a policy at its default, because this one decides whether a
+  // dependency's prepare script runs on the operator's machine.
+  assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the default matches `dsh plugin add` behaviour')
+  for (const value of ['deny', 'local-only', 'allow']) {
+    assert.equal(resolvePluginConfig({ installScripts: value }).installScripts, value, value + ' is accepted')
+  }
+  assert.throws(
+    () => resolvePluginConfig({ installScripts: 'never' }),
+    /installScripts must be one of/,
+    'an unknown policy fails the mount instead of silently allowing scripts',
+  )
+  assert.throws(() => resolvePluginConfig({ installScripts: false }), /installScripts must be one of/, 'a boolean is not a policy')
   const advertised = await fakeCtx.provided.pluginAdmin.panels()
   assert.deepEqual(advertised, { panels: {} }, 'the mounted service reports the resolved switch map')
 }

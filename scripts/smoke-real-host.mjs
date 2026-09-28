@@ -438,18 +438,40 @@ try {
       const found = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(browserLog)
       if (found !== null && cdpPort === null) cdpPort = Number(found[1])
     })
+    // Not every Chromium build announces the port on stderr: Edge (and newer
+    // headless launches) print NOTHING there and only drop the chosen port into
+    // `<user-data-dir>/DevToolsActivePort` as its first line. Observed on the
+    // windows-latest Edge: empty stderr, file present — the stderr-only probe
+    // failed step 7 on a perfectly healthy browser. The file is read on every
+    // poll (not latched) so a half-written line cannot pin a wrong port for the
+    // rest of the deadline; the stderr value, once seen, still wins.
+    const devtoolsPortFile = join(browserProfile, 'DevToolsActivePort')
+    const portFromFile = () => {
+      try {
+        const first = readFileSync(devtoolsPortFile, 'utf8').split(/\r?\n/, 1)[0].trim()
+        const port = Number(first)
+        return Number.isInteger(port) && port > 0 ? port : null
+      } catch {
+        return null   // not written yet
+      }
+    }
     const browserDeadline = Date.now() + 30_000
     let pageTarget = null
     while (Date.now() < browserDeadline && pageTarget === null) {
       await new Promise((resolve) => setTimeout(resolve, 400))
-      if (cdpPort === null) continue
+      const port = cdpPort ?? portFromFile()
+      if (port === null) continue
       try {
-        const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json()
-        pageTarget = list.find((t) => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string') ?? null
+        const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
+        const target = list.find((t) => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string') ?? null
+        pageTarget = target
+        // Latch only on a successful target fetch, so a stale/partial port is
+        // re-resolved from the file on the next poll.
+        if (target !== null) cdpPort = port
       } catch { /* still starting */ }
     }
     if (pageTarget === null) {
-      fail('the browser exposed a CDP page target', browserLog.slice(-200) || '(no DevTools line)')
+      fail('the browser exposed a CDP page target', browserLog.slice(-200) || '(no DevTools line on stderr and no DevToolsActivePort in the profile)')
     } else {
       ok('the browser opened the shell', `CDP on 127.0.0.1:${cdpPort}`)
       // Raw CDP over Node's built-in WebSocket: no dependency, and the assertions

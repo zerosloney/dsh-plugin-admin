@@ -33,6 +33,15 @@ var I18N_LANG = (function () {
 
 var I18N_EN = {
   "（无工作目录）": "(no working directory)",
+  // Separators and brackets used to be bare literals at their call sites, so the
+  // English UI leaked Chinese punctuation ("3 个失败：…，2 个不兼容"). They are
+  // dictionary keys now, which is also what verify-i18n can see.
+  "，": ", ",
+  "、": ", ",
+  "（": " (",
+  "重试": "Retry",
+  "已存的 header 只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该键。": "Stored headers come back as key names only (values never cross to the browser): leave a value empty to keep the stored one, and delete the whole line to remove the key.",
+  "已存的环境变量只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该变量。": "Stored environment variables come back as key names only (values never cross to the browser): leave a value empty to keep the stored one, and delete the whole line to remove the variable.",
   "📋 会话 ID 已复制": "📋 Session ID copied",
   "❌ 复制失败：": "❌ Copy failed: ",
   "当前环境不支持文件下载": "File download is not supported in this environment",

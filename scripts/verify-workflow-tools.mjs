@@ -10,7 +10,11 @@
  */
 
 import assert from 'node:assert/strict'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { applyWorkflowTools } from '../lib/workflow-tools.js'
+import { canonicalWorkspacePath } from '../lib/workspace-path.js'
 
 let failures = 0
 async function check(name, fn) {
@@ -86,12 +90,12 @@ function fakeLibrary() {
 }
 
 /** 挂工具，返回 { tool, dispose, registered }。 */
-function mount(registry, library, toolsImpl) {
+function mount(registry, library, toolsImpl, workspaceRegistry) {
   const registered = []
   const ctx = {
     get: (key) => (key === 'tools' ? (toolsImpl === undefined ? {
       register: (def) => { registered.push(def); return () => { registered.splice(registered.indexOf(def), 1) } },
-    } : toolsImpl) : undefined),
+    } : toolsImpl) : key === 'workspaceRegistry' ? workspaceRegistry : undefined),
     logger: { warn() {}, info() {} },
   }
   const dispose = applyWorkflowTools(ctx, { registry, library })
@@ -236,8 +240,23 @@ await check('save honours explicit scope; project takes the session cwd', async 
   assert.equal(p.record.scope, 'project')
   assert.equal(library.calls.find((c) => c.op === 'saveSaved' && c.spec.name === 'p1').spec.workspacePath, '/proj', 'cwd taken from the session')
 
-  const explicit = JSON.parse(await tool.execute({ action: 'save', name: 'p2', script: 'return 1', scope: 'project', workspacePath: '/elsewhere' }, exec))
-  assert.equal(explicit.record.workspacePath, '/elsewhere', 'explicit workspacePath wins')
+  // An EXPLICIT path is the attacker-reachable argument (prompt injection), so it
+  // must be inside the calling session's tree or a workspace the registry knows.
+  const scopedTmp = mkdtempSync(join(tmpdir(), 'wf-tools-explicit-'))
+  const scopedSession = join(scopedTmp, 'session')
+  const scopedNested = join(scopedSession, 'nested')
+  const scopedOutside = join(scopedTmp, 'elsewhere')
+  mkdirSync(scopedNested, { recursive: true })
+  mkdirSync(scopedOutside, { recursive: true })
+  const scopedExec = { agent: { id: 's-scoped', session: { header: { cwd: scopedSession } } }, callId: 'cx' }
+
+  const explicit = JSON.parse(await tool.execute({ action: 'save', name: 'p2', script: 'return 1', scope: 'project', workspacePath: scopedNested }, scopedExec))
+  assert.equal(explicit.record.workspacePath, canonicalWorkspacePath(scopedNested), 'an explicit path inside the session tree wins (canonicalized)')
+
+  const refused = JSON.parse(await tool.execute({ action: 'save', name: 'p3', script: 'return 1', scope: 'project', workspacePath: scopedOutside }, scopedExec))
+  assert.match(refused.error, /outside the calling session and outside every workspace/, 'an explicit path outside every trusted root is refused')
+  assert.equal(existsSync(join(scopedOutside, '.dsh')), false, 'and nothing was created there')
+  rmSync(scopedTmp, { recursive: true, force: true })
 
   const bad = JSON.parse(await tool.execute({ action: 'save', name: 'no script' }, exec))
   assert.match(bad.error, /requires a script/)
@@ -356,6 +375,77 @@ await check('dispose unregisters the tool', async () => {
   dispose()
   assert.equal(registered.length, 0, 'disposer removes the registration')
 })
+
+// ─── 项目作用域路径闸门（S2，模型侧入口）─────────────────────────────────────
+//
+// `workspacePath` 是**模型可控**的参数：提示注入能借它让插件在任意目录建树写 JSON
+// （`<path>/.dsh/workflows/<name>.json`），或让 delete_saved 在任意路径 unlink。
+// 默认路径（宿主给的 session cwd）不需要审问；**显式**给的路径必须落在调用会话的树
+// 内，或落在本 dsh 实例已知的工作区里。
+
+console.log('project-scope workspacePath gate (model-supplied):')
+
+const gateRoot = mkdtempSync(join(tmpdir(), 'wf-tools-gate-'))
+const sessionCwd = join(gateRoot, 'session')
+const outsideDir = join(gateRoot, 'outside')
+const registeredDir = join(gateRoot, 'registered')
+mkdirSync(sessionCwd, { recursive: true })
+mkdirSync(outsideDir, { recursive: true })
+mkdirSync(registeredDir, { recursive: true })
+const gateExec = { agent: { id: 'sess-gate', session: { header: { cwd: sessionCwd } } }, callId: 'cg' }
+
+await check('an explicit path outside the session and outside every workspace is refused', async () => {
+  const library = fakeLibrary()
+  const { tool } = mount(fakeRegistry(), library, undefined, undefined)
+  const out = JSON.parse(await tool.execute({
+    action: 'save', name: 'evil', script: 'return 1', scope: 'project', workspacePath: outsideDir,
+  }, gateExec))
+  assert.match(out.error, /outside the calling session and outside every workspace/, 'refused with the reason')
+  assert.equal(library.calls.filter((c) => c.op === 'saveSaved').length, 0, 'the library was never asked')
+  assert.equal(existsSync(join(outsideDir, '.dsh')), false, 'no tree was created at the refused path')
+
+  const del = JSON.parse(await tool.execute({
+    action: 'delete_saved', name: 'anything', scope: 'project', workspacePath: outsideDir,
+  }, gateExec))
+  assert.match(del.error, /outside the calling session/, 'delete_saved refuses the same way')
+  const listed = JSON.parse(await tool.execute({ action: 'list_saved', workspacePath: outsideDir }, gateExec))
+  assert.ok(listed.error !== undefined || listed.total === undefined, 'reads refuse as well')
+})
+
+await check('a path inside the session tree, or a registered workspace, is accepted', async () => {
+  const nested = join(sessionCwd, 'packages', 'app')
+  mkdirSync(nested, { recursive: true })
+  const library = fakeLibrary()
+  const { tool } = mount(fakeRegistry(), library, undefined, undefined)
+  const out = JSON.parse(await tool.execute({
+    action: 'save', name: 'inside', script: 'return 1', scope: 'project', workspacePath: nested,
+  }, gateExec))
+  assert.equal(out.ok, true, 'the session subtree is trusted')
+  assert.equal(library.calls.at(-1).spec.workspacePath, canonicalWorkspacePath(nested), 'the canonical path is what reaches the library')
+
+  // The registry branch: a workspace dsh knows, for a caller whose session cwd
+  // is elsewhere (this is how the panel legitimately targets a workspace).
+  const registryLibrary = fakeLibrary()
+  const { tool: regTool } = mount(fakeRegistry(), registryLibrary, undefined, { list: () => [{ path: registeredDir }] })
+  const regOut = JSON.parse(await regTool.execute({
+    action: 'save', name: 'reg', script: 'return 1', scope: 'project', workspacePath: registeredDir,
+  }, gateExec))
+  assert.equal(regOut.ok, true, 'a registered workspace is accepted')
+  assert.equal(registryLibrary.calls.at(-1).spec.workspacePath, canonicalWorkspacePath(registeredDir))
+})
+
+await check('the DEFAULT path (harness-provided session cwd) is passed through unasked', async () => {
+  // Provenance is the whole point: only the explicit argument is attacker-chosen,
+  // so the session cwd must not be filtered (CLI / headless deployments have no
+  // workspace registry at all, and their project scope must keep working).
+  const library = fakeLibrary()
+  const { tool } = mount(fakeRegistry(), library, undefined, undefined)
+  const out = JSON.parse(await tool.execute({ action: 'save', name: 'def', script: 'return 1', scope: 'project' }, gateExec))
+  assert.equal(out.ok, true)
+  assert.equal(library.calls.at(-1).spec.workspacePath, sessionCwd, 'the session cwd rides through unchanged')
+})
+
+rmSync(gateRoot, { recursive: true, force: true })
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)

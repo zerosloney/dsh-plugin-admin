@@ -4,7 +4,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 > 面板文案内置简体/English 双语，并且**接在 dsh 自己的语言服务上**（`ctx.locale`，Phase C）：工具栏 🌐 切换的是**整个界面**的语言，面板即时重绘、无需刷新；宿主未提供该服务时回落到「跟随浏览器语言 + 中文原文兜底」，永不出坏。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.25.5 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（v1.25.0 起不再支持 0.1.6，见 [docs/COMPAT.md](docs/COMPAT.md)）
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.26.0 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（v1.25.0 起不再支持 0.1.6，见 [docs/COMPAT.md](docs/COMPAT.md)）
 
 ## 功能总览
 
@@ -71,9 +71,9 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 ### 🧵 工作流
 1. 打开：设置 → 自动化 → 「工作流」页签（排在「Webhook」之后）。页首有通俗说明与三步引导；**「从模板开始」**提供三个开箱即用的模板卡片（主题总结 / 并行双角度分析 / 分步润色流水线）——点卡片自动填好脚本、名称与参数，改改参数点「🚀 启动」即可，不会写代码也能跑。
 2. 新建：脚本（TypeScript / JavaScript，**顶层 `return` 即运行结果**）+ 名称（可选）+ args（JSON）→ 🚀 启动。父会话：工作流的子代理从某个在线会话派生——恰有一个在线会话时自动选中不出控件，多个时下拉选择（标题 · 工作目录），零个时提示先开会话。
-3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**，只有宿主 `ctx.shell` 不可用或运行被中止才抛出（脚本自行 try/catch）。脚本跑在 **node:vm 独立 realm**：require / import / fs / network / process 均不可达——只编排，重活交给 `agent()` / `shell()`；realm 防的是意外访问，不是硬安全边界（与宿主同进程、同信任级别）。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 会让运行判 errored 而不是产出损坏记录）。
+3. 脚本 facade：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**，只有宿主 `ctx.shell` 不可用或运行被中止才抛出（脚本自行 try/catch）。脚本跑在 **node:vm 独立 realm**：没有 process / fetch / require / fs 等宿主全局，且**宿主返回值一律折成 JSON 文本再在 realm 内重建**——`args`、`agent()`/`shell()` 的返回值、`parallel()`/`pipeline()` 的数组、甚至 rejection 里的宿主 Error，都不带宿主原型链进 realm（所以 `args.constructor.constructor('return process')()` 这条老逃逸路径不通了）；首个 `await` 之前的**同步前缀**有 V8 vm timeout 预算，一行死循环会在预算处被掐断而不是冻住宿主。**这不是硬安全边界**：脚本与宿主同进程同信任级，真正的权力来自 `agent()` 与 `shell()`（后者跑真实宿主命令，受调用会话的沙箱策略约束）——要硬边界得像宿主 PTC 工作流那样放子进程。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 会让运行判 errored 而不是产出损坏记录）。
 4. 生命周期：运行中「⏹ 停止」；stopped / errored 可「▶ 续跑」「✏️ 改建」（改脚本重跑，已完成步骤按 fingerprint 命中缓存，不重花调用；**缓存键是 `站点序号:kind:sha256(prompt + 语义 opts)`——`agent()` 的 provider/model/schema 与 `shell()` 的 workdir/timeoutMs 进键，只改这些会让该步重跑（否则会拿到上一个模型的结果），改 `args` 而 prompt 不变仍命中**）；详情 2s 轮询实时刷新。停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」会被拒绝（防新旧双跑），等运行真正结束后用「续跑」。续跑/改建默认回**原会话**（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是**读取时按父会话是否在线派生的**，不落盘）。
-5. 工作库：「保存」脚本入库——全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）；卡片「🚀 运行」一键启动。
+5. 工作库：「保存」脚本入库——全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）；卡片「🚀 运行」一键启动。**项目根必须已存在**（插件不会替你造一棵树），且显式传入的项目根只能是**调用会话自己的树**或**本 dsh 实例已知的工作区**：模型传的 `workspacePath` 与浏览器 RPC 的 `spec.workspacePath` 都按这条闸门校验，任意目录会被拒绝（否则提示注入就能借它在任意路径建树写文件、或删文件）；`<workspace>/.dsh` 若是指向项目外的符号链接/junction 同样拒绝。
 6. agent 工具：模型可调用 `workflow_admin`（单工具 + action 枚举）——create / amend / resume / stop / list / get / answer / eval / save / run_saved / list_saved / delete_saved；`eval` 干跑（同一次工具调用内 await 完成、**不起后台运行**，`agent()` 桩化、`shell()` 直接报错，零子代理成本）供模型先验证语法与控制流；`wait: true` 阻塞到落定再回结果摘要。名字刻意避开 dsh 内置 `workflow` 工具（全局层同名注册会抛错）。
 7. 保存作用域自动识别（对齐 ZCode SaveWorkflow）：会话内经工具保存且未指定 scope 时，调用会话有 cwd → 存**项目** `.dsh/workflows/`；识别不了（无调用会话 / 会话无 cwd）→ 工具回 `needsScopeChoice`，由模型转问用户「存项目还是全局」，带选择重调。`delete_saved` 对称识别（项目优先、回退全局并回报实际删除的一级）。
 8. 斜杠命令：`/workflow` 随插件挂载**自动注册**（无需配置；与既有命令重名时只降级告警）——
@@ -181,13 +181,13 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 
 ## 可调配置键（插件 config 行）
 
-`resolvePluginConfig` 认 **25 个键，全部受校验**：**14 个可调项**（第一张表）与 **11 个直通覆盖**（第二张表）。任意一个写错类型 / 范围都会在**挂载期直接报错**（fail-loud，不会静默降级）——包括 `commandsDir: 5` 这类直通键，不再静默失效。
+`resolvePluginConfig` 认 **30 个键，全部受校验**：**16 个可调项**（第一张表）与 **14 个直通覆盖**（第二张表）。任意一个写错类型 / 范围都会在**挂载期直接报错**（fail-loud，不会静默降级）——包括 `commandsDir: 5` 这类直通键，不再静默失效。
 
 两处例外按同一契约处理：**未文档化的键**不报错（同一 config 行也可能载着别的 reader 的键），但会**每进程告警一次**（`warnUnknownConfigKeys`，日志形如 `plugin-admin: unknown config key(s) ignored: xxx — see README 可调配置键`），写错拼写不再无声无息；**直通键缺省时保持 undefined**，各子模块仍用自己的历史默认值，因此不改变既有行为。
 
 导出的 `VALIDATED_CONFIG_KEYS` / `PASSTHROUGH_CONFIG_KEYS` 就是这两张表的代码形态，`host-check` 断言前者与 `resolvePluginConfig` 实际填出的键集完全一致 —— 新增旋钮忘了登记会在测试里失败，而不是在挂载期被当成"未知键"。
 
-**受校验可调项（14）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
+**受校验可调项（16）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
 
 | 分组 | 键 | 默认 | 说明 |
 |---|---|---|---|
@@ -206,8 +206,9 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 | 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
 | 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
 | 面板开关 | `panels` | `{}` | 逐面板三态开关：`auto`（默认，官方已覆盖就让位）/ `on`（即使官方有也注册）/ `off`（不注册，优先级最高）。键名必须是 11 个面板 id 之一（`extensions` / `mcp` / `skills` / `subagents` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`），值必须是三态之一；写错任一处**挂载期报错**。浏览器半读不到 config 行，所以挂载时经 `pluginAdmin/panels` 问宿主一次，答**上次的答案缓存**在 localStorage（键 `dsh-admin-panels-policy`），新答案到达后对账（关掉该关的、补上该开的）。 |
+| 安装 | `installScripts` | `allow` | pnpm 安装时是否允许依赖的生命周期脚本：`allow`（默认，与 `dsh plugin add` 一致）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来，这一取舍由部署方决定。 |
 
-**受校验直通覆盖（11）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
+**受校验直通覆盖（14）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -230,4 +231,8 @@ npm test   # 三道静态闸门 + 28 个脚本：self-check / host-check / verif
 
 ## 信任边界
 
-浏览器端可触发本地 pnpm 安装（含 package prepare 脚本）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令（走宿主 `ctx.shell`，受宿主审批与沙箱策略约束）——暴露到非本机前请务必评估权限范围。
+浏览器端可触发本地 pnpm 安装（含 package prepare 脚本——可用 `installScripts: 'local-only' | 'deny'` 关掉；pnpm 子进程的 `DSH_*` 环境变量会被剔除，其余环境（含 registry 凭据）按 `dsh plugin add` 的语义继承）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除（递归删除前做 `lstat` 与 realpath 包含性校验，符号链接/junction 一律拒绝）——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令——暴露到非本机前请务必评估权限范围。
+
+工作流 `shell()` 与项目 `.agents` hooks 执行命令时，都按**调用会话**解析出的沙箱策略围栏（`ctx.sandboxPolicy.resolve({ session })`，与同会话的 bash 工具同一套解析），因此会话被切到 `read-only` / `workspace-write` 时这两条路径同样受约束；`danger-full-access` 下与宿主一致不受围栏。宿主没有挂 `ctx.sandboxPolicy` 而执行器又是围栏型时，两条路径都**拒绝执行**而不是无围栏跑（项目 hooks 记一条告警后跳过，工作流 `shell()` 抛给脚本）。
+
+**审批（`ctx.approval`）不在这两条路径上**，这是刻意的：dsh 只在调用方要**放宽**既定策略时才问审批（bash 工具的 `sandbox_permissions` 升级通道），普通受限命令不问；而审批服务的 `never` 策略——`danger-full-access` 部署下的默认值——会确定性地答 `rejected`，逐次询审批只会让恰好授权了全权的部署反而跑不动。本插件没有"放宽沙箱"的通道，所以也没有审批入口。workflow 的 `node:vm` realm 不是安全边界（脚本体与宿主同进程同信任级）。
