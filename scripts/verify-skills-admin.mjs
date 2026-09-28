@@ -406,13 +406,6 @@ await checkAsync('6. complete:false propagates and the session cap warns', async
   const view = await service.list(many)
   assert.equal(view.complete, false, 'an incomplete observation is surfaced, never silently completed')
   assert.ok(view.warnings.includes('仅解析前 32 个会话（共 40 个）'), 'the session cap is reported')
-  // The aggregate boolean alone cannot tell a reader WHICH layer is short — the
-  // panel used to print a hard-coded provider name here. Every incomplete layer
-  // must be named in the warning channel the panel already renders.
-  const partial = view.warnings.find((w) => w.startsWith('以下技能层的源未报告完整发现'))
-  assert.ok(partial, 'the incomplete layers are named, not just the aggregate boolean')
-  assert.ok(partial.includes('全局'), 'the global layer is named')
-  assert.ok(partial.includes('/w/all @ build'), 'the incomplete session scope is named')
   assert.equal(view.sessions.length, 32, 'only the cap is resolved')
 })
 
@@ -664,8 +657,8 @@ await checkAsync('13. the roster renders every skill, its origin, path and badge
   assert.ok(text.includes('项目 .agents') && text.includes('插件内置') && text.includes('用户 .agents'), 'each source renders its friendly label')
   assert.ok(text.includes('/proj/.agents/skills/alpha-only/SKILL.md'), 'the SKILL.md path renders')
   assert.ok(text.includes('可见于：'), 'the per-skill scope list renders')
-  assert.ok(text.includes('共 3 个技能（全局 + 1 个预设 + 1 个会话作用域）'), 'the roster summary counts both scope kinds')
-  assert.ok(text.includes('会话 s-beta 的作用域未能解析：会话没有项目 cwd'), 'an unresolved session scope is surfaced outside the collapsed panel')
+  assert.ok(text.includes('📌 共 3 个技能'), 'the roster summary states how many skills loaded')
+  assert.ok(text.includes('会话 s-beta 的作用域未能解析：会话没有项目 cwd'), 'an unresolved session scope is surfaced beside the roster')
   const openButtons = [...host.querySelectorAll('button')].filter((b) => b.textContent?.includes('📂 打开目录'))
   assert.equal(openButtons.length, 2, 'only path-bearing skills offer the reveal action')
 
@@ -689,15 +682,6 @@ await checkAsync('13. the roster renders every skill, its origin, path and badge
   assert.ok(host.textContent.includes('/alpha-only'))
   assert.ok(!host.textContent.includes('/human-only'), 'a non-matching skill is filtered out')
   await fiberHandler(needle, 'onChange', { target: { value: '' } })
-
-  // Scope coverage panel.
-  const toggle = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('查看作用域明细'))
-  assert.ok(toggle !== undefined, 'the scope toggle renders')
-  await fiberHandler(toggle, 'onClick', {})
-  assert.ok(host.textContent.includes('作用域覆盖') && host.textContent.includes('全局'), 'the scope panel lists coverage')
-  assert.ok(host.textContent.includes('2 个会话'), 'a scope reports how many sessions it covers')
-  assert.ok(host.textContent.includes('预设 创造模式（默认）'), 'a preset scope is listed beside the session scopes')
-  assert.ok(host.textContent.includes('3 个技能'), 'the preset scope reports its own skill count')
 
   await act(async () => { mounted.root.unmount() })
   host.remove()

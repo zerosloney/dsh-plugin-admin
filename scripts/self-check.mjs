@@ -1758,7 +1758,11 @@ await act(async () => {
   propsOf(skillsRefresh).onClick()
   await new Promise((resolve) => setTimeout(resolve, 40))
 })
-assert.ok(host.textContent.includes('complete=false'), 'an incomplete skill read is surfaced, not silently shown')
+// An incomplete host read no longer prints a discovery caveat: the panel just
+// lists the skills it could load, so the check is that the roster still
+// renders and the caveat stayed away.
+assert.ok(host.textContent.includes('📌 共 '), 'an incomplete read still renders the roster it produced')
+assert.ok(!host.textContent.includes('complete=false'), 'the discovery-incomplete caveat is no longer surfaced')
 ctx.skillsIncomplete = undefined
 await act(async () => { skillsRoot.unmount() })
 host.remove()

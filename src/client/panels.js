@@ -8143,7 +8143,6 @@ function SkillsSection(props) {
     busy: false,
     error: '',
     needle: '',
-    scopePanel: false,
     copiedName: '',
   })
   var state = kit.state
@@ -8269,12 +8268,8 @@ function SkillsSection(props) {
   for (var wi = 0; wi < state.warnings.length; wi++) {
     elements.push(createElement('div', { className: 'hint', key: 'warn-' + wi, style: { fontSize: '11px' } }, '⚠ ' + state.warnings[wi]))
   }
-  if (!state.complete) {
-    elements.push(createElement('div', { className: 'hint', key: 'incomplete', style: { fontSize: '11px' } },
-      dshT('⚠ 部分技能源本次发现未完成（宿主注册表 complete=false）— 清单可能少列若干技能，具体层见上方警告')))
-  }
-  // Unresolved session scopes stay OUTSIDE the collapsible scope panel: a
-  // workspace whose skills could not be read must be visible without a click.
+  // Unresolved session scopes stay visible above the roster: a workspace whose
+  // skills could not be read must not be hidden by an otherwise healthy list.
   var unresolvedSessions = state.sessions.filter(function (s) { return s.ok !== true })
   for (var us = 0; us < unresolvedSessions.length; us++) {
     elements.push(createElement('div', { className: 'hint', key: 'scope-fail-' + us, style: { fontSize: '11px' } },
@@ -8311,73 +8306,19 @@ function SkillsSection(props) {
     ),
   ))
 
-  // Roster summary + the scope coverage panel. A healthy roster gets one light
-  // line; the composition breakdown and the detail toggle only appear when the
-  // roster is INCOMPLETE (a scope/session failed to resolve, discovery did not
-  // finish, or nothing was found) — that is when they carry diagnostic value.
+  // Roster summary: the section lists the skills it could actually load, so
+  // the line only states how many that is — plus the filter match count when a
+  // filter narrows the view. Why a layer came up short is the warnings' job.
   var presetScopes = state.scopes.filter(function (s) { return s.kind === 'preset' })
   var sessionScopes = state.scopes.filter(function (s) { return s.kind !== 'global' && s.kind !== 'preset' })
-  var failedSessions = state.sessions.filter(function (s) { return s.ok !== true })
-  var failedScopeTotal = 0
-  for (var fst = 0; fst < state.scopes.length; fst++) {
-    if (state.scopes[fst].error) failedScopeTotal++
-  }
-  var rosterIncomplete = failedSessions.length > 0 || failedScopeTotal > 0 || !state.complete || state.skills.length === 0
-  // One label per unresolved session, shared by the top-level warning and the
-  // scope panel so the two can never drift apart.
+  // One label per unresolved session, shared by the top-level hint line so the
+  // wording cannot drift from the roster below it.
   function unresolvedSessionText(session) {
     return dshT('⚠ 会话 ') + session.sessionId + dshT(' 的作用域未能解析：') + session.message
   }
   var summaryText = dshT('📌 共 ') + state.skills.length + dshT(' 个技能')
     + (filtered.length === state.skills.length ? '' : dshT(' · 当前匹配 ') + filtered.length + dshT(' 个'))
-  if (rosterIncomplete) {
-    var incompleteCause = ''
-    if (failedSessions.length > 0) {
-      incompleteCause = '⚠ ' + failedSessions.length + dshT(' 个会话作用域未能解析')
-    } else if (failedScopeTotal > 0) {
-      incompleteCause = '⚠ ' + failedScopeTotal + dshT(' 个作用域读取失败')
-    } else if (!state.complete) {
-      incompleteCause = dshT('⚠ 部分技能源发现未完成')
-    } else {
-      incompleteCause = dshT('未命中任何技能源')
-    }
-    summaryText = dshT('📌 共 ') + state.skills.length + dshT(' 个技能（全局 + ') + presetScopes.length + dshT(' 个预设 + ')
-      + sessionScopes.length + dshT(' 个会话作用域）· 当前匹配 ') + filtered.length + dshT(' 个 — ') + incompleteCause
-  }
   elements.push(createElement('div', { className: 'hint', key: 'summary' }, summaryText))
-  if (rosterIncomplete) {
-    elements.push(createElement('div', { key: 'scope-toggle', style: { fontSize: '11px' } },
-      createElement(UiButton, {
-        variant: 'outline',
-        size: 'sm', key: 'toggle',
-        'aria-expanded': state.scopePanel ? 'true' : 'false',
-        onClick: function () { patch({ scopePanel: !state.scopePanel }) },
-      }, state.scopePanel ? dshT('▾ 收起作用域明细') : dshT('▸ 查看作用域明细（') + state.scopes.length + dshT(' 个）')),
-    ))
-  }
-  if (rosterIncomplete && state.scopePanel) {
-    var scopeChildren = []
-    for (var pi = 0; pi < state.scopes.length; pi++) {
-      var scopeRow = state.scopes[pi]
-      var scopeSessions = Array.isArray(scopeRow.sessionIds) ? scopeRow.sessionIds.length : 0
-      scopeChildren.push(createElement('div', { key: 'scope-' + pi, className: 'card-sub', style: { fontSize: '11px' } },
-        createElement('span', { className: 'group-path', title: scopeRow.label }, scopeRow.short !== undefined ? scopeRow.short : scopeRow.label),
-        scopeRow.error !== null && scopeRow.error !== undefined && scopeRow.error !== ''
-          ? createElement('span', { style: { marginLeft: '8px', color: 'var(--dsw-alias-fg-danger, #b91c1c)' } }, '⚠ ' + scopeRow.error)
-          : createElement('span', { style: { marginLeft: '8px', color: 'var(--dsw-alias-label-secondary, #61666b)' } }, scopeRow.count + dshT(' 个技能') + (scopeSessions > 0 ? ' · ' + scopeSessions + dshT(' 个会话') : '')),
-      ))
-    }
-    for (var fi = 0; fi < failedSessions.length; fi++) {
-      scopeChildren.push(createElement('div', { key: 'fail-' + fi, className: 'card-sub', style: { fontSize: '11px', color: 'var(--dsw-alias-fg-danger, #b91c1c)' } },
-        unresolvedSessionText(failedSessions[fi])))
-    }
-    elements.push(createElement('div', { key: 'scope-panel', className: 'card' },
-      createElement('div', { className: 'card-header', key: 'h' },
-        createElement('span', { className: 'card-title-text', key: 't' }, dshT('作用域覆盖')),
-      ),
-      createElement('div', { key: 'body' }, scopeChildren),
-    ))
-  }
 
   // Skill cards, collected so they land inside ONE scroll region (a .list
   // viewport): cards rendered straight into the height-bounded section root
@@ -8479,7 +8420,7 @@ function SkillsSection(props) {
       if (presetScopes[ppi].error) failedPresetCount++
     }
     if (presetScopes.length > 0) {
-      emptyDiagnose.push(dshT('预设作用域：') + presetScopes.length + dshT(' 个') + (failedPresetCount > 0 ? '（' + failedPresetCount + dshT(' 个解析失败，展开上方"查看作用域明细"看原因）') : ''))
+      emptyDiagnose.push(dshT('预设作用域：') + presetScopes.length + dshT(' 个') + (failedPresetCount > 0 ? '（' + failedPresetCount + dshT(' 个解析失败）') : ''))
     }
     var sessionScopeCount = 0
     var failedScopeCount = 0
@@ -8488,7 +8429,7 @@ function SkillsSection(props) {
       if (sessionScopes[sci].error) failedScopeCount++
     }
     if (sessionScopeCount > 0) {
-      emptyDiagnose.push(dshT('会话作用域：') + sessionScopeCount + dshT(' 个') + (failedScopeCount > 0 ? '（' + failedScopeCount + dshT(' 个解析失败，展开上方"查看作用域明细"看原因）') : ''))
+      emptyDiagnose.push(dshT('会话作用域：') + sessionScopeCount + dshT(' 个') + (failedScopeCount > 0 ? '（' + failedScopeCount + dshT(' 个解析失败）') : ''))
     } else if (state.sessions.length === 0) {
       emptyDiagnose.push(dshT('会话作用域：无（dsh 当前没有已知会话）'))
     }
