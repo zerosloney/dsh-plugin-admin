@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.26.4] - 2026-09-29
+
 ### Fixed
 
 - **`evalSnippet` 的调用方取消在「编译窗口」内会失效**（`lib/workflow-engine.js`）：调用方信号（工具 `exec.signal`，即用户打断会话）的转发发生在 `await compileScript(...)` **之前**，而内部 abort 竞速的 `onSettleAbort` 监听挂在编译**之后**。当 abort 落在这段窗口内——测试里 `setTimeout(abort, 80)` 撞上一次冷启动 esbuild 编译就是这种竞态——内部 controller 早已 abort，监听永远收不到事件，`abortedPromise` 不 reject，`Promise.race` 只剩硬超时兜底：日志表现为断言期望 `/eval aborted/`、实得 `eval timeout after 10000ms`（`npm test` 首次全量运行在 `verify-workflow-engine` 的偶发红）。用户侧影响是打断会话后交互式 eval 干等满硬超时（默认 5s / 后台 30s）才返回，而非立即取消。修复：挂监听前先判 `controller.signal.aborted`，预取消直接拒绝，不再依赖「事件是否已错过」。回归用例（预取消信号必须立即以 `/eval aborted/` 拒绝、不得等待超时）已进 `verify-workflow-engine`，并经负样本验证——**旧实现下该用例 FAIL、新实现下全绿**。实测：预取消 1–76ms 返回，原 80ms 竞态路径 86ms 不受影响。其余计时敏感断言（vm 预算余量、`verify-cron-admin` 真实分钟边界、`verify-file-lock` 等待窗口）未纳入本次修复，登记为 GitHub issue #2 待评估。
