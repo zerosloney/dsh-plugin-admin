@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-## [Unreleased]
+## [1.26.3] - 2026-09-29
 
 ### Changed
 
