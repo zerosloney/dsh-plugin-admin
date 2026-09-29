@@ -199,6 +199,32 @@ await check('amend forwards script and parent', async () => {
   assert.equal(call.opts.parent, exec.agent)
 })
 
+// The tool schema documents args/provider/label for amend. Dropping them here
+// made the registry fall back to the OLD run's values, so an amend that only
+// changed `args` re-ran with the previous inputs while the prompt hash still
+// matched and the cached step was served — the caller got the old file's
+// results back, which is worse than an error.
+await check('amend and resume forward args, provider and label (no silent fallback to the old run)', async () => {
+  const registry = fakeRegistry()
+  const { tool } = mount(registry, fakeLibrary())
+  await tool.execute({ action: 'amend', runId: 'wf_1', script: 'return 2', args: { file: 'b.csv' }, provider: 'exa', label: 'renamed' }, exec)
+  const amendCall = registry.calls.find((c) => c.op === 'amend')
+  assert.deepEqual(amendCall.opts.args, { file: 'b.csv' }, 'amend forwards args')
+  assert.equal(amendCall.opts.provider, 'exa', 'amend forwards provider')
+  assert.equal(amendCall.opts.label, 'renamed', 'amend forwards label')
+
+  await tool.execute({ action: 'resume', runId: 'wf_1', args: { file: 'c.csv' }, provider: 'exa' }, exec)
+  const resumeCall = registry.calls.find((c) => c.op === 'resume')
+  assert.deepEqual(resumeCall.opts.args, { file: 'c.csv' }, 'resume forwards args')
+  assert.equal(resumeCall.opts.provider, 'exa', 'resume forwards provider')
+
+  // An omitted provider must stay undefined so the registry's own fallback
+  // (inherit from the old record) still applies.
+  await tool.execute({ action: 'resume', runId: 'wf_1' }, exec)
+  const bare = registry.calls.filter((c) => c.op === 'resume').pop()
+  assert.equal(bare.opts.provider, undefined, 'an omitted provider is left to the registry to inherit')
+})
+
 await check('resume and stop dispatch correctly', async () => {
   const registry = fakeRegistry()
   const { tool } = mount(registry, fakeLibrary())
@@ -297,6 +323,55 @@ await check('run_saved resolves from the library and starts', async () => {
 
   const miss = JSON.parse(await tool.execute({ action: 'run_saved', name: 'missing' }, exec))
   assert.match(miss.error, /not found in the library/)
+})
+
+// A saved record carries an argsSchema, and it used to be stored and then never
+// consulted: a caller could start the workflow with args that violate the
+// contract it was saved with, and the only symptom was a confusing failure deep
+// inside the script.
+await check('run_saved enforces the saved argsSchema before starting', async () => {
+  const registry = fakeRegistry()
+  const library = fakeLibrary()
+  const { tool } = mount(registry, library)
+  await library.saveSaved({
+    name: 'audit',
+    scope: 'global',
+    script: 'return args.file',
+    argsSchema: { type: 'object', required: ['file'], properties: { file: { type: 'string' }, limit: { type: 'integer' } } },
+  })
+
+  // Satisfies the schema.
+  const ok = JSON.parse(await tool.execute({ action: 'run_saved', name: 'audit', args: { file: 'a.csv', limit: 5 } }, exec))
+  assert.ok(ok.id, 'conforming args start the run')
+
+  // Missing required key.
+  const missing = JSON.parse(await tool.execute({ action: 'run_saved', name: 'audit', args: {} }, exec))
+  assert.match(missing.error, /missing required key "file"/)
+  assert.equal(missing.id, undefined, 'no run is started for invalid args')
+
+  // Wrong type for a declared property.
+  const wrong = JSON.parse(await tool.execute({ action: 'run_saved', name: 'audit', args: { file: 7 } }, exec))
+  assert.match(wrong.error, /"file" must be a string \(got integer\)/)
+
+  // Only the runs that passed reached the registry.
+  const starts = registry.calls.filter((c) => c.op === 'start')
+  assert.equal(starts.length, 1, 'exactly one start for the one conforming call')
+
+  // A record with no argsSchema imposes nothing.
+  await library.saveSaved({ name: 'loose', scope: 'global', script: 'return 1' })
+  const loose = JSON.parse(await tool.execute({ action: 'run_saved', name: 'loose', args: { anything: true } }, exec))
+  assert.ok(loose.id, 'a record without an argsSchema accepts anything')
+
+  // An unrecognised keyword must not block a run: a richer schema saved by a
+  // future build degrades to "no opinion".
+  await library.saveSaved({
+    name: 'future',
+    scope: 'global',
+    script: 'return 1',
+    argsSchema: { type: 'object', $defs: { x: {} }, patternProperties: { '^a': {} } },
+  })
+  const future = JSON.parse(await tool.execute({ action: 'run_saved', name: 'future', args: { a1: 1 } }, exec))
+  assert.ok(future.id, 'unknown schema keywords are ignored rather than treated as violations')
 })
 
 await check('list_saved and delete_saved ride the library', async () => {

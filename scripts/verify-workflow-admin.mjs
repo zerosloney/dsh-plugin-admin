@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join, parse, resolve } from 'node:path'
 import { createWorkflowLibrary, createWorkflowAdmin } from '../lib/workflow-library.js'
 import { applyWorkflowAdmin, workflowAuditOk } from '../lib/workflow-admin.js'
-import { assertTrustedWorkspacePath, canonicalWorkspacePath } from '../lib/workspace-path.js'
+import { assertTrustedWorkspacePath, canonicalWorkspacePath, projectWorkflowsDir } from '../lib/workspace-path.js'
 
 let failures = 0
 async function check(name, fn) {
@@ -415,6 +415,58 @@ await check('a `.dsh` junction inside a project cannot redirect the write outsid
   )
   assert.equal(existsSync(join(target, 'workflows', 'esc.json')), false, 'nothing was written through the junction')
   assert.equal(existsSync(join(ws, '.dsh', 'workflows')), false, 'nothing was created through the junction either')
+})
+
+// Defense in depth for the SECOND link position: `.dsh` resolving inside the
+// root says nothing about where `.dsh/workflows` points. The caller's post-
+// creation re-check (`ensureDir`) already refused this case, so the escape was
+// covered — but only after `projectWorkflowsDir` had returned a path the caller
+// was told was safe. Checking the existing link here makes the function's own
+// verdict true independently of the caller, which is what the assertion below
+// checks directly (the end-to-end test above cannot see the difference, because
+// the caller's guard catches the same escape).
+await check('projectWorkflowsDir refuses an existing `.dsh/workflows` link itself', () => {
+  const root = join(tmpBase, 'pw-direct')
+  const target = join(tmpBase, 'pw-direct-target')
+  mkdirSync(join(root, '.dsh'), { recursive: true })
+  mkdirSync(target, { recursive: true })
+  symlinkSync(target, join(root, '.dsh', 'workflows'), process.platform === 'win32' ? 'junction' : 'dir')
+  assert.throws(() => projectWorkflowsDir(root), /outside the project root/, 'the link is refused by this function alone')
+
+  // A real in-root directory passes and returns the joined path.
+  const okRoot = join(tmpBase, 'pw-direct-ok')
+  mkdirSync(join(okRoot, '.dsh', 'workflows'), { recursive: true })
+  assert.equal(projectWorkflowsDir(okRoot), join(okRoot, '.dsh', 'workflows'))
+
+  // A not-yet-created chain passes (the caller creates it, then re-checks).
+  const freshRoot = join(tmpBase, 'pw-direct-fresh')
+  mkdirSync(freshRoot, { recursive: true })
+  assert.equal(projectWorkflowsDir(freshRoot), join(freshRoot, '.dsh', 'workflows'))
+})
+
+await check('a `.dsh/workflows` junction is refused even when `.dsh` is a real directory', async () => {
+  const home = join(tmpBase, 'gate-w')
+  const ws = join(tmpBase, 'gate-w-ws')
+  const target = join(tmpBase, 'gate-w-target')
+  mkdirSync(join(ws, '.dsh'), { recursive: true })
+  mkdirSync(target, { recursive: true })
+  // `.dsh` is a genuine directory inside the root — guard 1 passes — but the
+  // workflows child is the link.
+  symlinkSync(target, join(ws, '.dsh', 'workflows'), process.platform === 'win32' ? 'junction' : 'dir')
+  const lib = createWorkflowLibrary({ dshHome: home, enqueue })
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'esc2', scope: 'project', script: 'return 1', workspacePath: ws }),
+    /outside the project root/,
+    'the second guard refuses a linked workflows directory',
+  )
+  assert.equal(existsSync(join(target, 'esc2.json')), false, 'nothing was written through the workflows junction')
+
+  // And a legitimate `.dsh/workflows` real directory still works.
+  const okWs = join(tmpBase, 'gate-w-ok')
+  mkdirSync(join(okWs, '.dsh', 'workflows'), { recursive: true })
+  const okLib = createWorkflowLibrary({ dshHome: home, enqueue })
+  await okLib.saveSaved({ name: 'fine', scope: 'project', script: 'return 1', workspacePath: okWs })
+  assert.equal(existsSync(join(okWs, '.dsh', 'workflows', 'fine.json')), true, 'an ordinary in-root directory is unaffected')
 })
 
 await check('trust: an explicit path must be inside the session tree or a known workspace', () => {

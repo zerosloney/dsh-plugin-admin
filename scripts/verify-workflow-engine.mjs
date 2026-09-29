@@ -564,6 +564,39 @@ check('a non-object / bigint-bearing opts value still yields a key (never throws
   assert.equal(stepFingerprint(1, 'shell', 'ls', 'nonsense'), stepFingerprint(1, 'shell', 'ls'))
   assert.doesNotThrow(() => stepFingerprint(1, 'shell', 'ls', { timeoutMs: 10n }))
 })
+// `cwd` changes what a subagent call can see, so a script amended from one
+// directory to another must not serve the first directory's cached result.
+check('agent cwd is part of the key (a different working directory must not hit the old cache)', () => {
+  assert.notEqual(stepFingerprint(1, 'agent', 'p', { cwd: '/a' }), stepFingerprint(1, 'agent', 'p', { cwd: '/b' }))
+  assert.notEqual(stepFingerprint(1, 'agent', 'p', { cwd: '/a' }), stepFingerprint(1, 'agent', 'p'))
+})
+// The material used to be `payload + '\u0000' + field=value` joined into one
+// string, which relies on a delimiter no component can contain. Canonicalized
+// values are JSON-quoted (so a NUL becomes the six characters `\u0000`), but the
+// PAYLOAD is a raw script-supplied string and can carry a real NUL — so the
+// boundary was guaranteed only by the payload happening not to forge one. The
+// array form makes the delimiter structural, which is a property of the code
+// rather than of the inputs. These pairs must stay distinct either way.
+check('the parts are structurally delimited (a payload cannot forge an opts boundary)', () => {
+  assert.notEqual(
+    stepFingerprint(1, 'agent', 'x\u0000provider=openai'),
+    stepFingerprint(1, 'agent', 'x', { provider: 'openai' }),
+  )
+  assert.notEqual(
+    stepFingerprint(1, 'agent', 'x', { provider: 'a', model: 'b' }),
+    stepFingerprint(1, 'agent', 'x', { provider: 'a\u0000model=b' }),
+  )
+  // A canonicalized value can never carry a raw NUL, which is what kept the old
+  // concatenation unambiguous in practice.
+  assert.equal(stepFingerprint(1, 'shell', 'ls', { workdir: 'a\u0000b' }), stepFingerprint(1, 'shell', 'ls', { workdir: 'a\u0000b' }))
+})
+// 64 bits of SHA-256 was an unnecessary collision surface for a value that is
+// never shown to a human.
+check('the fingerprint carries the full 256-bit digest, not a truncation', () => {
+  const hex = stepFingerprint(1, 'agent', 'p').split(':')[2]
+  assert.equal(hex.length, 64, 'full sha256 hex (got ' + hex.length + ')')
+  assert.match(hex, /^[0-9a-f]{64}$/)
+})
 
 // ─── 5. evalSnippet ──────────────────────────────────────────────────────────
 
