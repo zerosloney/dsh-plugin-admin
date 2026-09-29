@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **最后 29 处未声明的伪令牌改挂真实语义令牌**（`src/client/panels.js`；产物同步重建）：`--accent` / `--accent-soft` / `--border` / `--code-bg` / `--muted` 全仓共 29 处、**全部集中在这一个文件**，且只属于两个从未做过字面色迁移的面板——工作流面板（`WorkflowSection` 的引导条、页签、模板卡、运行/工作库行）与 Webhook / 定时任务的模板区，另有 `btnStyle` / `inputStyle` / `textareaStyle` / `preStyle` 四个共享样式助手。它们全都只在吃浅色字面回退，深色下是另一套颜色。映射按语义就近：文本三级灰 → `--dsw-alias-label-tertiary`、二级灰 → `--dsw-alias-label-secondary`、引导蓝 → `--dsw-static-blue-500`、柔蓝底 → `--dsw-alias-interactive-bg-hover`、代码底 → `--dsw-alias-bg-base`、描边 → `--dsw-alias-border-l2`（与同面板内已迁移行的选法一致，浅色近似等价、深色不再错色）。
+- **`btnStyle()` 的默认描边色被当成填充色**（`src/client/panels.js`）：`border: '1px solid ' + (bg || 'var(--border, #ddd)')` 与 `background: bg || 'transparent'` 是同一次求值，于是那个灰描边令牌**只进了 border**；`bg` 为空时 background 取 `transparent`。令牌换成真名后这处"名实不符"会读成 bug，故把注释与选法对齐（**渲染结果不变**，无需目视）。
+- **`--dsh-alias-border-l2` 前缀笔误**（`src/client/styles.js`）：文档说用 `--dsw-`（dsh 主题令牌的 `--dsh-` 是壳层的另一族），全仓只有 `[data-dsh-admin-section] .session-panel` 这一处拼成了 `--dsh-`，于是这张卡片一直吃字面回退。改为 `--dsw-alias-border-l2`，与同族其余规则一致。
+
 ## [1.26.0] - 2026-09-29
 
 按契合度审查收口：**接缝动词**（`shell.run` → `execute`）、**沙箱策略**（按调用会话解析）、**realm 边界**（JSON 桥 + 同步前缀预算）、**密钥面**（env/headers 不回传、脱敏按值形态、自有存储 0600）、**进程管理**（不再同步阻塞宿主）、**webhook 限速/审计**、**删除与安装的护栏**，以及一批轻微项。本轮的快照：`integration-check` 142 条探针、`npm test` 38 步（3 道静态闸门 + 36 个脚本，其中 32 个 `verify-*`）、oxlint 144 warnings / 0 errors；真实宿主冒烟 `smoke:real-host` 28/28。
@@ -51,10 +57,10 @@
 - **出口形状**：`lib/index.js` 补上函数插件约定的命名导出 `name`（`apply`/`inject`/`Config` 本来就有；缺 `name` 会让 fiber 与日志前缀失去插件标识）。
 
 > **本批明确不做**（都需要"看一眼"而不是机械改，留作后续）：
-> - 那五个**未声明的伪令牌**（`--accent` / `--accent-soft` / `--border` / `--code-bg` / `--muted`）各有 7–16 处，全部在吃浅色字面回退；改成真实语义令牌会**改变浅色模式下的观感**，需要逐屏目视确认。
-> - 圆角/发丝线/阴影与 `docs/web-styling.md` 的偏差（26 处 `1px` 边框、8 处 `12px` 圆角、卡片阴影）属于一次视觉规约对齐，不是单点修复。
-> - **客户端 sourcemap 加不了**：宿主的 chunk 路由只服务 `client*.js`（`CLIENT_CHUNK` 文法），`.map` 取不回来；要它先得宿主支持，否则只是多发布一个没人能取的文件。
-> - 设置弹窗导航图标的注入仍靠 `MutationObserver` + **按本地化标签文本反查**（`impl.js:setupSettingsNavIcons`）：这是绕过 slot 系统的脆弱耦合，改成官方 slot 需要重做那段 UI 接线。
+> - 那五个**未声明的伪令牌**已于 `[Unreleased]` 处理完（29 处，全在 `src/client/panels.js`；其中 `btnStyle` 的"填充位吃了描边令牌"一并按注释对齐，渲染不变）。当时判断为"各有 7–16 处、需要逐屏目视"，实测范围收窄到两个未迁移面板 + 四个共享样式助手，浅色近似等价。
+> - 圆角/发丝线/阴影与 `docs/web-styling.md` 的偏差（26 处 `1px` 边框、8 处 `12px` 圆角、卡片阴影）属于一次视觉规约对齐，不是单点修复。**注：`docs/web-styling.md` 至今不在仓库里**（只有本条与 `IMPROVEMENT-PLAN.md` 引用它），当前测试全绿口径下 `styles.js` 的 `1px` 边框 30 处、`12px` 圆角 8 处，而字面色 `rgba()` 有 137 处 —— 真实待改面是"所有带字面色的边框与圆角"，且零视觉回归基建（无截图测试），改完无法自证。**先补规约文档/令牌对照表，再按它改**，否则这条只是换一批字面值。
+> - **客户端 sourcemap 加不了**：宿主的 chunk 路由只服务 `client*.js`（`CLIENT_CHUNK` 文法），`.map` 取不回来；要它先得宿主支持，否则只是多发布一个没人能取的文件。（已核对真实 checkout：`packages/client/modules/src/index.ts` 与 `src/client/system.ts` 的 `CLIENT_CHUNK = /^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$/` —— `.map` 不匹配。）
+> - 设置弹窗导航图标的注入仍靠 `MutationObserver` + **按本地化标签文本反查**（`impl.js:setupSettingsNavIcons`）。原写"改成官方 slot 需要重做那段 UI 接线"，**这个说法不准**：宿主侧根本没有这条通道，不是接线方式问题。三个事实——`ui-settings-general` 的 `navIcon(id)` 是**硬编码 6 个官方 id 的 if 链**（其余一律回落齿轮 `IconSettingsOutlineMedium`）、行投影 `SettingsSectionRow` 只有 `id`/`order`/`label`、`ui-slots` 的 `ErasedOptions` **没有 `icon` 成员** —— 合起来说明：插件注册的 section 无论怎么写，导航行都只画齿轮。**这是上游依赖，本仓无解**；除非放弃自定义图标接受统一齿轮（那反而是"减少脆弱耦合"的正解，属产品取舍）。
 
 ### Changed（行为变化）
 

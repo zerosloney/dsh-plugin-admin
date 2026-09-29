@@ -7258,16 +7258,16 @@ function WorkflowSection(props) {
 
   if (!state.available) {
     return h('div', { 'data-dsh-admin-section': '' },
-      h('div', { className: 'card', style: { padding: '16px', color: 'var(--muted, #888)' } },
+      h('div', { className: 'card', style: { padding: '16px', color: 'var(--dsw-alias-label-tertiary, #888)' } },
         dshT('工作流引擎不可用：未挂载 @deepseek-ai/dsh-subagent，或服务启动失败。')
         + (state.error ? dshT('（宿主返回：') + state.error + dshT('）') : '')))
   }
 
   // 新手引导条：一句话说清工作流是什么 + 三步操作。对老用户无干扰（一行高度）。
   var elements = []
-  elements.push(h('div', { key: 'guide', className: 'card', style: { padding: '10px 12px', marginBottom: '10px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))' } }, [
+  elements.push(h('div', { key: 'guide', className: 'card', style: { padding: '10px 12px', marginBottom: '10px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))' } }, [
     h('div', { key: 'g1', style: { fontWeight: '700', marginBottom: '4px' } }, dshT('工作流 = 把多步任务写成小脚本，交给 dsh 自动派子智能体逐步完成')),
-    h('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--muted, #666)' } },
+    h('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)' } },
       dshT('三步上手：① 点「从模板开始」里的任意卡片 → ② 按需改名称和参数 → ③ 点「🚀 启动」，运行卡片实时显示每一步进度与结果。')),
   ]))
 
@@ -7298,8 +7298,8 @@ function WorkflowSection(props) {
       onClick: function () { patch({ tab: key, editor: null, savedEditor: null }) },
       style: {
         padding: '6px 14px', borderRadius: '8px', cursor: 'pointer',
-        border: active ? '1px solid var(--accent, #5B4CF0)' : '1px solid var(--border, #ddd)',
-        background: active ? 'var(--accent-soft, rgba(91,76,240,.1))' : 'transparent',
+        border: active ? '1px solid var(--dsw-static-blue-500, #5B4CF0)' : '1px solid var(--dsw-alias-border-l2, #ddd)',
+        background: active ? 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.1))' : 'transparent',
         fontWeight: active ? '600' : '400',
       },
     }, label)
@@ -7314,10 +7314,10 @@ function WorkflowSection(props) {
         return h('div', {
           key: 'tpl-' + tplIndex,
           onClick: function () { patch({ editor: { runId: null, script: tpl.script, label: tpl.title, argsText: tpl.argsText }, editorError: '', tab: 'runs' }) },
-          style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))', cursor: 'pointer' },
+          style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
         }, [
           h('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
-          h('div', { key: 'd', style: { fontSize: '12px', color: 'var(--muted, #666)', marginTop: '2px' } }, tpl.desc),
+          h('div', { key: 'd', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)', marginTop: '2px' } }, tpl.desc),
         ])
       })
     ))
@@ -7329,7 +7329,7 @@ function WorkflowSection(props) {
 
     var runs = state.runs || []
     if (runs.length === 0) {
-      children.push(h('div', { key: 'empty', className: 'card', style: { padding: '16px', color: 'var(--muted, #888)', marginTop: '10px' } },
+      children.push(h('div', { key: 'empty', className: 'card', style: { padding: '16px', color: 'var(--dsw-alias-label-tertiary, #888)', marginTop: '10px' } },
         dshT('暂无运行。三步上手：点上方模板卡片 → 按需改参数 → 点「🚀 启动」。也可以从「工作库」启动已保存的脚本。')))
     }
     for (var i = 0; i < runs.length; i++) {
@@ -7348,8 +7348,8 @@ function WorkflowSection(props) {
       h('span', { key: 'label', style: { fontWeight: '600' } }, run.label || run.id),
       h('span', { key: 'status', style: pillStyle(statusColor) }, statusText(run.status)),
     ]
-    if (run.stepCount) row.push(h('span', { key: 'steps', style: { color: 'var(--muted, #888)', fontSize: '12px' } }, run.stepCount + dshT(' 步')))
-    if (run.durationMs) row.push(h('span', { key: 'dur', style: { color: 'var(--muted, #888)', fontSize: '12px' } }, Math.round(run.durationMs / 100) / 10 + 's'))
+    if (run.stepCount) row.push(h('span', { key: 'steps', style: { color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: '12px' } }, run.stepCount + dshT(' 步')))
+    if (run.durationMs) row.push(h('span', { key: 'dur', style: { color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: '12px' } }, Math.round(run.durationMs / 100) / 10 + 's'))
     var actions = h('span', { key: 'actions', style: { marginLeft: 'auto', display: 'flex', gap: '6px' } }, [
       h('button', { key: 'open', onClick: function () { openRun(run.id) }, style: btnStyle() }, dshT('详情')),
       run.status === 'running' || run.status === 'pending'
@@ -7370,7 +7370,7 @@ function WorkflowSection(props) {
     var d = state.runDetail
     if (d.error) return h('div', { key: 'detail', className: 'card', style: { padding: '12px', color: '#c00', marginTop: '8px' } }, d.error)
     var children = [
-      h('div', { key: 'id', style: { fontSize: '12px', color: 'var(--muted, #888)' } }, d.id),
+      h('div', { key: 'id', style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)' } }, d.id),
     ]
     // 挂起的问题：脚本卡在 ask()，等一个回答才继续。给一行输入框直接回。
     if (d.pendingQuestion) {
@@ -7425,7 +7425,7 @@ function WorkflowSection(props) {
       }),
       (!isAmend && state.liveSessions.length > 1)
         ? h('div', { key: 'parent-row', style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
-          h('span', { key: 'parent-label', style: { flex: 'none', fontSize: '12px', color: 'var(--muted, #888)' } }, dshT('父会话')),
+          h('span', { key: 'parent-label', style: { flex: 'none', fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)' } }, dshT('父会话')),
           h('select', {
             key: 'parent', value: state.parentSessionId,
             onChange: function (e) { parentSessionRef.current = e.target.value; patch({ parentSessionId: e.target.value }) },
@@ -7435,7 +7435,7 @@ function WorkflowSection(props) {
           })),
         ])
         : (!isAmend && state.liveSessions.length === 0)
-          ? h('div', { key: 'parent-hint', style: { color: 'var(--muted, #888)', fontSize: '12px' } },
+          ? h('div', { key: 'parent-hint', style: { color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: '12px' } },
             dshT('没有在线会话——先在 dsh 中打开一个会话，再启动工作流。'))
           : null,
       h('textarea', {
@@ -7452,7 +7452,7 @@ function WorkflowSection(props) {
     if (state.editorError) {
       children.push(h('pre', { key: 'ederr', style: preStyle({ color: '#c00', borderColor: '#e8b4b4' }) }, state.editorError))
     }
-    children.push(h('div', { key: 'args-hint', style: { fontSize: '12px', color: 'var(--muted, #888)', marginTop: '4px' } },
+    children.push(h('div', { key: 'args-hint', style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)', marginTop: '4px' } },
       dshT('参数：脚本里 args.xxx 的值，在上面这个 JSON 里填（模板已带默认值，可直接改）。')))
     children.push(h('div', { key: 'edbtns', style: { display: 'flex', gap: '8px', marginTop: '8px' } }, [
       h('button', {
@@ -7474,7 +7474,7 @@ function WorkflowSection(props) {
     ]
     var saved = state.saved || []
     if (saved.length === 0) {
-      children.push(h('div', { key: 'empty', className: 'card', style: { padding: '16px', color: 'var(--muted, #888)', marginTop: '10px' } },
+      children.push(h('div', { key: 'empty', className: 'card', style: { padding: '16px', color: 'var(--dsw-alias-label-tertiary, #888)', marginTop: '10px' } },
         dshT('工作库为空。保存常用脚本后，可以按名一键启动。')))
     }
     for (var i = 0; i < saved.length; i++) {
@@ -7490,7 +7490,7 @@ function WorkflowSection(props) {
       h('span', { key: 'scope', style: pillStyle(rec.scope === 'project' ? '#0b7285' : '#6c757d') },
         rec.scope === 'project' ? dshT('项目') : dshT('全局')),
     ]
-    if (rec.description) row.push(h('span', { key: 'desc', style: { color: 'var(--muted, #888)', fontSize: '12px' } }, rec.description))
+    if (rec.description) row.push(h('span', { key: 'desc', style: { color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: '12px' } }, rec.description))
     var actions = h('span', { key: 'actions', style: { marginLeft: 'auto', display: 'flex', gap: '6px' } }, [
       h('button', { key: 'run', onClick: function () { runSaved(rec.name) }, style: btnStyle('#5B4CF0', '#fff') }, dshT('🚀 运行')),
       isConfirm
@@ -7618,7 +7618,7 @@ function pillStyle(color) {
 function btnStyle(bg, fg) {
   return {
     padding: '4px 12px', borderRadius: '6px', cursor: 'pointer',
-    border: '1px solid ' + (bg || 'var(--border, #ddd)'),
+    border: '1px solid ' + (bg || 'var(--dsw-alias-border-l2, #ddd)'),
     background: bg || 'transparent', color: fg || 'inherit',
     fontSize: '12px',
   }
@@ -7633,7 +7633,7 @@ function btnStyle(bg, fg) {
 function inputStyle(over) {
   var base = {
     width: '100%', padding: '6px 8px', marginBottom: '8px',
-    borderRadius: '6px', border: '1px solid var(--border, #ddd)',
+    borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l2, #ddd)',
     boxSizing: 'border-box',
   }
   for (var k in (over || {})) base[k] = over[k]
@@ -7643,7 +7643,7 @@ function inputStyle(over) {
 function textareaStyle(over) {
   var base = {
     width: '100%', minHeight: '140px', padding: '8px', marginBottom: '8px',
-    borderRadius: '6px', border: '1px solid var(--border, #ddd)',
+    borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l2, #ddd)',
     fontFamily: 'monospace', fontSize: '12px', boxSizing: 'border-box',
   }
   for (var k in (over || {})) base[k] = over[k]
@@ -7652,8 +7652,8 @@ function textareaStyle(over) {
 
 function preStyle(over) {
   var base = {
-    padding: '8px', borderRadius: '6px', border: '1px solid var(--border, #ddd)',
-    background: 'var(--code-bg, #f6f6f6)', fontSize: '12px', overflow: 'auto',
+    padding: '8px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+    background: 'var(--dsw-alias-bg-base, #f6f6f6)', fontSize: '12px', overflow: 'auto',
     maxHeight: '260px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
   }
   for (var k in (over || {})) base[k] = over[k]
@@ -8509,9 +8509,9 @@ function WebhookRender(view, actions) {
   }
 
   // 新手引导条（与定时任务/工作流页签同版式）。
-  elements.push(createElement('div', { className: 'card', key: 'guide', style: { padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))' } }, [
+  elements.push(createElement('div', { className: 'card', key: 'guide', style: { padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))' } }, [
     createElement('div', { key: 'g1', style: { fontWeight: '700', marginBottom: '4px' } }, dshT('Webhook = 外部事件 POST 一个 HTTP 请求，就自动给你的 dsh 会话发一条消息（CI、报警、GitHub…都行）')),
-    createElement('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--muted, #666)' } }, dshT('三步上手：① 点下方模板卡片（或「＋ 新建规则」） → ② 把面板给出的端点 URL 与密钥配到外部服务 → ③ 事件到达自动触发，交付历史随时可查。')),
+    createElement('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)' } }, dshT('三步上手：① 点下方模板卡片（或「＋ 新建规则」） → ② 把面板给出的端点 URL 与密钥配到外部服务 → ③ 事件到达自动触发，交付历史随时可查。')),
   ]))
 
   // Toolbar
@@ -8527,10 +8527,10 @@ function WebhookRender(view, actions) {
       return createElement('div', {
         key: 'tpl-' + tplIndex,
         onClick: function () { actions.openEditor(null, tpl.seed) },
-        style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))', cursor: 'pointer' },
+        style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
-        createElement('div', { key: 'd', style: { fontSize: '12px', color: 'var(--muted, #666)', marginTop: '2px' } }, tpl.desc),
+        createElement('div', { key: 'd', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)', marginTop: '2px' } }, tpl.desc),
       ])
     })
   ))
@@ -8749,9 +8749,9 @@ function CronRender(view, actions) {
   }
 
   // 新手引导条：一句话说清定时任务是什么 + 三步操作（与工作流页签同版式）。
-  elements.push(createElement('div', { className: 'card', key: 'guide', style: { padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))' } }, [
+  elements.push(createElement('div', { className: 'card', key: 'guide', style: { padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))' } }, [
     createElement('div', { key: 'g1', style: { fontWeight: '700', marginBottom: '4px' } }, dshT('定时任务 = 到点自动给 dsh 发一句话——可以催促既有会话（steer），也可以新建会话从头跑')),
-    createElement('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--muted, #666)' } }, dshT('三步上手：① 点下方模板卡片（或「＋ 新建任务」） → ② 改频率和提示词 → ③ 保存，dsh 运行期间到点自动触发。')),
+    createElement('div', { key: 'g2', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)' } }, dshT('三步上手：① 点下方模板卡片（或「＋ 新建任务」） → ② 改频率和提示词 → ③ 保存，dsh 运行期间到点自动触发。')),
   ]))
 
   // Toolbar
@@ -8767,10 +8767,10 @@ function CronRender(view, actions) {
       return createElement('div', {
         key: 'tpl-' + tplIndex,
         onClick: function () { actions.openEditor(null, tpl.seed) },
-        style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--accent, #5B4CF0)', background: 'var(--accent-soft, rgba(91,76,240,.06))', cursor: 'pointer' },
+        style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
-        createElement('div', { key: 'd', style: { fontSize: '12px', color: 'var(--muted, #666)', marginTop: '2px' } }, tpl.desc),
+        createElement('div', { key: 'd', style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #666)', marginTop: '2px' } }, tpl.desc),
       ])
     })
   ))

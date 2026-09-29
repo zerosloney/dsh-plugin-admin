@@ -44,7 +44,7 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .filter-bar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 0 0 0 10px; }',
   // The injected archived-sessions panel renders as ONE framed card on the
   // host page; the flex gap on .session-panel provides the vertical rhythm.
-  '[data-dsh-admin-section] .session-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; border: 1px solid var(--dsh-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); }',
+  '[data-dsh-admin-section] .session-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 12px; background: var(--dsw-alias-bg-layer-2); }',
   // Inside that card the search row is a plain row, not a nested box.
   '[data-dsh-admin-section] .session-panel .toolbar { border: none; border-radius: 0; background: transparent; padding: 0; }',
   // The filter bar's tail actions stay one group: `margin-left: auto` pushes
