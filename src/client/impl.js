@@ -300,8 +300,17 @@ function setupSettingsNavIcons() {
         var replacement = buildNavIconSvg(labelSpan.textContent, template)
         replacement.setAttribute('class', stock.getAttribute('class') || '')
         row.replaceChild(replacement, stock)
-      } else if (row.querySelector('svg[' + SETTINGS_NAV_ICON_MARK + '="' + labelSpan.textContent + '"]') === null) {
-        row.insertBefore(buildNavIconSvg(labelSpan.textContent, template), row.firstChild)
+      } else {
+        // Scan our own marked svgs and compare the attribute value: the old
+        // attribute-SELECTOR form interpolated host DOM text into a selector,
+        // which only stayed safe because the fixed-key guard above gates this
+        // path — comparing values has no such precondition.
+        var ours = row.querySelectorAll('svg[' + SETTINGS_NAV_ICON_MARK + ']')
+        var present = false
+        for (var q = 0; q < ours.length; q++) {
+          if (ours[q].getAttribute(SETTINGS_NAV_ICON_MARK) === labelSpan.textContent) { present = true; break }
+        }
+        if (!present) row.insertBefore(buildNavIconSvg(labelSpan.textContent, template), row.firstChild)
       }
     }
   }

@@ -27,7 +27,7 @@ npm run build:client --check  # 校验产物与源码一致（npm test 会跑这
 
 ## 2. 写回、并发与降级
 
-所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），双进程并发写同一 profile 无丢失更新。
+所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒即 fail-open 继续写——「拒绝写入比丢更新更糟」的既定取舍；只有多实例并发写同一 profile 时才会出现这短暂停顿，单实例部署无争用。
 
 依赖的 dsh 服务缺失时**逐面板降级**提示，绝不整插件不加载。改动 profile 配置的操作（插件安装/卸载/启停、MCP 新增/删除、Web 搜索、Webhook 运行时、overlay 启用）需重启 dsh 生效；例外是 MCP 已挂载条目的**编辑**（见 §3）。
 

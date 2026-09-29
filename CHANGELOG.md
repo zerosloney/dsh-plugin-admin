@@ -6,14 +6,38 @@
 
 ## [Unreleased]
 
+## [1.26.1] - 2026-09-29
+
+安全修正一轮 + 对照 dsh 核心（0.1.6 / 0.2.0-rc.1 接缝）的审查收口 + 无障碍与竞态加固。本轮的快照：`npm test` 38 步全绿（`integration-check` 142 条探针）、oxlint 144 warnings / 0 errors、真实宿主冒烟 `smoke:real-host` 28/28（真实 Chromium 渲染本插件面板无未捕获异常）。
+
+### Security
+
+- **技能 `url` 只放行 http(s)**（`lib/skills-admin.js` 的 `projectSummary()`）：宿主投影此前对 `resourceBase.url` 只校验「非空字符串」，而技能卡片把它原样放进 `<a href>`（`src/client/panels.js` SkillsSection）。技能元数据是第三方可控的——本面板自己支持从 npm 安装插件（插件可携带技能），项目 `.agents/skills` 与用户目录也在扫描范围；React 18 对 `javascript:` href 只在开发模式警告、生产不阻断，点击即在 web UI 同源执行脚本，同源等于整个管理 RPC 面（pnpm 安装、会话删除、webhook secret）。修复落在 RPC 信任边界：url 须匹配 `^https?://` 否则投为 null（卡片不渲染该行）。这是全插件唯一的外部可控 HTML sink——其余全部插值走 React 文本通道。
+
 ### Fixed
 
+- **CliPanel 保存不再重置其他卡片的草稿**（`src/client/panels.js`）：拆出 `adopt()`（只更新列表数据），保存/卸载/安装/挂载四条路径改用它并只清自己卡片的 busy；`absorb()` 的全量草稿重置留给（重）加载。此前 A 卡保存在途时编辑 B 卡，A 返回即静默重置 B 的草稿并提前解锁其按钮（与同文件 markBusy 注释自述的教训相悖）。
+- **MCP headers/env 的无效行不再静默清除已存值**（`src/client/panels.js`）：解析统计缺「=」的行并计入保存提示；全部无效时整块视为未修改——清空整个输入框才是显式「全删」。此前一行手滑丢等号，宿主会按「字段缺省 = 删除」清掉全部已存键值（含密钥）。
+- **模块级 `dshT()` 快照改函数化**（`src/client/panels.js`）：`LIVE_HINT` / `CRON_TEMPLATES` / `WEBHOOK_TEMPLATES` / `EXAMPLE_SCRIPT` / `WF_TEMPLATES` 改为渲染/点击时求值。接入宿主 locale 后切语言不刷新页面，这批文案曾固化在 chunk 首载时的语言。
+- **长列表渲染上限 + 截断可见**（`src/client/panels.js`）：会话卡片（400）/ 全文命中（200）/ 技能卡片（400）三处加渲染上限并渲染可见提示行；数千会话的部署不再冻结设置页。
+- **探测与搜索的请求序号**（`src/client/panels.js`）：`testMcpEntry` / `runFulltext` 加序号守卫，慢的旧响应不再覆盖新结果（沿用 WebSearchSection 的既有模式）。
+- **`removeEntry` 在途防重**（`src/client/panels.js`）：确认按钮 3.2s 自解除后的双击不再发出第二个 remove RPC（根因在调用方守卫，ConfirmButton 未动）。
+- **工作流轮询移入 effect**（`src/client/panels.js`）：`schedulePoll()` 从渲染体移入 `useEffect([state.runs])` 并在卸载清定时器——渲染体重排曾随每次按键重置 2s 轮询、可无限推迟下一次 listRuns，退避计数也随之真正生效。
+- **命令启停的英文文案与 nullish 提示**（`src/client/panels.js`、`src/client/impl.js`、`i18n.js`）：启停提示重组为整句键，英文纠正为 "has been disabled/enabled."（原文渲染成 "Command /x is Disable."）；`messageOf` 对 nullish 返回空串，失败提示不再出现字面 "undefined"；i18n 表补 8 个新词条并删除孤儿键 `" 已"`。
+- **profile `package.json` 的 pnpm override 写入补跨进程文件锁**（`lib/patch-utils.js`）：`writePnpmOverride` / `pruneStalePnpmOverride` 的读改写套上 `withFileLock`，与同模块其他 JSON 写入的纪律对齐（无同路径嵌套，无死锁面）。
 - **最后 29 处未声明的伪令牌改挂真实语义令牌**（`src/client/panels.js`；产物同步重建）：`--accent` / `--accent-soft` / `--border` / `--code-bg` / `--muted` 全仓共 29 处、**全部集中在这一个文件**，且只属于两个从未做过字面色迁移的面板——工作流面板（`WorkflowSection` 的引导条、页签、模板卡、运行/工作库行）与 Webhook / 定时任务的模板区，另有 `btnStyle` / `inputStyle` / `textareaStyle` / `preStyle` 四个共享样式助手。它们全都只在吃浅色字面回退，深色下是另一套颜色。映射按语义就近：文本三级灰 → `--dsw-alias-label-tertiary`、二级灰 → `--dsw-alias-label-secondary`、引导蓝 → `--dsw-static-blue-500`、柔蓝底 → `--dsw-alias-interactive-bg-hover`、代码底 → `--dsw-alias-bg-base`、描边 → `--dsw-alias-border-l2`（与同面板内已迁移行的选法一致，浅色近似等价、深色不再错色）。
 - **`btnStyle()` 的默认描边色被当成填充色**（`src/client/panels.js`）：`border: '1px solid ' + (bg || 'var(--border, #ddd)')` 与 `background: bg || 'transparent'` 是同一次求值，于是那个灰描边令牌**只进了 border**；`bg` 为空时 background 取 `transparent`。令牌换成真名后这处"名实不符"会读成 bug，故把注释与选法对齐（**渲染结果不变**，无需目视）。
 - **`--dsh-alias-border-l2` 前缀笔误**（`src/client/styles.js`）：文档说用 `--dsw-`（dsh 主题令牌的 `--dsh-` 是壳层的另一族），全仓只有 `[data-dsh-admin-section] .session-panel` 这一处拼成了 `--dsh-`，于是这张卡片一直吃字面回退。改为 `--dsw-alias-border-l2`，与同族其余规则一致。
 
+### Accessibility
+
+- **ARIA tabs 完整支持**（`src/client/panels.js`）：新增共享 `tabKeyDown()`（←/→ 循环切换、Home/End、选中跟随焦点），三处 section 页签（Web 与会话 / 子智能体管理 / 自动化）补 `id` + `aria-controls` + tabpanel 关联 + roving tabindex（样式表全是后代选择器，tabpanel 包裹层无布局回归面）；Workflow 内部的「运行/工作库」页签此前连 role 都没有，现补 tablist/tab + roving tabindex + 方向键（面板内容非单个可寻址节点，不做 aria-controls 关联，注释已说明）；Picker 下拉补 `role="listbox"` 与 `role="option"` + `aria-selected`（按当前选中态，单/多选语义各自正确）。
+- **PluginsSection 变更类动作加 ref 单飞守卫**（`src/client/panels.js`）：新增 `busyRef`（沿用 `checkingRef` 注释自述的 ref 模式），覆盖 install / upgrade / upgradeAll / removePlugin——remove 此前完全没有守卫；每条终止路径都释放标志。
+- **导航图标扫描不再把宿主 DOM 文本插值进属性选择器**（`src/client/impl.js`）：改为扫描自有标记节点后比较属性值，消除「依赖固定键守卫才安全」的隐性前置条件。
+
 ### Changed
 
+- **文档与元数据**：`docs/ARCHITECTURE.md` 补 `withFileLock` 的既定取舍（同步实现 `Atomics.wait`、争用时最多阻塞宿主事件循环约 3 秒后 fail-open、仅多实例并发写同一 profile 才发生）；「dsh-schedule every 下限 300s」加版本限定（旧 300s / 新 60s，`MIN_EVERY_INTERVAL_SECONDS`）；`lib/index.js` 的 validated-keys 注释 15→16；`package.json` description 计数 ten→eleven 并展开 automation 页签枚举（cron / webhook / workflow）。
 - **README 中英收敛为一页式，架构与安全细节迁入 docs/ARCHITECTURE.md（内容搬家，非删除）**：README 只留「是什么 / 面板一览 / 三行安装 / 常见任务 + 文档导航」。源码结构（顺手补上 README 漏掉的 `src/client/panels.js` 与 `native-coverage.js`，职责描述按现状修正）、写回/降级机制、各面板机制细节（workflow facade 与 realm 边界、cron 调度语义、webhook 安全模型、用量台账三层兜底等）、30 个配置键两张表、信任边界与安全、测试与接缝契约全部迁入新文档 `docs/ARCHITECTURE.md`。安全节取中英并集（英文版 Security posture 此前比中文「信任边界」多出的条目——shell 元字符白名单、0600 权限收紧、进程树击杀、webhook 常量时间比较等——合并进同一节）；配置表以中文 16 键版本为准（英文表的"14 tunables"与缺失的 `installScripts` 行是过期内容，随迁退役）。`package.json` 的 description 压成一句话（keywords 不变）；未知配置键告警的指向文案 `— see README 可调配置键` 同步改为 `— see docs/ARCHITECTURE.md 可调配置键`（`lib/index.js` 两处；host-check 只断言键名部分，不受影响）。
 - **`docs/` 随包发布**（`package.json` 的 `files`：`["lib", "cordis.patch.yml", "README.md"]` → 追加 `docs` 与 `README.en.md`）：搬家把配置键表与全部机制细节移进了 `docs/ARCHITECTURE.md`，但 `files` 白名单没跟上，于是**搬家后的两处指向在 npm 包里全是悬空的**——`lib/index.js` 的运行期告警让用户去看一个装不到的 `docs/ARCHITECTURE.md`（挂载即打印），两个 README 的相对链接在 npmjs 页面 404。`npm pack --dry-run` 实测：修前 tarball 41 个文件、`docs/` 一个都不含；修后 43 个，`docs/ARCHITECTURE.md` 与 `docs/COMPAT.md` 入包。顺带补上原本漏发的 `README.en.md`（英文文档此前只能从 npm 页面的 README 相互跳转拿到）。
 - **文档里三处与代码不符的计数改正**：`docs/ARCHITECTURE.md` 的 RPC 真相表 **89 → 91 方法**（`host-check` 实测；搬来时即错）、`npm test` 的 **35 → 36 个脚本**（原文括号内的枚举 self-check + host-check + 32 个 `verify-*` + integration-check = 35，与"3 道静态闸门 + 35 个脚本"这句的 35 指向的是不同集合，现改为 35 个脚本 / 共 38 步并注明以输出为准）；README 中英的**「十个管理入口」→「十一个管理面板」**（表格列了 11 行，`PANEL_IDS` 也是 11 个；原文"3 + 6 + 1 = 10"的推导把「自动化」页内的第三个页签——工作流——漏在了外面，是该轮搬家新加的、HEAD 原文并没有这句推导）。三处都是"搬家时顺手改了数字反而改错"：HEAD 写的 28 个脚本是当时的真实口径。

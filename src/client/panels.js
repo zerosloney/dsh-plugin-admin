@@ -116,6 +116,11 @@ function PluginsSection(props) {
   // skips a required follow-up (the post-upgrade refresh), or FALSE mid-flight
   // and lets a second one through. Refs are immune to closure staleness.
   var checkingRef = useRef(false)
+  // Same single-flight contract for the mutating actions (install / upgrade /
+  // upgrade-all / remove): the `busy` state field only drives the disabled
+  // button visuals; the entry guards read the ref so a stale render closure
+  // can never let a second mutation through.
+  var busyRef = useRef(false)
   // Batch summary stamped after the refresh's own note write.
   var bulkNoteRef = useRef('')
 
@@ -241,13 +246,14 @@ function PluginsSection(props) {
   // plugin whose reminder says an update exists. Failures are collected,
   // not fatal — one bad plugin must not block the rest.
   function upgradeAllPlugins() {
-    if (pView.busy || pView.bulkUpdate !== null) return
+    if (busyRef.current || pView.bulkUpdate !== null) return
     var targets = []
     for (var name in pView.updates) {
       var info = pView.updates[name]
       if (info && info.updateAvailable && info.latest) targets.push({ name: name, latest: info.latest })
     }
     if (targets.length === 0) return
+    busyRef.current = true
     patchPlugin({ busy: true, error: '', confirming: null, note: '', bulkUpdate: { done: 0, total: targets.length, failed: [] } })
     var index = 0
     var failedTotal = 0
@@ -256,6 +262,7 @@ function PluginsSection(props) {
     var runNext = function () {
       if (!alive.current) return
       if (index >= targets.length) {
+        busyRef.current = false
         setPView(function (cur) {
           var next = {}
           for (var k in cur) next[k] = cur[k]
@@ -328,7 +335,8 @@ function PluginsSection(props) {
 
   /** Upgrade one plugin to its latest version (registry install by name). */
   function upgradePlugin(name) {
-    if (pView.busy) return
+    if (busyRef.current) return
+    busyRef.current = true
     // Prefer the exact version already discovered by checkUpdates(): passing
     // `name@latest` to pnpm is unreliable when the manifest already carries a
     // range constraint (e.g. "^0.4.2") — pnpm can resolve @latest against the
@@ -349,6 +357,7 @@ function PluginsSection(props) {
         // meanwhile (erasing those was exactly scenario 7's stale-snapshot
         // bug). localStorage follows via the shared mirror effect; the forced
         // refresh below confirms the new version is current.
+        busyRef.current = false
         setPView(function (cur) {
           var next = {}
           for (var k in cur) next[k] = cur[k]
@@ -373,6 +382,7 @@ function PluginsSection(props) {
         return
       }
       var failMessage = dshT('更新失败：') + messageOf(result.error)
+      busyRef.current = false
       patchPlugin({ busy: false, error: failMessage })
       // Floating toast for the failure in addition to the persistent panel
       // error bar (the toast demands attention, the bar keeps the detail).
@@ -380,6 +390,7 @@ function PluginsSection(props) {
       reloadPlugins(true)
     }, function (failure) {
       if (!alive.current) return
+      busyRef.current = false
       patchPlugin({ busy: false, error: dshT('调用失败：') + messageOf(failure) })
     })
   }
@@ -411,12 +422,14 @@ function PluginsSection(props) {
   }
 
   function installPlugin() {
-    if (pView.busy || pView.spec.trim() === '') return
+    if (busyRef.current || pView.spec.trim() === '') return
+    busyRef.current = true
     var spec = pView.spec.trim()
     patchPlugin({ busy: true, error: '', confirming: null, note: '' })
     callRemote('pluginAdmin/install', { spec: spec }).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
+        busyRef.current = false
         patchPlugin({
           busy: false,
           note: dshT('安装完成。更改在重启 dsh 后生效') + compatWarningText(result.value && result.value.compat),
@@ -428,20 +441,25 @@ function PluginsSection(props) {
         return
       }
       var failMessage = dshT('安装失败：') + messageOf(result.error)
+      busyRef.current = false
       patchPlugin({ busy: false, error: failMessage })
       showToast('error', failMessage)
       reloadPlugins(true)
     }, function (failure) {
       if (!alive.current) return
+      busyRef.current = false
       patchPlugin({ busy: false, error: dshT('调用失败：') + messageOf(failure) })
     })
   }
 
   function removePlugin(name) {
+    if (busyRef.current) return
+    busyRef.current = true
     patchPlugin({ busy: true, error: '', confirming: null, note: '' })
     callRemote('pluginAdmin/remove', { name: name }).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
+        busyRef.current = false
         patchPlugin({
           busy: false,
           note: dshT('卸载完成。更改在重启 dsh 后生效'),
@@ -452,11 +470,13 @@ function PluginsSection(props) {
         return
       }
       var failMessage = dshT('卸载失败：') + messageOf(result.error)
+      busyRef.current = false
       patchPlugin({ busy: false, error: failMessage })
       showToast('error', failMessage)
       reloadPlugins(true)
     }, function (failure) {
       if (!alive.current) return
+      busyRef.current = false
       patchPlugin({ busy: false, error: dshT('调用失败：') + messageOf(failure) })
     })
   }
@@ -549,17 +569,23 @@ function WebSessionsSection(props) {
   ]
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
-    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('Web 与会话') },
+    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('Web 与会话'),
+      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setTab) } },
       tabs.map(function (entry) {
         return createElement('button', {
           type: 'button', role: 'tab', key: entry.id,
+          id: 'dsh-admin-tab-' + entry.id,
+          'aria-controls': 'dsh-admin-panel-' + entry.id,
+          tabIndex: entry.id === selected.id ? 0 : -1,
           className: 'tab' + (entry.id === selected.id ? ' active' : ''),
           'aria-selected': entry.id === selected.id,
           onClick: function () { setTab(entry.id) },
         }, entry.label)
       })
     ),
-    createElement(selected.component, { key: selected.id, call: props.call, refreshSessions: props.refreshSessions })
+    createElement('div', { key: selected.id, role: 'tabpanel', id: 'dsh-admin-panel-' + selected.id, 'aria-labelledby': 'dsh-admin-tab-' + selected.id },
+      createElement(selected.component, { call: props.call, refreshSessions: props.refreshSessions })
+    )
   )
 }
 
@@ -3343,6 +3369,40 @@ function ConfirmButton(props) {
   }, label)
 }
 
+/**
+ * Shared ARIA tabs keyboard wiring for the section tab bars: Left/Right move
+ * the selection (wrapping), Home/End jump to the ends, and selection follows
+ * focus. Attach to the `role="tablist"` element; the tab buttons carry
+ * `tabIndex: selected ? 0 : -1` (roving tabindex) so Tab reaches the bar once
+ * and the arrows do the rest.
+ * @param {KeyboardEvent} event
+ * @param {Array<{id: string}>} tabs - the tab list in DOM order.
+ * @param {string} selectedId - the currently selected tab id.
+ * @param {(id: string) => void} select - commit the new selection.
+ * @returns {boolean} whether the key was handled.
+ */
+function tabKeyDown(event, tabs, selectedId, select) {
+  var delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+  var at = -1
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].id === selectedId) { at = i; break }
+  }
+  if (at === -1) return false
+  var to = -1
+  if (delta !== 0) to = (at + delta + tabs.length) % tabs.length
+  else if (event.key === 'Home') to = 0
+  else if (event.key === 'End') to = tabs.length - 1
+  if (to === -1 || to === at) return false
+  event.preventDefault()
+  select(tabs[to].id)
+  // Selection follows focus: React reuses the keyed button nodes, so a
+  // synchronous focus survives the re-render that flips tabIndex/aria.
+  var bar = /** @type {Element|null} */ (event.currentTarget)
+  var nodes = bar !== null ? bar.querySelectorAll('[role="tab"]') : []
+  if (nodes[to]) nodes[to].focus()
+  return true
+}
+
 /* ========================================================================== */
 /*                            Form draft handling                             */
 /* ========================================================================== */
@@ -3550,12 +3610,14 @@ function Picker(props) {
   }) : null
 
   var list = open && !disabled
-    ? createElement('div', { className: 'sa-picker-list' },
+    ? createElement('div', { className: 'sa-picker-list', role: 'listbox', 'aria-label': props.ariaLabel || props.placeholder || '' },
         filtered.length === 0
           ? createElement('div', { className: 'sa-picker-empty' }, allowCustom && text.trim() !== '' ? dshT('回车添加：') + text.trim() : dshT('无匹配'))
           : filtered.map(function (o, idx) {
               return createElement('div', {
                 key: o.value,
+                role: 'option',
+                'aria-selected': multi ? selected[o.value] === true : values[0] === o.value,
                 className: 'sa-picker-opt' + (idx === highlight ? ' active' : ''),
                 onMouseDown: function (ev) { if (!disabled) { ev.preventDefault(); pick(o) } },
                 onMouseEnter: function () { setHighlight(idx) },
@@ -4705,17 +4767,23 @@ function SubagentAdminSection(props) {
   var selected = tabs.find(function (tab) { return tab.id === activeTab }) || tabs[0]
 
   return createElement('div', { 'data-dsh-sa-section': '' },
-    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('子智能体管理') },
+    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('子智能体管理'),
+      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setActiveTab) } },
       tabs.map(function (tab) {
         return createElement('button', {
           type: 'button', key: tab.id,
           className: 'tab' + (tab.id === selected.id ? ' active' : ''),
-          role: 'tab', 'aria-selected': tab.id === selected.id,
+          role: 'tab', id: 'dsh-admin-tab-' + tab.id,
+          'aria-controls': 'dsh-admin-panel-' + tab.id,
+          tabIndex: tab.id === selected.id ? 0 : -1,
+          'aria-selected': tab.id === selected.id,
           onClick: function () { setActiveTab(tab.id) },
         }, tab.label)
       })
     ),
-    createElement(selected.component, { key: selected.id, call: props.call })
+    createElement('div', { key: selected.id, role: 'tabpanel', id: 'dsh-admin-panel-' + selected.id, 'aria-labelledby': 'dsh-admin-tab-' + selected.id },
+      createElement(selected.component, { call: props.call })
+    )
   )
 }
 
@@ -6066,17 +6134,23 @@ function AutomationSection(props) {
   ]
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
-    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('自动化') },
+    createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('自动化'),
+      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setTab) } },
       tabs.map(function (entry) {
         return createElement('button', {
           type: 'button', role: 'tab', key: entry.id,
+          id: 'dsh-admin-tab-' + entry.id,
+          'aria-controls': 'dsh-admin-panel-' + entry.id,
+          tabIndex: entry.id === selected.id ? 0 : -1,
           className: 'tab' + (entry.id === selected.id ? ' active' : ''),
           'aria-selected': entry.id === selected.id,
           onClick: function () { setTab(entry.id) },
         }, entry.label)
       })
     ),
-    createElement(selected.component, { key: selected.id, call: props.call })
+    createElement('div', { key: selected.id, role: 'tabpanel', id: 'dsh-admin-panel-' + selected.id, 'aria-labelledby': 'dsh-admin-tab-' + selected.id },
+      createElement(selected.component, { call: props.call })
+    )
   )
 }
 
@@ -7356,7 +7430,15 @@ function WorkflowSection(props) {
   ]))
 
 
-  elements.push(h('div', { key: 'tabs', style: { display: 'flex', gap: '8px', marginBottom: '12px' } }, [
+  // 运行/工作库两个内部页签与外层 section 页签同一套 ARIA tabs 契约
+  // （tablist/tab/roving tabindex/方向键）。面板内容不是单个可寻址节点，
+  // 所以这里不做 aria-controls/tabpanel 关联。
+  var wfTabs = [{ id: 'runs' }, { id: 'saved' }]
+  elements.push(h('div', { key: 'tabs', role: 'tablist', 'aria-label': dshT('工作流'),
+    onKeyDown: function (event) {
+      tabKeyDown(event, wfTabs, state.tab, function (next) { patch({ tab: next, editor: null, savedEditor: null }) })
+    },
+    style: { display: 'flex', gap: '8px', marginBottom: '12px' } }, [
     tabButton('runs', dshT('运行 (') + (state.runs || []).length + ')'),
     tabButton('saved', dshT('工作库 (') + (state.saved || []).length + ')'),
   ]))
@@ -7379,6 +7461,10 @@ function WorkflowSection(props) {
     var active = state.tab === key
     return h('button', {
       key: 'tab-' + key,
+      role: 'tab',
+      id: 'dsh-admin-wf-tab-' + key,
+      'aria-selected': active,
+      tabIndex: active ? 0 : -1,
       onClick: function () { patch({ tab: key, editor: null, savedEditor: null }) },
       style: {
         padding: '6px 14px', borderRadius: '8px', cursor: 'pointer',
