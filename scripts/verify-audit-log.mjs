@@ -129,7 +129,57 @@ await check('the log compacts at its cap instead of growing without bound', asyn
   const entries = log.read(100)
   assert.ok(entries.length <= 4, 'compaction keeps the trail bounded (got ' + entries.length + ')')
   assert.equal(entries[0].detail, '9', 'the newest entry survives compaction')
-  assert.equal(log.size(), entries.length, 'the cached count matches the file')
+  assert.equal(log.size(), entries.length, 'the reported size matches the file')
+})
+
+// The count used to be read once and then only incremented in memory, so a write
+// this process did not make (a second dsh instance on the same $DSH_HOME, or a
+// hand edit) made it drift permanently: an undercount let the trail grow past
+// `cap` without bound. The cap must be enforced against the FILE, not a cache.
+await check('compaction respects writes this process did not make (no stale count)', async () => {
+  const shared = join(dir, 'shared.jsonl')
+  const mine = createAuditLog({ path: shared, cap: 4 })
+  await mine.record({ action: 'first', detail: '0' })
+  // Another instance appends behind our back, straight to the file.
+  const foreign = createAuditLog({ path: shared, cap: 4 })
+  for (let i = 1; i < 8; i += 1) await foreign.record({ action: 'foreign', detail: String(i) })
+  // Now OUR instance writes again: it must notice the file is over cap already.
+  await mine.record({ action: 'mine', detail: 'zz' })
+  const lines = readFileSync(shared, 'utf8').trim().split('\n')
+  assert.ok(lines.length <= 4, 'a foreign writer cannot push the trail past the cap (got ' + lines.length + ' lines)')
+  const last = JSON.parse(lines[lines.length - 1])
+  assert.equal(last.action, 'mine', 'the newest entry is the one we just wrote')
+})
+
+// `Math.floor(cap / 2)` is 0 at cap === 1, and `slice(-0)` is `slice(0)` — i.e.
+// KEEP EVERYTHING. A cap-1 trail therefore rewrote its entire self on every
+// append and never shrank. Cheap to assert, and it was silently broken.
+await check('cap: 1 actually bounds the file (the slice(-0) degenerate case)', async () => {
+  const one = join(dir, 'cap-one.jsonl')
+  const log = createAuditLog({ path: one, cap: 1 })
+  const sizes = []
+  for (let i = 0; i < 6; i += 1) {
+    await log.record({ action: 'cronAdmin/upsert', detail: String(i) })
+    sizes.push(readFileSync(one, 'utf8').trim().split('\n').length)
+  }
+  // Compaction fires when the file is already AT the cap, so the post-append
+  // size is bounded by cap + 1 and never grows with the number of writes. The
+  // pre-fix behaviour grew without bound.
+  assert.ok(Math.max(...sizes) <= 2, 'a cap-1 trail never exceeds cap + 1 lines (got ' + Math.max(...sizes) + ')')
+  assert.ok(sizes[sizes.length - 1] <= sizes[1], 'the size stops growing after the first few writes')
+  const entries = log.read(10)
+  assert.equal(entries[0].detail, '5', 'the newest entry is retained')
+  assert.ok(entries.length <= 2, 'read agrees with the file')
+})
+
+await check('the reported size tracks an external truncation', async () => {
+  const drifting = join(dir, 'drift.jsonl')
+  const log = createAuditLog({ path: drifting, cap: 100 })
+  for (let i = 0; i < 3; i += 1) await log.record({ action: 'x', detail: String(i) })
+  assert.equal(log.size(), 3, 'three entries on disk')
+  // Something outside this process truncates the trail (a clean-up script).
+  writeFileSync(drifting, '')
+  assert.equal(log.size(), 0, 'size() reads the file instead of reporting a stale count')
 })
 
 await check('a service without a recorder keeps its plain methods', async () => {
