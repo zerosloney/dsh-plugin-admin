@@ -21,7 +21,7 @@
     "cordis"
   ],
   "scripts": {
-    "test": "npm run check:types && npm run check:lint && node scripts/build-client.mjs --check && node scripts/self-check.mjs && node scripts/host-check.mjs && node scripts/verify-run-command.mjs && node scripts/verify-mcp-cache.mjs && node scripts/verify-update-reminders.mjs && node scripts/verify-subagents-host.mjs && node scripts/verify-subagents-client.mjs && node scripts/verify-command-hooks.mjs && node scripts/verify-project-commands.mjs && node scripts/verify-project-hooks.mjs && node scripts/verify-todo-panel.mjs && node scripts/verify-webhook-triggers.mjs && node scripts/verify-cron-admin.mjs && node scripts/verify-cron-panel.mjs && node scripts/verify-overlays.mjs && node scripts/verify-peer-compat.mjs && node scripts/verify-workspace-admin.mjs && node scripts/verify-skills-admin.mjs && node scripts/verify-usage-ledger.mjs && node scripts/verify-web-search-admin.mjs && node scripts/verify-i18n.mjs && node scripts/verify-audit-log.mjs && node scripts/verify-file-lock.mjs && node scripts/verify-rpc-schema.mjs && node scripts/verify-service-injects.mjs && node scripts/verify-store-version.mjs && node scripts/verify-webhook-hardening.mjs && node scripts/verify-hooks-codex-bridge.mjs && node scripts/verify-workflow-engine.mjs && node scripts/verify-workflow-runs.mjs && node scripts/verify-workflow-admin.mjs && node scripts/verify-workflow-tools.mjs && node scripts/verify-workflow-command.mjs && node scripts/verify-workflow-client.mjs && node scripts/integration-check.mjs",
+    "test": "node scripts/run-gate.mjs",
     "check:types": "tsc --noEmit",
     "check:lint": "oxlint lib src scripts",
     "build:client": "node scripts/build-client.mjs",

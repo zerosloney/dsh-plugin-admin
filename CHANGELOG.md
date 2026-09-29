@@ -8,6 +8,7 @@
 
 ### Changed
 
+- **`npm test` 的 38 步长链收进 `scripts/run-gate.mjs`，新增 `CONTRIBUTING.md` 最小验证集映射**：`package.json` 里那条 38 命令 `&&` 串联改为一个执行器——步骤表（名称 + 一句职责）内聚在脚本里，逐步打印名称与耗时，失败点名步骤并以原退出码收场；与 `ci-failure-annotation.mjs` 兼容（子进程经 `NODE_OPTIONS` 继承 preload，各自仍会自注解）。支持 `--list` 与 `--filter <子串>`（静态三闸门始终前置，合计约 2s；例：`npm test -- --filter cron` = 三闸门 + `verify-cron-admin` + `verify-cron-panel`），步骤严格串行（多个脚本有真实分钟边界等待，交错输出会毁掉可读性）。CI 命令不变（仍是 `npm test`）；`ci.yml` 的门禁步骤名里过时的计数（34 scripts / 124 contracts）改为指向步骤表。`CONTRIBUTING.md`：三条验证路径（单脚本 / `--filter` 定向 / 全量）+「改了什么 → 最小验证集」映射表（verify 脚本与 lib 模块基本一一对应）+ 冒烟与接缝矩阵的适用时机。
 - **CI 作业补超时兜底 + 宿主接缝预警从拉式改滚动**（`.github/workflows/`）：`ci.yml` 的三个作业与 `release.yml` 的 publish 补 `timeout-minutes`（test 30 / host-smoke 20 / seam-matrix 20 / release 30）——门禁内部的等待（cron 分钟边界轮询、真实宿主 boot 预算）只约束它们知道的那条路径，一次意外挂死不该烧掉 GitHub 默认的 6 小时 runner。新增 `seam-early-warning.yml`：每日 03:17 UTC 定时（+ `workflow_dispatch` 手动触发）对 pinned release 与 `dsh master` 双 checkout 跑同一套接缝探针（`npm run test:matrix`）——`ci.yml` 的 seam-matrix 只在本仓库有 push/PR 时才跑，预警是拉式的：插件静默期内的宿主漂移此前无人察觉（scheduled 运行失败 GitHub 默认邮件通知仓库所有者；该工作流不装依赖，与 seam-matrix 同为两个浅 checkout + 一次 node 运行）。
 
 ## [1.26.1] - 2026-09-29
