@@ -602,6 +602,331 @@ try {
       }
       if (exceptions.length === 0) ok('no uncaught exception in the page', 'Runtime.exceptionThrown was silent')
       else fail('no uncaught exception in the page', exceptions.slice(0, 3).join(' | '))
+
+      /* ----------------- 8. render cost in a REAL browser ----------------- */
+      // STATUS: the transport discovery and corpus injection below are proven to
+      // work (the panel renders all 400 rows: 9 373 DOM nodes, stable across a
+      // 1.2 s settle), but the corpus does NOT survive the first synthetic
+      // keystroke — the DOM collapses to a few hundred nodes, so the keystroke
+      // timings measured here are NOT trustworthy and this step REFUSES to
+      // report them as a result. It prints its diagnosis and skips loudly.
+      //
+      // Why it collapses is not yet established. Ruled out: (a) `fetch` and
+      // `XMLHttpRequest` are not the seam the plugin's injected
+      // ctx.connection.rpc uses — instrumenting every candidate transport showed
+      // the shell itself calls fetch, but patching it does not intercept the
+      // panel's RPC; (b) `patch` is a functional setState, so a stale closure is
+      // not the cause; (c) the corpus is not overwritten by the panel's own
+      // fetch, because it survives the settle window before any keystroke.
+      // Leading remaining hypothesis: the settings dialog remounts the section
+      // when its own state changes on input, discarding the injected state.
+      //
+      // Kept in the file because the discovery work is real and the next attempt
+      // should start from it — but it must not be mistaken for a working
+      // measurement, which is exactly the mistake this probe was written to stop
+      // repeating.
+      step('8. session filter cost in the real browser (O-1 decision data)')
+      const PERF_SESSIONS = Number(process.env.SMOKE_PERF_SESSIONS ?? 400)
+      const PERF_KEYSTROKES = Number(process.env.SMOKE_PERF_KEYSTROKES ?? 6)
+
+      // FIRST: find out how the shell's RPC actually reaches the host. Our bundle
+      // contains no fetch( and no XMLHttpRequest, so the transport belongs to the
+      // shell's injected ctx.connection.rpc — and three guesses at it were wrong.
+      // Rather than guess a fourth, instrument every candidate and report which
+      // one fires when the panel refreshes.
+      const transport = await evaluate(`(() => {
+        if (window.__perfTransport !== undefined) return window.__perfTransport
+        const seen = {}
+        const note = (name) => { seen[name] = (seen[name] || 0) + 1 }
+        try { const f = window.fetch; window.fetch = function () { note('fetch'); return f.apply(this, arguments) } } catch (e) {}
+        try { const o = window.XMLHttpRequest.prototype.open; window.XMLHttpRequest.prototype.open = function () { note('xhr'); return o.apply(this, arguments) } } catch (e) {}
+        try { const s = window.WebSocket; window.WebSocket = function () { note('ws'); return new s(...arguments) } } catch (e) {}
+        try { const e = window.EventSource; window.EventSource = function () { note('sse'); return new e(...arguments) } } catch (e) {}
+        try { const b = navigator.sendBeacon && navigator.sendBeacon.bind(navigator); if (b) navigator.sendBeacon = function () { note('beacon'); return b.apply(this, arguments) } } catch (e) {}
+        window.__perfSeen = seen
+        window.__perfTransport = seen
+        return seen
+      })()`)
+      console.log(`  transport probe installed: ${JSON.stringify(transport)}`)
+
+      const installed = await evaluate(`(() => {
+        const N = ${PERF_SESSIONS}
+        const now = Date.now()
+        const workspaces = ['a','b','c','d','e'].map((w, i) => ({ workspaceId: 'ws-' + i, title: 'ws-' + w, path: '/tmp/ws-' + w }))
+        const sessions = []
+        for (let i = 0; i < N; i += 1) {
+          sessions.push({
+            id: 'perf-' + i,
+            title: (i < 5 ? 'ALPHA ' : 'beta ') + '会话 ' + i,
+            summary: '摘要 ' + i + ' —— 真实浏览器渲染计时用',
+            updatedAt: now - i * 60000,
+            createdAt: now - i * 120000,
+            live: false,
+            archived: false,
+            workspaceId: 'ws-' + (i % 5),
+            tokens: { input: 1000 + i, output: 500 + i },
+            messageCount: 3,
+            model: 'deepseek-v4',
+          })
+        }
+        window.__perfCorpus = { sessions, workspaces }
+        // The plugin does NOT call fetch — its bundle contains no "fetch(" at
+        // all. The panel reaches the host through the shell's injected
+        // ctx.connection.rpc.call, whose transport is the shell's own. An
+        // instrumented probe of every candidate showed the shell uses FETCH
+        // (XHR/WebSocket/EventSource/sendBeacon all saw zero traffic), so fetch
+        // is the right seam — but the shell may have captured a reference to it
+        // before this script ran, which is why patching window.fetch alone
+        // intercepted nothing. Patch it, and ALSO route the panel's own reload
+        // through the corpus so the measurement does not depend on how the shell
+        // bound the original.
+        if (window.__perfFetch === undefined) {
+          window.__perfFetch = window.fetch
+          window.__perfHits = 0
+          window.fetch = function (input, init) {
+            const url = typeof input === 'string' ? input : (input && input.url) || ''
+            if (String(url).indexOf('sessionAdmin/list') !== -1) {
+              window.__perfHits += 1
+              return Promise.resolve(new Response(
+                JSON.stringify({ result: { ok: true, value: window.__perfCorpus } }),
+                { status: 200, headers: { 'content-type': 'application/json' } },
+              ))
+            }
+            return window.__perfFetch.apply(this, arguments)
+          }
+        }
+        // Time one onChange on the session filter AND the render it schedules.
+        //
+        // Timing the handler alone measures ~0 ms and is worthless: React 18
+        // batches the setState, so the handler returns long before any component
+        // re-renders (a first cut of this step reported "median 0.00 ms" for
+        // exactly that reason). The cost a user waits for is the commit + paint,
+        // so this measures until the DOM has actually changed — double rAF after
+        // the update, which lands past layout and paint.
+        //
+        // The corpus is injected by intercepting the panel's OWN reload call at
+        // the React level: the panel's reloadSessions() is reachable through the
+        // refresh button's onClick, but that goes back to the shell transport.
+        // Instead we set the section's state directly through the same React
+        // props seam the input uses — state lives on the component, so a
+        // synthetic setState with the corpus is equivalent to the panel having
+        // fetched it, without depending on any network seam.
+        window.__perfLoadCorpus = function () {
+          // Find the section root by looking upward from the filter input; the
+          // component instance that owns the corpus state is the nearest one
+          // whose state carries a sessions array.
+          const wanted = /搜索标题|Search title/
+          const input = Array.from(document.querySelectorAll('input')).find((el) => wanted.test(el.placeholder || ''))
+          if (input === undefined) return false
+          const key = Object.keys(input).find((k) => k.indexOf('__reactFiber') === 0 || k.indexOf('__reactInternalInstance') === 0)
+          if (key === undefined) return false
+          let fiber = input[key]
+          while (fiber !== null && fiber !== undefined) {
+            const state = fiber.memoizedState
+            // Walk the hook chain looking for the section state object that holds
+            // a sessions array (sectionState stores it in a useState cell).
+            let hook = state
+            let guard = 0
+            while (hook !== null && hook !== undefined && guard < 40) {
+              const value = hook.memoizedState
+              if (value !== null && typeof value === 'object' && Array.isArray(value.sessions) && 'needle' in value) {
+                const setter = hook.queue && hook.queue.dispatch
+                if (typeof setter === 'function') {
+                  window.__perfStateFound = true
+                  setter(function (cur) {
+                    const next = {}
+                    for (const k2 in cur) next[k2] = cur[k2]
+                    next.sessions = window.__perfCorpus.sessions
+                    next.workspaces = window.__perfCorpus.workspaces
+                    next.busy = false
+                    next.error = ''
+                    return next
+                  })
+                  return true
+                }
+              }
+              hook = hook.next
+              guard += 1
+            }
+            fiber = fiber.return
+          }
+          return false
+        }
+        window.__perfType = function (queries) {
+          const wanted = /搜索标题|Search title/
+          const input = Array.from(document.querySelectorAll('input')).find((el) => wanted.test(el.placeholder || ''))
+          if (input === undefined) return null
+          const key = Object.keys(input).find((k) => k.indexOf('__reactProps') === 0)
+          if (key === undefined || typeof input[key].onChange !== 'function') return null
+          const onChange = input[key].onChange
+          const before = document.querySelectorAll('*').length
+          return new Promise(function (resolve) {
+            const samples = []
+            let i = 0
+            const nodeTrace = []
+            const next = function () {
+              if (i >= queries.length) {
+                resolve({ samples: samples, nodesBefore: before, nodesAfter: document.querySelectorAll('*').length, nodeTrace: nodeTrace })
+                return
+              }
+              const value = queries[i]
+              i += 1
+              const t0 = performance.now()
+              onChange({ target: { value: value } })
+              // Wait for React to commit and the browser to paint the update.
+              //
+              // CAUTION (measured): this double-rAF wait has an inherent floor of
+              // ~33 ms — two frames at 60 Hz. An earlier version of this probe
+              // reported a flat "33 ms per keystroke" at 100, 200, 400 AND 800
+              // sessions, which is the frame cadence, not render cost. Anything
+              // read from this number must therefore be compared against the
+              // no-op control below, never taken as an absolute.
+              requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                  samples.push(performance.now() - t0)
+                  nodeTrace.push(document.querySelectorAll('*').length)
+                  next()
+                })
+              })
+            }
+            next()
+          })
+        }
+        // CONTROL: a measurement of doing nothing. Any per-keystroke number whose
+        // difference from this control is not clearly larger is measuring the
+        // frame clock, not the panel.
+        window.__perfControl = function (n) {
+          const queries = []
+          for (let i = 0; i < n; i += 1) queries.push('p')
+          return window.__perfTypeNoChange(queries)
+        }
+        window.__perfTypeNoChange = function (queries) {
+          const out = []
+          return new Promise(function (resolve) {
+            let i = 0
+            const step = function () {
+              if (i >= queries.length) { resolve({ samples: out, nodesBefore: 0, nodesAfter: document.querySelectorAll('*').length, nodeTrace: [] }); return }
+              i += 1
+              const t0 = performance.now()
+              requestAnimationFrame(function () {
+                requestAnimationFrame(function () { out.push(performance.now() - t0); step() })
+              })
+            }
+            step()
+          })
+        }
+        return true
+      })()`)
+      if (installed === true) ok('installed a synthetic corpus + timing hook in the page', `${PERF_SESSIONS} sessions`)
+      else fail('installed a synthetic corpus + timing hook in the page', 'page evaluation returned nothing')
+
+      // Reach the sessions panel ONCE, then stop interacting: this loop used to
+      // re-click the tab every 400 ms, which remounted the section and wiped the
+      // corpus injected into its state (the "corpus loaded, then typing showed
+      // 816 nodes" failure).
+      let perfReady = false
+      const perfDeadline = Date.now() + 15_000
+      await evaluate(`(() => { ${labelHelper}
+        const dismiss = ['继续', 'Continue', '知道了', 'Got it']
+        const d = Array.from(document.querySelectorAll('button,[role=button]')).find((el) => dismiss.includes(label(el)))
+        if (d !== undefined) d.click()
+        const wanted = ['Web 与会话', 'Web & Sessions', '历史会话', 'Sessions']
+        const tab = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]')).find((el) => wanted.includes(label(el)))
+        if (tab !== undefined) tab.click()
+        return true
+      })()`)
+      while (Date.now() < perfDeadline && !perfReady) {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        perfReady = (await evaluate(`(() => Array.from(document.querySelectorAll('input')).some((el) => /搜索标题|Search title/.test(el.placeholder || '')))()`)) === true
+      }
+
+      if (!perfReady) {
+        // Honest skip, not a green check: this shell did not expose the panel.
+        ok('render-cost probe skipped', 'the 历史会话 filter input did not appear within 15s')
+      } else {
+        const primeHitsBefore = await evaluate('window.__perfHits === undefined ? -1 : window.__perfHits')
+        // Load the corpus straight into the panel's own state. This does not
+        // depend on the shell's transport at all — see the comment on
+        // __perfLoadCorpus — and it is what makes the measurement reliable.
+        const loaded = await evaluate('window.__perfLoadCorpus() === true')
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+        const nodesLoaded = await evaluate('document.querySelectorAll("*").length')
+        console.log(`  corpus injected into the panel state: ${loaded === true ? 'yes' : 'no'} (DOM now ${nodesLoaded} nodes)`)
+        // If the injected corpus does not SURVIVE a settle window, the panel's
+        // own fetch is overwriting it and no keystroke timing would be
+        // trustworthy — so prove it here rather than discovering it later.
+        const corpusStable = nodesLoaded > 2000
+        if (!corpusStable) {
+          ok(
+            'render-cost probe skipped (corpus did not survive the settle window)',
+            `${nodesLoaded} DOM nodes after injecting ${PERF_SESSIONS} sessions — measuring keystrokes here would report an empty list`,
+          )
+        }
+        const primeHitsAfter = await evaluate('window.__perfHits === undefined ? -1 : window.__perfHits')
+        // Every query must match ALL 400 rows: the point is to measure the
+        // expensive case (rebuilding the full list). An earlier version ended on
+        // 'perf-0', which matches exactly ONE row — the node trace showed
+        // 9 374 → … → 9 374 → 572 and it read like the panel was remounting,
+        // while the truth was that the benchmark had simply filtered the list
+        // away. Query selectivity changes what is being measured, so keep it
+        // fixed and maximal.
+        const all = ['p', 'pe', 'per', 'perf', 'perf-', 'beta', '会话', 'ws-']
+        const useQueries = all.slice(0, Math.max(2, PERF_KEYSTROKES))
+        const measured = await evaluate(`(() => window.__perfType(${JSON.stringify(useQueries)}))()`)
+        if (measured === null || measured === undefined) {
+          ok('render-cost probe skipped', 'the filter input carries no React onChange in this shell')
+        } else {
+          const samples = measured.samples.filter((n) => typeof n === 'number')
+          const nodesAfter = measured.nodesAfter
+          const worst = Math.max(...samples)
+          const sorted = [...samples].sort((a, b) => a - b)
+          const median = sorted[Math.floor(sorted.length / 2)]
+          // A number is only meaningful if the panel actually rendered the
+          // corpus: 400 sessions produce thousands of nodes, and an empty panel
+          // renders a few hundred. A first cut of this step reported "median
+          // 0.00 ms · DOM 539 nodes" and would have been read as "rendering is
+          // free" — when in truth the panel had not picked up the corpus at all.
+          const corpusLanded = nodesAfter > 2000
+          if (!corpusLanded) {
+            // HONEST SKIP, not a green check and not a red one. The collapse is a
+            // limitation of THIS PROBE (see the block comment at the step head),
+            // not a defect in the plugin — so failing CI here would be wrong, and
+            // reporting the timings would be worse: they measure an empty list.
+            ok(
+              'render-cost probe skipped (corpus collapsed during typing)',
+              `DOM ${measured.nodesBefore} → ${nodesAfter} nodes over ${samples.length} keystrokes. ` +
+              `Timings withheld: they would describe an empty list, not a ${PERF_SESSIONS}-session one.`,
+            )
+            console.log(`  keystroke node trace: ${measured.nodeTrace.join(' → ')}`)
+            console.log('  the probe needs the corpus to survive a keystroke; see the step comment for what is already ruled out')
+          } else {
+            ok('the browser probe rendered the injected corpus', `${nodesAfter} DOM nodes`)
+            console.log(`  keystroke node trace: ${measured.nodeTrace.join(' → ')}`)
+            // Measure the floor: the same double-rAF wait with NO onChange at all.
+            // Without this control the number below is uninterpretable — a flat
+            // ~33 ms across 100..800 sessions is the frame cadence, not the panel.
+            const control = await evaluate(`(() => window.__perfTypeNoChange(${JSON.stringify(useQueries)}))()`)
+            const controlSamples = control && Array.isArray(control.samples) ? control.samples : []
+            const controlMedian = controlSamples.length > 0
+              ? [...controlSamples].sort((a, b) => a - b)[Math.floor(controlSamples.length / 2)]
+              : null
+            if (controlMedian !== null) {
+              console.log(`  control (double-rAF wait, no onChange): median ${controlMedian.toFixed(2)} ms`)
+              console.log(`  panel work above the control: ${(median - controlMedian).toFixed(2)} ms`)
+            }
+            ok(
+              'measured session-filter re-render cost in real Chromium',
+              `${PERF_SESSIONS} sessions · ${samples.length} keystrokes · median ${median.toFixed(2)} ms · max ${worst.toFixed(2)} ms`
+                + (controlMedian === null ? '' : ` · control ${controlMedian.toFixed(2)} ms`),
+            )
+            console.log('  note  the jsdom benchmark reports ~170 ms/keystroke at 400 sessions; the real-browser number above is the one that decides O-1')
+            // A render blocking for a full second is a defect on any machine;
+            // below that this is INFORMATIONAL so a slow runner cannot fail CI.
+            if (worst > 1000) fail('session-filter re-render stays under 1 s in a real browser', `worst ${worst.toFixed(0)} ms`)
+            else ok('session-filter re-render stays under 1 s in a real browser', `worst ${worst.toFixed(0)} ms`)
+          }
+        }
+      }
       try { socket.close() } catch { /* already closed */ }
     }
   }

@@ -37,6 +37,11 @@ const STEPS = [
   { name: 'check:types-strict', desc: 'noImplicitAny over the growing strict include list (tsconfig.strict.json)', cmd: ['npm', 'run', 'check:types-strict'], static: true },
   { name: 'check:lint', desc: 'oxlint over lib src scripts (errors only; warnings recorded)', cmd: ['npm', 'run', 'check:lint'], static: true },
   { name: 'build:client --check', desc: 'built artifacts match src/client/** — catches forgot-to-rebuild', cmd: [node, 'scripts/build-client.mjs', '--check'], static: true },
+  // Static in the same sense as the four above: it reads the repo, runs nothing,
+  // and is cheap. It guards the whole chain's own numbers, so it runs before any
+  // step could change what the docs claim.
+  { name: 'verify-doc-claims', desc: 'documentation claims (step/script/config counts, named paths) match the repo', cmd: [node, 'scripts/verify-doc-claims.mjs'], static: true },
+  { name: 'verify-line-anchors', desc: 'every `path:line` anchor in the docs resolves and stays inside its file', cmd: [node, 'scripts/verify-line-anchors.mjs'], static: true },
   { name: 'self-check', desc: 'load the built bundle the way the host loader does; mount every panel in jsdom + en-locale smoke', cmd: [node, 'scripts/self-check.mjs'] },
   { name: 'host-check', desc: 'apply() against a contract-shaped fake ctx; RPC manifest ↔ descriptors ↔ client call sites', cmd: [node, 'scripts/host-check.mjs'] },
   { name: 'verify-run-command', desc: 'lib/run-command.js: dual-stream drain + process-tree kill budgets', cmd: [node, 'scripts/verify-run-command.mjs'] },

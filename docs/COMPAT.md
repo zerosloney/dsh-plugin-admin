@@ -67,7 +67,7 @@ DSH_CHECKOUTS="D:/dsh/0.2.0-rc.1, D:/dsh/next" npm run test:matrix
 | `locale.register/bind/subscribe/setLocale` | `packages/client/locale/src/client/index.ts` | Phase C 的客户端本地化与语言切换 |
 | `WebRoute { kind: 'prefix' \| 'exact', path, handler(req,res) }` | `packages/host/webserver/src/index.ts` | Webhook 入站端点（Phase F4 的加固读 `req.socket.remoteAddress`） |
 | `commands.register(definition)` + `CommandInvocation.agent/rawInput/attachments` | `packages/interaction/commands/src/index.ts` | 命令钩子（handler 解构这三个字段）与 `/workflow` 斜杠命令 |
-| `session/created` / `disposed` / `event` / `flush` 四个事件 + `Session.id/firstLiveSeq/header` | `packages/core/session/src/index.ts` | 用量台账的实时观察与 drain 时机（`lib/index.js:1756-1795`） |
+| `session/created` / `disposed` / `event` / `flush` 四个事件 + `Session.id/firstLiveSeq/header` | `packages/core/session/src/index.ts` | 用量台账的实时观察与 drain 时机（`lib/index.js:610-763`） |
 | `sessions.get(id)`（宿主存活判定）+ `ISessions.refresh()/refreshProjections()`（客户端侧栏） | `packages/core/session/src/index.ts`、`packages/api/session-controller/src/client/contract/sessions.ts` | steer 前的会话存活校验；删除会话后立即刷新侧栏 |
 | `llm.listProviders()` / `listModels(provider)` + `LlmProviderInfo` / `LlmModelInfo` | `packages/llm/llm/src/index.ts`、`types.ts` | 子代理面板的 provider / model 下拉（缺了就退化成空列表） |
 | `storageDomain.get(name)` → `table(name).delete(key)` | `packages/storage/storage-domain/src/index.ts`、`domain.ts` | 删除会话时立即清掉 projection cache（否则侧栏残留到刷新） |
@@ -121,7 +121,7 @@ v1.25.4 起还有两步：
 
 **它第一次跑就抓到一个生产 bug**（v1.25.3 修）：`projectAdmin/list` 直接读 `ctx.workspaceRegistry`，而该服务不在插件的 `inject` 声明里 —— 真实 Cordis 抛 `cannot get property "workspaceRegistry" without inject`，面板拿到 `gateway/internal`。**所有替身 ctx 的检查都看不见它**（假 ctx 没有 scope guard，host-check/self-check/30 个 verify 全绿）。同一类问题在 `lib/subagent-admin.js` 还有 4 处（`ctx.get(…) ?? ctx.<service>` 形式的回退），由随后的静态闸门抓出。因此这一层与 `scripts/verify-service-injects.mjs`（扫描 `lib/**` 里未声明的直接服务读取，进 `npm test`）是配套的：**冒烟覆盖它调用的路径，静态规则覆盖写入路径与冷分支**。
 
-这条不放进 `npm test`：它需要真实 `dsh` 且要起进程，属于"重量级但承重"的独立闸门，而不是每个开发者每次都要跑的 34 个脚本之一。
+这条不放进 `npm test`：它需要真实 `dsh` 且要起进程，属于"重量级但承重"的独立闸门，而不是每个开发者每次都要跑的 35 个脚本之一（`npm test` 共 39 步 = 4 道静态闸门 + 这 35 个脚本）。
 
 ## 已知边界（并发写）
 

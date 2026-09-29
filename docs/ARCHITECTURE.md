@@ -53,11 +53,11 @@ pnpm 编排安装 / 卸载 / 更新 + bundles 清单同步。安装/更新完成
 ### 🧵 工作流
 agent 写 TS/JS 脚本并行编排子代理，执行底座是 `ctx.subagents`（宿主原生并行 + 可续接）。生命周期（journal / 状态机 / amend / resume）在 `lib/workflow-runs.js`，引擎只负责「把一段脚本跑完」。
 
-**脚本 facade**：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema }`，`schema` 命中时该步返回结构化值）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**，只有宿主 `ctx.shell` 不可用或运行被中止才抛出。
+**脚本 facade**：`agent(prompt, opts?)` 委派一个子代理（失败返回 `null` 不拖垮整体；`opts` 支持 `{ provider, model, schema, cwd }`，`schema` 命中时该步返回结构化值，`cwd` 透传给 `SubagentStartRequest`）；`parallel(thunks)` 信号量限流并行；`pipeline(items, ...stages)` 逐项流水线（任一 stage 抛出该 item 记 null）；`phase / log / report` 记进度；`ask(question)` 阻塞等回答（详情页行内作答，停止运行即拒答）；`shell(cmd, opts?)` 走宿主 shell（`opts` 支持 `workdir` / `timeoutMs`），返回 `{ exitCode, stdout, stderr, timedOut }`——**非零退出码是数据不是异常**。`shell()` 抛出的情形比"不可用/被中止"稍多，都是刻意的硬失败：`ctx.shell` 未挂载、运行被中止、以及**围栏型执行器缺 `ctx.sandboxPolicy`**（宁可拒绝执行也不无围栏跑）；此外运行未被中止时，shell 自身的错误（如 `resolve` 失败）也会向上抛而不是吞成数据。
 
 **realm 边界**：脚本跑在 `node:vm` 独立 realm，没有 process / fetch / require / fs 等宿主全局，且宿主返回值一律折成 JSON 文本再在 realm 内重建（`args`、`agent()`/`shell()` 返回值、`parallel()`/`pipeline()` 数组、rejection 里的宿主 Error 都不带宿主原型链进 realm）；首个 `await` 之前的同步前缀有 V8 vm timeout 预算，一行死循环会在预算处被掐断而不是冻住宿主。**这不是硬安全边界**：脚本与宿主同进程同信任级，真正的权力来自 `agent()` 与 `shell()`（后者跑真实宿主命令，受调用会话的沙箱策略约束）——要硬边界得放子进程（宿主 PTC 工作流的做法）。**顶层 `return` 必须是 JSON 值**（循环引用 / BigInt 让运行判 errored 而不是产出损坏记录）。
 
-**生命周期**：停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」被拒绝（防新旧双跑）；续跑/改建默认回原会话（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是读取时按父会话是否在线派生的，不落盘）。**步骤缓存键是 `站点序号:kind:sha256(prompt + 语义 opts)`**——`agent()` 的 provider/model/schema 与 `shell()` 的 workdir/timeoutMs 进键，只改这些会让该步重跑，改 `args` 而 prompt 不变仍命中。
+**生命周期**：停止对忽略取消信号的卡死脚本有 10s 落定预算——超时回报 `abandoned` 并写 journal，此时「改建」（`amend`）被拒绝（防新旧双跑）；`resume` 不设该闸门（它不换脚本，双跑面不同），对已 `abandoned` 的运行续跑前请先确认旧 handle 已落定。续跑/改建默认回原会话（已下线时报错并给出会话 id，可换其他在线会话 override）；宿主重启后 stopped / errored 的运行仍可列出并续跑（「孤儿」标记 `orphaned` 是读取时按父会话是否在线派生的，不落盘）。**步骤缓存键是 `站点序号:kind:sha256([payload, ...语义 opts 键值对])`（全 64 hex）**——`agent()` 的 provider/model/schema/**cwd** 与 `shell()` 的 workdir/timeoutMs 进键，只改这些会让该步重跑，改 `args` 而 prompt 不变仍命中。
 
 **工作库**：保存到全局 `$DSH_HOME/workflows/saved/` 或项目 `<workspace>/.dsh/workflows/`（随仓库走，项目覆盖全局同名）。**项目根必须已存在**，且显式传入的项目根只能是**调用会话自己的树**或**本 dsh 实例已知的工作区**——模型传的 `workspacePath` 与浏览器 RPC 的 `spec.workspacePath` 都按这条闸门校验，任意目录会被拒绝（否则提示注入就能借它在任意路径建树写文件、或删文件）；`<workspace>/.dsh` 若是指向项目外的符号链接/junction 同样拒绝。保存作用域自动识别：会话内经工具保存且未指定 scope 时，调用会话有 cwd → 存项目；识别不了 → 工具回 `needsScopeChoice`，由模型转问用户「存项目还是全局」，带选择重调；`delete_saved` 对称识别。
 
@@ -78,7 +78,7 @@ TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工
 ### 🪝 Webhook（自动化 · 第二页签）
 规则 = id + secret（新建自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑留空 = 保持已存值）+ 可选事件名 + 动作（steer：选目标在线会话；create：workspacePath + agentPreset + permissionPreset + 可选 model）。
 
-触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（远程需显式开启 `webhookAllowRemote`）；401/429 与封锁各留一条日志和一条交付历史。限速按连接分桶 + 匿名认证失败桶（防「每次猜测换连接」绕过刹车）；封锁期内出示正确 secret 仍放行并解除封锁。交付历史（默认 200 条）与去重集合落 `$DSH_HOME/webhook-history.json`（原子写），**重启后历史保留、重发的同 delivery id 依旧去重**。
+触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（远程需显式开启 `webhookAllowRemote`）；401/429 与封锁各留一条日志和一条交付历史。限速按连接分桶 + 匿名认证失败桶（防「每次猜测换连接」绕过刹车）；封锁期内出示正确 secret 仍放行并解除封锁。交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合分落**两个文件**：历史在 `$DSH_HOME/webhook-history.json`，去重集在派生路径 `webhook-history.seen.json`（`seenPathFor()`，非新 config 键），两者都原子写，**重启后历史保留、重发的同 delivery id 依旧去重**。
 
 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
 
@@ -141,7 +141,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 | `codexHooksPath` | `$DSH_HOME/hooks.codex.json` | Codex 兄弟桥（手改文件） |
 | `cronTasksPath` | `$DSH_HOME/cron-tasks.json` | 定时任务存储 |
 | `webhookTriggersPath` | `$DSH_HOME/webhook-triggers.json` | Webhook 规则存储 |
-| `webhookHistoryPath` | `$DSH_HOME/webhook-history.json` | 交付历史存储（与去重集合同文件） |
+| `webhookHistoryPath` | `$DSH_HOME/webhook-history.json` | 交付历史存储；去重集在同目录的派生文件 `<同名>.seen.json` |
 | `auditLogPath` | `$DSH_HOME/admin-audit.jsonl` | 特权动作审计日志（追加写、上限 2000 行后压缩；密钥类参数按**键名**脱敏） |
 | `webhookAllowRemote` | `false` | webhook 入站是否接受**非本机**投递（默认只收本机，远程需显式开启） |
 | `webhookRateLimit` | `60` | 每个来源每 60 秒的入站请求上限（超出答 429 + `retry-after`；认证失败另有 10 次/分钟的封锁） |
@@ -159,8 +159,9 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 - **pnpm 操作数走 shell 元字符白名单**——`& | > < %` 等注入面不存在。
 - **原子写 + 权限收紧**：`package.json` / `cordis.patch.yml` / 全部 JSON 状态走 temp + rename，被替换的 patch 版本留滚动 `.bak`；凡是可能装着凭据的存储（patch 及其备份、hooks、MCP/子代理行、审计、webhook 规则、工作流脚本）创建即 `0600`，已存在的宽权限文件在下一次写入时收紧。
 - **进程树超时击杀**（`taskkill /T /F`）覆盖包与 MCP 探测操作，且异步 spawn——卡死的进程树不会冻结宿主事件循环。
-- **webhook 入站**：常量时间 secret 比较（两侧 SHA-256）、空 secret 拒绝一切、secret 在读 body 之前校验、1MiB 载荷上限、统一 401（不可枚举规则）。限速按来源（报不出地址的传输层按连接分桶，另加一个共享的暴力破解刹车——正确投递可解除封锁），封锁期内正确 secret 仍放行。
+- **webhook 入站**：常量时间 secret 比较（两侧 SHA-256）、空 secret 拒绝一切、secret 在读 body 之前校验、1MiB 载荷上限、统一 401（不可枚举规则）。**本机来源判定是解析而非前缀匹配**——严格 dotted-quad（四位 0–255）、`::1` 与 `::ffff:` 映射分别处理，主机名（含 `localhost`）与带端口文本一律不算本机。限速按来源（报不出地址的传输层按连接分桶，另加一个共享的暴力破解刹车——正确投递可解除封锁），封锁期内正确 secret 仍放行。**重放去重是"动作前占位 + 失败后释放"**：占位先于动作使崩溃中途的重投不会重复执行；而动作**上报失败**（如目标会话离线）会经 `release()` 交还 delivery id 并落盘，故发送方的重试能真正重跑，不会拿到 `202 {duplicate:true}` 后被永久吞掉。
 - **provider 密钥只写不回显**——MCP `env`/`headers`、CLI 后端 `env`、web-search `apiKey`、webhook `secret` 全部只投影键名 + 空值；保存时空值 = 沿用已存值。
+- **通用 CLI 后端的绝对路径受工作区栅门**（`assertTrustedCliPaths`）：裸命令名走 PATH 解析、不受限；绝对 `command`（决定跑哪个可执行文件）与绝对 `cwd` 必须落在本实例已知的工作区内。**可判定才拦截**——宿主没有 `workspaceRegistry`（纯 CLI / headless profile）时闸门让位，不改这些部署的既有行为。不变量：同源脚本无法把一个任意绝对路径的可执行文件持久化成子代理后端。
 - **危险删除双重确认**；同名会话删除按设计拒绝；会话日志目录绝不穿过符号链接/junction、也绝不从 sessions 根之外递归删除（删除路径先 `lstat` + realpath 包含性校验，推导出的删除路径先验身再动手）。
 - **工作流 `shell()` 与项目 `.agents` hooks 执行命令时，都按调用会话解析出的沙箱策略围栏**（`ctx.sandboxPolicy.resolve({ session })`，与同会话的 bash 工具同一套解析），因此会话被切到 `read-only` / `workspace-write` 时这两条路径同样受约束；`danger-full-access` 下与宿主一致不受围栏。宿主没有挂 `ctx.sandboxPolicy` 而执行器又是围栏型时，两条路径都**拒绝执行**而不是无围栏跑（项目 hooks 记一条告警后跳过，工作流 `shell()` 抛给脚本）。
 - **审批（`ctx.approval`）刻意不在这两条路径上**：dsh 只在调用方要**放宽**既定策略时才问审批（bash 工具的 `sandbox_permissions` 升级通道），普通受限命令不问；而审批服务的 `never` 策略——`danger-full-access` 部署下的默认值——会确定性地答 `rejected`，逐次询审批只会让恰好授权了全权的部署反而跑不动。本插件没有"放宽沙箱"的通道，所以也没有审批入口。workflow 的 `node:vm` realm 不是安全边界（脚本体与宿主同进程同信任级）。
@@ -168,14 +169,17 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 ## 6. 测试与接缝契约
 
 ```sh
-npm test   # 3 道静态闸门 + 35 个脚本（self-check / host-check / 32 个 verify-* / integration-check），共 38 步；数字以 npm test 输出为准
+npm test   # 6 道静态闸门 + 35 个脚本（self-check / host-check / 34 个 verify-* / integration-check），共 41 步；数字以 npm test 输出为准
 ```
 
 静态闸门（`npm test` 先跑，任一失败即中止）：
 
 - `check:types`：`tsc --noEmit`（`checkJs`）覆盖 `lib/**` 与 `src/client/**`；`lib/client.js` 作为产物被排除。
-- `check:lint`：oxlint。
+- `check:types-strict`：`tsconfig.strict.json` 的 `noImplicitAny` 覆盖一个**只增不减**的文件清单（并发正确性核心起步，见 CONTRIBUTING 的 strict 轨道一节）；清单覆盖全量后并入 `tsconfig.json` 并删掉该文件。
+- `check:lint`：oxlint（error 为闸门，warning 记录在案）。
 - `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
+- `verify-doc-claims`：**文档里可机械校验的声明必须与仓库一致**——步数 / 静态闸门数 / verify-* 脚本数、文档点名的脚本与模块路径是否存在、最新 CHANGELOG 各节的 `N → M checks` 是否自洽且不超出该套件声明的用例数、config 键数是否等于 `lib/index.js` 导出的两张表。它守的是整条链**自己的数字**，所以排在链首。
+- `verify-line-anchors`：**文档里的 `path:line` 锚点必须落在文件内**。行号锚点的失效方式比路径更隐蔽——重构把代码挪走后，文件与路径都还在，所以"路径存在"检查照旧全绿，而行号已经指向无关函数甚至越过文件末尾。本闸门就是为两个真实案例写的：`CHANGELOG.md` 与 `docs/COMPAT.md` 都曾引用 ~~`lib/index.js:1756-1795`（用量台账观察器），而 v1.26.2 的拆分把 `index.js` 从 3648 行减到 936 行，该行号早已不存在。三类分别处理：**本仓锚点**（`lib|src|scripts|types|docs/`）必须落在文件内；**上游锚点**（`packages/…`，指向未 vendored 的 dsh checkout）只校验形态，并在输出里**如实报告"未核对"**而不是假装通过——设 `DSH_CHECKOUT` 后按真实 checkout 核对；**反例引用**（在反引号前加 `~~`）不算声明，闸门跳过。锚点形态本身也有断言（只认已知顶层目录，裸文件名不算声明）。
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**142 条断言**，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝；条数以 `npm test` 输出为准）。
 - **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（**28 项断言**，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**21 次只读调用覆盖 13/14 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
