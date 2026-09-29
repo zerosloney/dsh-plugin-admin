@@ -7,7 +7,7 @@
  * Run: node scripts/verify-subagents-host.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -824,6 +824,106 @@ await check('apply(): generic upserts serialize (derived-id collision + one cont
     const persisted = JSON.parse(readFileSync(join(dir, 'subagent-admin.cli.json'), 'utf8'))
     assert.equal(persisted.backends.filter(item => item.providerName === 'cli-race').length, 1, 'exactly one row carries the contested name')
     assert.equal(settled.filter(item => item.status === 'rejected').length, 1, 'the loser rejects instead of double-writing')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/* 15 ── generic CLI absolute-path trust gate (I-3) */
+// An absolute `command` lets the caller choose WHICH executable a subagent
+// runs. With a workspaceRegistry present (always, in the web profile where this
+// RPC is reachable) that choice must stay inside a known workspace; a same-origin
+// script must not be able to persist `cmd.exe /c …` and then run it as a
+// subagent. A bare PATH name is untouched, and with NO registry the check is
+// undecidable, so the deployment's own absolute-path backends keep working.
+await check('apply(): absolute generic CLI command/cwd are gated to known workspaces', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-cli-gate-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
+    const workspaceRoot = join(dir, 'ws')
+    mkdirSync(workspaceRoot, { recursive: true })
+    const outside = join(dir, 'outside')
+    mkdirSync(outside, { recursive: true })
+    const escapeBin = join(outside, 'evil.exe')
+    writeFileSync(escapeBin, '')
+
+    const registered = { provided: null, providers: [] }
+    const fakeSubprocess = {
+      spawn: () => ({
+        collected: {
+          stdout: { readFrom: () => ({ text: 'ok' }) },
+          stderr: { readFrom: () => ({ text: '' }) },
+        },
+        done: Promise.resolve({ exitCode: 0 }),
+        terminate: async () => {},
+      }),
+    }
+    // A registry that reports exactly one workspace: the one realpath under
+    // `workspaceRoot`. This is what makes the gate decidable.
+    let registryEntries = [{ path: workspaceRoot }]
+    const ctx = {
+      baseUrl: dir,
+      get: (key) => {
+        if (key === 'subprocess') return fakeSubprocess
+        if (key === 'workspaceRegistry') return { list: () => registryEntries }
+        return undefined
+      },
+      logger: { warn: () => {} },
+      provide: (key, service) => { registered.provided = { key, service } },
+      effect: (fn) => { fn() },
+      tools: { schemas: () => [], get: () => undefined },
+      subagents: {
+        list: () => ['spawn', 'fork', ...registered.providers.map(item => item.name)],
+        getProvider: (name) => PROVIDERS.get(name),
+        registerProvider: (provider) => { registered.providers.push(provider); return () => {} },
+      },
+    }
+    applySubagentAdmin(ctx)
+    const service = registered.provided.service
+
+    // Inside a known workspace: allowed.
+    const inside = await service.cliUpsert({
+      payload: { kind: 'generic', backendId: 'cli-inside', config: { command: join(workspaceRoot, 'tool.exe'), providerName: 'cli-inside' } },
+    })
+    assert.equal(inside.backends.some(item => item.providerName === 'cli-inside'), true, 'a command inside a known workspace mounts')
+
+    // Outside every known workspace: refused, and nothing is persisted.
+    await assert.rejects(
+      () => service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-escape', config: { command: escapeBin, providerName: 'cli-escape' } } }),
+      /不在本实例已知的任何工作区内/,
+      'an absolute command outside every workspace is refused',
+    )
+    const afterRefusal = await service.cliList()
+    assert.equal(afterRefusal.backends.some(item => item.providerName === 'cli-escape'), false, 'the refused backend is not persisted')
+
+    // A bare PATH name is never gated (that is the panel's own preset flow).
+    const bare = await service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-bare', config: { command: 'gemini', providerName: 'cli-bare' } } })
+    assert.equal(bare.backends.some(item => item.providerName === 'cli-bare'), true, 'a bare PATH command name is not gated')
+
+    // `cwd` gets the same gate.
+    await assert.rejects(
+      () => service.cliUpsert({ payload: { kind: 'generic', backendId: 'cli-cwd', config: { command: 'gemini', providerName: 'cli-cwd', cwd: outside } } }),
+      /不在本实例已知的任何工作区内/,
+      'an absolute cwd outside every workspace is refused',
+    )
+
+    // A registry entry that no longer resolves must not lock the panel out of
+    // the roots that DO resolve.
+    registryEntries = [{ path: join(dir, 'gone') }, { path: workspaceRoot }]
+    const stillWorks = await service.cliUpsert({
+      payload: { kind: 'generic', backendId: 'cli-still', config: { command: join(workspaceRoot, 'tool.exe'), providerName: 'cli-still' } },
+    })
+    assert.equal(stillWorks.backends.some(item => item.providerName === 'cli-still'), true, 'a stale registry entry does not disable the gate')
+
+    // No registry at all: undecidable, so the gate stands down rather than
+    // breaking the CLI/headless deployments that configure absolute paths.
+    const bare2 = { provided: null, providers: [] }
+    const ctxNoRegistry = { ...ctx, get: (key) => (key === 'subprocess' ? fakeSubprocess : undefined), provide: (key, service) => { bare2.provided = { key, service } } }
+    applySubagentAdmin(ctxNoRegistry)
+    const noReg = await bare2.provided.service.cliUpsert({
+      payload: { kind: 'generic', backendId: 'cli-noreg', config: { command: escapeBin, providerName: 'cli-noreg' } },
+    })
+    assert.equal(noReg.backends.some(item => item.providerName === 'cli-noreg'), true, 'with no registry the gate stands down (undecidable)')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
