@@ -2099,6 +2099,88 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   assert.ok(!cachedOff.includes('mcp-servers'), 'a cached off survives a failed ask')
   const noCacheNoHost = await mountPanels(['plugins'], {}, { askFails: true })
   assert.ok(!noCacheNoHost.includes('extensions'), 'no cache + no host falls back to auto-yield')
+
+  /* Slot bookkeeping must not leak a live inject subscription for a panel that
+   * was installed and then turned OFF. The leak needs that exact order — an
+   * `off` decided during the eager pass never subscribes at all, so only
+   * `installed → off` leaves one behind. Pre-fix the leftover thunk stayed live
+   * (and, being the install guard's key, was also what re-registered the
+   * panel), so the internal maps disagreed about what was installed and the
+   * injected set grew with every off/on cycle. `uninstallOne` now drops the
+   * subscription too, leaving registration to `installOne` alone. */
+  {
+    const mountToggle = async (cache, answer) => {
+      dom.window.localStorage.removeItem('dsh-admin-panels')
+      dom.window.localStorage.removeItem(POLICY_CACHE)
+      if (cache) dom.window.localStorage.setItem(POLICY_CACHE, JSON.stringify(cache))
+      const regs = []
+      globalThis.window.__ModuleLoader__ = { load: (registration) => regs.push(registration) }
+      new Function('window', readFileSync(join(here, '../lib/client.js'), 'utf8'))(globalThis.window)
+      const ex = regs[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
+      const injected = []
+      const registered = []
+      ex.apply({
+        logger: ctx.logger,
+        effect: (fn) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+        connection: {
+          rpc: { call: () => Promise.resolve({ ok: true, value: { panels: answer } }) },
+        },
+        get: () => undefined,
+        slots: {
+          entries: () => [],
+          inject: (key, cb) => {
+            injected.push({ key, cb })
+            return () => { const at = injected.findIndex((entry) => entry.cb === cb); if (at !== -1) injected.splice(at, 1) }
+          },
+          register: (options, component) => {
+            registered.push({ options, component })
+            return () => { const at = registered.findIndex((entry) => entry.options.id === options.id); if (at !== -1) registered.splice(at, 1) }
+          },
+        },
+      })
+      const drain = () => { for (const entry of injected.slice()) entry.cb() }
+      // Eager pass uses the cached policy…
+      drain()
+      // …then the host's answer lands and reconciles a second time in the SAME mount.
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      drain()
+      // A third drain with no policy change must be idempotent: reconciling
+      // again may not duplicate or drop registrations.
+      drain()
+      return {
+        has: (id) => registered.some((entry) => entry.options.id === id),
+        subscriptions: () => injected.length,
+      }
+    }
+
+    // The regression: cached 'off' first, fresh answer 'on' second.
+    const recovered = await mountToggle({ mcp: 'off' }, { mcp: 'on' })
+    assert.ok(recovered.has('mcp-servers'), "a cached 'off' yields to the fresh 'on' answer (off → on recovers)")
+
+    // The reverse must still hold: cached 'on', answer 'off' uninstalls.
+    const removed = await mountToggle({ mcp: 'on' }, { mcp: 'off' })
+    assert.ok(!removed.has('mcp-servers'), "a cached 'on' yields to the fresh 'off' answer")
+
+    const offOnly = await mountToggle({ mcp: 'off' }, { mcp: 'off' })
+    assert.ok(!offOnly.has('mcp-servers'), "'off' both times installs nothing")
+
+    // And a plain mount is unaffected.
+    const onOnly = await mountToggle({ mcp: 'on' }, { mcp: 'on' })
+    assert.ok(onOnly.has('mcp-servers'), "'on' both times installs the panel")
+
+    /* THE LEAK ASSERTION. In `removed` (cached 'on' → answer 'off') the panel
+     * IS installed during the eager pass and then uninstalled, so its slot
+     * subscription must be gone afterwards: expect one fewer live subscription
+     * than an equivalent mount where the panel stays installed. Pre-fix the
+     * count was equal, because the subscription was never released. Compared
+     * within the same mount shape so unrelated panels cancel out. */
+    assert.equal(
+      removed.subscriptions(),
+      onOnly.subscriptions() - 1,
+      'uninstalling a panel releases its slot subscription (removed: ' + removed.subscriptions()
+        + ', still-installed: ' + onOnly.subscriptions() + ')',
+    )
+  }
 }
 
 console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

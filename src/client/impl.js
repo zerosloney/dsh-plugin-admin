@@ -890,6 +890,16 @@ function apply(ctx) {
     component: withLocale(lazyPanel('TodoAdminDock')),
   },
   ]
+  // `injectDisposers` and `registerDisposers` are tracked separately, and
+  // `uninstallOne` drops BOTH. Why the inject subscription is released too:
+  // without it the stale thunk stays live, and because the guard below keys off
+  // `injectDisposers` it is also the ONLY thing that re-registers the panel —
+  // the shell's next slot event fires that leftover thunk and the panel comes
+  // back. So the panel-visible behaviour happened to be right while the
+  // bookkeeping was not: an "uninstalled" panel kept a live subscription it
+  // should have dropped, and the two maps disagreed about what was installed.
+  // Releasing the subscription makes the maps agree and leaves registration to
+  // `installOne`, where it belongs.
   var injectDisposers = {}
   var registerDisposers = {}
   var installOne = function (spec) {
@@ -902,6 +912,14 @@ function apply(ctx) {
     })
   }
   var uninstallOne = function (panel) {
+    // Drop the inject subscription too, so a later reconcile can install again.
+    // Without this the slot stays injected (harmless in itself) while
+    // `installOne`'s guard keeps refusing to re-register — the actual bug.
+    var uninject = injectDisposers[panel]
+    if (uninject !== undefined) {
+      injectDisposers[panel] = undefined
+      try { uninject() } catch (error) { /* the fiber owns teardown too */ }
+    }
     var dispose = registerDisposers[panel]
     if (dispose === undefined) return
     registerDisposers[panel] = undefined
