@@ -378,6 +378,46 @@ await checkAsync('HTTP handler: redelivered x-webhook-delivery id is deduped (ac
   assert.equal(steered.length, before + 2, 'different id steers')
 })
 
+await checkAsync('HTTP handler: a FAILED action releases its delivery id so a retry can execute', async () => {
+  // The dedup claim used to be permanent even when the action threw, so the
+  // sender's retry was answered `202 {duplicate:true}` and the delivery was lost
+  // for good — across restarts, since the claim is persisted. Only a crash
+  // mid-action should keep the claim (a crash never reaches the release call).
+  await ctx.provided.webhookAdmin.saveRule({
+    id: 'offline-target',
+    secret: 'topsecret-key-16chars',
+    event: '',
+    action: { mode: 'steer', sessionId: 'session-not-live', steer: true },
+  })
+  const request = (delivery) => jsonRequest({ ruleId: 'offline-target', event: '', delivery })
+  const failed = mockRes()
+  await handler(request('retry-after-failure'), failed)
+  assert.equal(failed.statusCode, 503, 'an offline target is reported as a failure, not a success')
+  assert.ok(failed.body.includes('不在线'), 'the failure names the offline session')
+
+  // The SAME delivery id must now be allowed to execute. Re-point the rule at the
+  // live session, so a released id is observable as an actual steer.
+  await ctx.provided.webhookAdmin.saveRule({
+    id: 'offline-target',
+    secret: 'topsecret-key-16chars',
+    event: '',
+    action: { mode: 'steer', sessionId: 'session-live', steer: true },
+  })
+  const before = steered.length
+  const retry = mockRes()
+  await handler(request('retry-after-failure'), retry)
+  assert.equal(retry.statusCode, 202, 'the retry is accepted')
+  assert.ok(!retry.body.includes('duplicate'), 'the retry is NOT swallowed as a duplicate')
+  assert.equal(steered.length, before + 1, 'the retry actually steers')
+
+  // And it is claimed again afterwards: a THIRD delivery of the same id is deduped.
+  const third = mockRes()
+  await handler(request('retry-after-failure'), third)
+  assert.equal(third.statusCode, 202)
+  assert.ok(third.body.includes('duplicate'), 'once it succeeds, the id is claimed again')
+  assert.equal(steered.length, before + 1, 'the third delivery does not steer again')
+})
+
 await checkAsync('HTTP handler: 400 invalid JSON and 413 oversized body', async () => {
   let res = mockRes()
   await handler(jsonRequest({ body: '{nope' }), res)
@@ -738,6 +778,65 @@ await checkAsync('replay dedup persists across a remount (cross-restart idempote
     assert.equal(res3.statusCode, 202)
     assert.equal(JSON.parse(res3.body).duplicate, true, 'same delivery id deduped ACROSS the remount')
     assert.equal(steeredAll.length, 1, 'exactly one steer ever executed for this delivery id')
+  } finally {
+    for (const d of m.disposers.splice(0)) { try { d() } catch {} }
+  }
+})
+
+await checkAsync('a FAILED action releases its id ACROSS a restart too (the release is persisted)', async () => {
+  // A memory-only release would be undone by the on-disk dedup sidecar at the
+  // next mount, re-burning the id — so this asserts the persisted half of the fix.
+  const home = mkdtempSync(join(tmpdir(), 'webhook-release-'))
+  const routes = []
+  const steeredLocal = []
+  const mountLocal = () => {
+    const disposers = []
+    const c = {
+      baseUrl: pathToFileURL(join(home, 'node_modules', 'dsh-plugin-admin')).href,
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      get: (key) => {
+        if (key === 'agents') return { get: (sid) => (sid === 'live' ? { steer: (msg) => steeredLocal.push(msg), followup: () => {} } : undefined) }
+        if (key === 'webServer') return { register: (route) => { routes.push(route); return () => {} } }
+        return undefined
+      },
+      effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d },
+      inject: () => () => {},
+      provide: (key, service) => { c.provided ??= {}; c.provided[key] = service },
+    }
+    mkdirSync(join(home, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
+    writeFileSync(join(home, 'package.json'), JSON.stringify({ name: 'release-fixture', dependencies: {} }))
+    applyWebhookAdmin(c, {
+      enqueue: (op) => Promise.resolve().then(op),
+      runPnpm: null,
+      reconcileBundles: null,
+      settings: { webhookTriggersPath: join(home, 'triggers.json'), webhookHistoryPath: join(home, 'history.json') },
+    })
+    return { service: c.provided.webhookAdmin, handler: routes[routes.length - 1].handler, disposers }
+  }
+  const fire = (handler, delivery) => {
+    const res = mockRes()
+    return handler(mockReq({
+      url: '/webhook-triggers/rel',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': 'topsecret-key-16chars', 'x-webhook-delivery': delivery },
+      chunks: ['{}'],
+    }), res).then(() => res)
+  }
+
+  let m = mountLocal()
+  try {
+    // Target not online -> the action throws -> the id is released and persisted.
+    await m.service.saveRule({ id: 'rel', secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'offline', steer: true } })
+    const failed = await fire(m.handler, 'cross-restart-1')
+    assert.equal(failed.statusCode, 503, 'first attempt fails against the offline session')
+    for (const d of m.disposers.splice(0)) { try { d() } catch {} }
+
+    // "Restart" with the same sidecars, then point the rule at the live session.
+    m = mountLocal()
+    await m.service.saveRule({ id: 'rel', secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'live', steer: true } })
+    const retry = await fire(m.handler, 'cross-restart-1')
+    assert.equal(retry.statusCode, 202)
+    assert.equal(JSON.parse(retry.body).duplicate, undefined, 'the released id is NOT a duplicate after the restart')
+    assert.equal(steeredLocal.length, 1, 'the retry executes across the restart')
   } finally {
     for (const d of m.disposers.splice(0)) { try { d() } catch {} }
   }

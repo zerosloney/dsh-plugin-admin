@@ -124,6 +124,24 @@ await check('address helpers: loopback, IPv4-mapped loopback, and transport fall
   assert.equal(remoteAddressOf({ socket: {} }), null, 'a hidden transport reports null, not a fake address')
 })
 
+// The predicate used to end in a bare `addr.startsWith('127.')`, so any TEXT
+// beginning with `127.` was accepted as this machine. The stock http transport
+// always reports a kernel-derived literal, but this function is exported and is
+// the only gate on an unauthenticated steer, and the module already supports
+// transports that supply an address it did not derive from a socket.
+await check('loopback is PARSED, not prefix-matched (hostname/port spoofing is not this machine)', () => {
+  assert.equal(isLoopbackAddress('127.evil.com'), false, 'a hostname starting with 127. is not the loopback IP')
+  assert.equal(isLoopbackAddress('127.0.0.1.evil.com'), false, 'a suffix after the literal is not loopback')
+  assert.equal(isLoopbackAddress('127.0.0.1:8080'), false, 'a port suffix is not a bare address')
+  assert.equal(isLoopbackAddress('127.0.0.1\tx'), false)
+  assert.equal(isLoopbackAddress('localhost'), false, 'a hostname is not proof of locality')
+  assert.equal(isLoopbackAddress('127.0.0.1 '), false, 'trailing whitespace is not trimmed into trust')
+  assert.equal(isLoopbackAddress('1270.0.0.1'), false)
+  assert.equal(isLoopbackAddress('127.0.0.256'), false, 'an out-of-range octet is not an address')
+  assert.equal(isLoopbackAddress('127.1'), false, 'shorthand forms are refused, not silently accepted')
+  assert.equal(isLoopbackAddress('127.0.0.1'), true, 'the real literal still passes')
+})
+
 await check('the secret comparison is timing-safe and length-agnostic', () => {
   assert.equal(secretMatches(SECRET, SECRET), true)
   assert.equal(secretMatches(SECRET, SECRET.slice(0, -1)), false)
