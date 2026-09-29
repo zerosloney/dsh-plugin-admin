@@ -25,10 +25,12 @@ const CLIENT_DIR = join(here, '../src/client')
 // Every module of the browser half, discovered rather than listed: Phase B2
 // moved the panels into their own source file, and a hardcoded list would have
 // quietly stopped checking 800+ call sites.
-const clientFiles = readdirSync(CLIENT_DIR).filter((file) => file.endsWith('.js')).sort()
+const clientFiles = readdirSync(CLIENT_DIR, { recursive: true })
+  .map((file) => file.split(/[\\/]/).join('/'))
+  .filter((file) => file.endsWith('.js')).sort()
 const clientSources = new Map(clientFiles.map((file) => [file, readFileSync(join(CLIENT_DIR, file), 'utf8')]))
 const src = [...clientSources.values()].join('\n')
-const i18nSrc = clientSources.get('i18n.js') ?? ''
+const i18nSrc = [...clientSources.entries()].find(([file]) => file.endsWith('i18n.js'))?.[1] ?? ''
 const CJK = /[\u4e00-\u9fff\u3400-\u4dbf]/
 
 // -- 1. every dshT('…') argument decodes to a dictionary key -----------------

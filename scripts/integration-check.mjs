@@ -596,7 +596,7 @@ const PROBES = [
     checks: [
       ['every atom the client sources import is exported upstream', t => {
         const names = new Set()
-        for (const file of readdirSync(PLUGIN_CLIENT_DIR).filter((f) => f.endsWith('.js'))) {
+        for (const file of readdirSync(PLUGIN_CLIENT_DIR, { recursive: true }).map((f) => f.split(/[\\/]/).join('/')).filter((f) => f.endsWith('.js'))) {
           const source = readFileSync(join(PLUGIN_CLIENT_DIR, file), 'utf8')
           for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*'@deepseek-ai\/dsh-client-ui-primitives'/g)) {
             for (const part of m[1].split(',')) {

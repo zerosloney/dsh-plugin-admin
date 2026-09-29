@@ -263,9 +263,12 @@ assert.deepEqual(
 
   // 2. client side: scan every call('ns/method', ...) site.
   const clientDir = join(here, '..', 'src', 'client')
-  // Every module of the browser half (Phase B2 moved the panels into their own
-  // source file; a hardcoded list would silently stop seeing their call sites).
-  const clientFiles = readdirSync(clientDir).filter((file) => file.endsWith('.js')).sort()
+  // Every module of the browser half (Phase B2 moved the panels out of the
+  // entry; the panels/ tree followed in the apply() split — recurse, or the
+  // scan silently stops seeing their call sites).
+  const clientFiles = readdirSync(clientDir, { recursive: true })
+    .map((file) => file.split(/[\\/]/).join('/'))
+    .filter((file) => file.endsWith('.js')).sort()
   const clientText = clientFiles.map((file) => readFileSync(join(clientDir, file), 'utf8')).join('\n')
   const splitArgs = (text) => {
     const parts = []

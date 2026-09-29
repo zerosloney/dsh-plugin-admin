@@ -75,6 +75,8 @@
 
 零测试框架：每个 verify 脚本是独立 node 进程，`mkdtempSync` 临时目录自清理，断言用 `node:assert`，时间相关用例用固定时间戳或全局 stub 保证确定性。新脚本写好后加进 `scripts/run-gate.mjs` 的 `STEPS` 表（保持「静态闸门 → self/host-check → verify 链 → integration-check」的段序），`npm test` 自动带上。
 
+Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，oxlint 的 `react/hooks` / `react/rules-of-hooks` 只在 `.jsx`/`.tsx` 上触发（实测），自动闸门覆盖不到——新增组件请保持「hook 调用顶层无条件、`useState` 经 `var` 解构自 React」的既有模式。
+
 ## 环境
 
 Node ≥ 22.19（或 ≥ 24）；`npm ci` 后即可跑全部门禁（`smoke:real-host` 例外，另需 dsh CLI + pnpm）。

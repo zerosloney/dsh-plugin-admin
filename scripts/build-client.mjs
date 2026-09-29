@@ -51,7 +51,7 @@ const checkOnly = process.argv.includes('--check')
 /** One artifact: the entry, where it lands, and its loader registration. */
 const ARTIFACTS = [
   { entry: 'src/client/index.js', out: 'lib/client.js', chunk: null },
-  { entry: 'src/client/panels.js', out: 'lib/client.panels.js', chunk: 'client.panels.js' },
+  { entry: 'src/client/panels/index.js', out: 'lib/client.panels.js', chunk: 'client.panels.js' },
 ]
 
 function facade(bundled, chunkName) {
