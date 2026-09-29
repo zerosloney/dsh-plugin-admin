@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-09-29
+
 ### Added
 
 - **`smoke:real-host` 步骤 8：真实 Chromium 里的会话面板渲染计时（O-1 的判决数据）**。结论：**O-1 不建议做**——重建 400 张会话卡片在真实浏览器里的**净开销低于测量噪声**（100 / 400 / 800 会话分别为 −0.40 / −0.30 / −0.10 ms）。探针自带**对照组**（同样的双 rAF 等待但不调 `onChange`），并在语料未真正渲染时**拒绝报告数字**。三个被推翻的假数据全是"量到了漂亮数字但量错了对象"：①jsdom 的 170 ms/按键 → CPU profile 显示自耗时分散在 jsdom 的 DOM/CSS 路径、无我方热点，同一份 400 卡片在裸 React+jsdom 里只要 2.7 ms；②第一版真实浏览器探针报 `median 0.00 ms` → React 18 批处理 setState，`onChange` 立即返回、渲染尚未发生；③第二版报"稳定 33 ms 且 100→800 会话完全一样" → 33 ms 正好是 60 Hz 两帧的节拍，加上无 onChange 的对照后净开销变成 −0.3 ms。另有一次"DOM 从 9 374 崩到 572"看似面板重挂载，实为探针查询 `perf-0` 只匹配 400 行里的 1 行；现固定用"匹配全部"的查询并逐次打印节点数当哨兵。顺带排除：插件 bundle 内**没有 `fetch(` 也没有 `XMLHttpRequest`**，RPC 走 shell 注入的 `ctx.connection.rpc`；用 CDP 对 fetch/XHR/WebSocket/EventSource/sendBeacon 全部埋点后确认 shell 自身用 fetch，但对它打桩并不能截获面板的 RPC。保留的结构性结论：`SESSION_RENDER_CAP = 400` 是**截断而非虚拟化**（产品取舍，非性能问题）；`sectionState` 的 `patch` 每次渲染都是新函数且作为 prop 传给每张卡片——**将来若要加 `React.memo` 必须先用 `useCallback` 固定它**，否则浅比较永远失败、memo 等于没加。
