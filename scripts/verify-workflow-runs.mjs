@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRunRegistry } from '../lib/workflow-runs.js'
@@ -295,6 +295,174 @@ await check('list includes persisted runs after restart', async () => {
   assert.equal(found.status, 'completed')
 })
 
+/* ---- O-2：list() 的摘要侧车 ---- */
+// list() 曾经把每个 journal 整份读进来再 JSON.parse，而 journal 装着每步的
+// prompt 与完整 outcome——宿主线程上的同步读，面板轮询反复触发。侧车让 list()
+// 只读 13 个标量字段。这组用例锁住三件事：侧车真的写了、它的内容与整读等价、
+// 以及缺侧车的旧目录仍能正确列出（升级兼容）。
+await check('persist() writes a summary sidecar beside the journal', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'sidecar-write')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `return await agent('x')`, parent: { id: 'sess-sidecar' } })
+  await runToDone({ id }, r)
+  const dir = join(home, 'workflows', 'runs')
+  const files = readdirSync(dir)
+  assert.ok(files.includes(id + '.json'), 'the journal exists')
+  assert.ok(files.includes(id + '.summary.json'), 'the sidecar exists beside it')
+  const sidecar = JSON.parse(readFileSync(join(dir, id + '.summary.json'), 'utf8'))
+  // The sidecar must NOT carry the heavy fields — that is its entire point.
+  assert.equal(sidecar.steps, undefined, 'the sidecar carries no steps array')
+  assert.equal(sidecar.log, undefined, 'the sidecar carries no log array')
+  assert.equal(sidecar.script, undefined, 'the sidecar carries no script body')
+  assert.equal(sidecar.id, id, 'but it does identify the run')
+})
+
+await check('list() from sidecars equals list() from full journals (legacy fallback parity)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'sidecar-parity')
+  const r = makeRegistry(bundle.ctx, home)
+  const ids = []
+  for (const prompt of ['a', 'b', 'c']) {
+    const { id } = await r.start({ script: `return await agent(${JSON.stringify(prompt)})`, parent: { id: 'sess-parity' } })
+    await runToDone({ id }, r)
+    ids.push(id)
+  }
+  const dir = join(home, 'workflows', 'runs')
+  const withSidecars = r.list().sort((x, y) => String(x.id).localeCompare(String(y.id)))
+  // Remove every sidecar: this is exactly what a directory written by an older
+  // build looks like, and it must still list correctly.
+  for (const file of readdirSync(dir)) {
+    if (file.endsWith('.summary.json')) rmSync(join(dir, file), { force: true })
+  }
+  const withoutSidecars = makeRegistry(bundle.ctx, home).list().sort((x, y) => String(x.id).localeCompare(String(y.id)))
+  assert.equal(withoutSidecars.length, withSidecars.length, 'same number of runs either way')
+  assert.deepEqual(withoutSidecars, withSidecars, 'the sidecar path and the fallback path agree field for field')
+  assert.equal(withSidecars.length, ids.length, 'every seeded run is listed')
+})
+
+await check('a stale sidecar cannot outlive the status change it describes', async () => {
+  // The sidecar is written in the SAME queue slot as the journal, so the two can
+  // never describe different revisions. Lock that in: after a run is stopped, the
+  // sidecar must report the stopped status, not the running one it was written
+  // with while the run was live.
+  const bundle = makeCtx({ slow: true })
+  const home = join(tmpBase, 'sidecar-stale')
+  const r = makeRegistry(bundle.ctx, home, { stopSettleTimeoutMs: 2000 })
+  const { id } = await r.start({ script: `await agent('slow'); return 1`, parent: { id: 'sess-stale' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await r.stop(id, 'test')
+  const sidecar = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.summary.json'), 'utf8'))
+  assert.notEqual(sidecar.status, 'running', 'the sidecar does not still claim the run is running')
+  const listed = makeRegistry(bundle.ctx, home).list().find((x) => x.id === id)
+  assert.ok(listed, 'the run is listed from its sidecar after a restart')
+  assert.equal(listed.status, sidecar.status, 'the restart listing agrees with the sidecar on disk')
+})
+
+await check('a run whose sidecar is corrupt still lists (falls back to the journal)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'sidecar-corrupt')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `return await agent('c')`, parent: { id: 'sess-corrupt' } })
+  await runToDone({ id }, r)
+  const dir = join(home, 'workflows', 'runs')
+  writeFileSync(join(dir, id + '.summary.json'), '{ this is not json')
+  const listed = makeRegistry(bundle.ctx, home).list().find((x) => x.id === id)
+  assert.ok(listed, 'a corrupt sidecar does not hide the run')
+  assert.equal(listed.status, 'completed', 'the fallback read recovered the real status')
+})
+
+/* ---- O-2 写入侧：steps 走 append-only JSONL ---- */
+// journal 的载荷 96.7% 是 steps 数组，而旧 persist() 每步把整个 record 重新
+// 序列化并重写全文件——写入量是步骤数的平方（实测 200 步：697 MB 写入换来
+// 1.7 MB 文件）。steps 挪到 <runId>.steps.jsonl 后按追加写，写入量降到 O(N)。
+// 这组用例锁住格式契约与兼容性，因为改的是**磁盘格式**。
+await check('steps live in an append-only JSONL, not in the journal', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'steps-jsonl')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `const a = await agent('one')\nconst b = await agent('two')\nreturn a + b`, parent: { id: 'sess-jsonl' } })
+  await runToDone({ id }, r)
+  const dir = join(home, 'workflows', 'runs')
+  const journal = JSON.parse(readFileSync(join(dir, id + '.json'), 'utf8'))
+  assert.equal(journal.steps, undefined, 'the journal no longer carries the steps array')
+  const jsonl = readFileSync(join(dir, id + '.steps.jsonl'), 'utf8')
+  const lines = jsonl.trim().split('\n').filter(Boolean)
+  assert.ok(lines.length > 0, 'the steps JSONL has entries')
+  for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), 'every JSONL line parses')
+  // The two agent() calls each produce a before + after entry.
+  const steps = lines.map((l) => JSON.parse(l))
+  assert.ok(steps.length >= 4, `expected at least 2 calls x 2 phases, got ${steps.length}`)
+  assert.ok(steps.some((s) => s.phase === 'before') && steps.some((s) => s.phase === 'after'), 'both phases are recorded')
+})
+
+await check('loadRecord reassembles steps so get()/amend see the same shape as before', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'steps-assemble')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `const a = await agent('x')\nreturn a`, parent: { id: 'sess-asm' } })
+  await runToDone({ id }, r)
+  // A fresh registry = a restart; it must read the steps back from the JSONL.
+  const r2 = makeRegistry(bundle.ctx, home)
+  const viaGet = r2.get(id)
+  assert.ok(Array.isArray(viaGet.steps), 'get() returns a steps array')
+  assert.ok(viaGet.steps.length >= 2, `get() sees the reassembled steps (got ${viaGet.steps.length})`)
+  // And stepCount, which the panel shows, agrees with the array length.
+  const listed = r2.list().find((x) => x.id === id)
+  assert.equal(listed.stepCount, viaGet.steps.length, 'list().stepCount matches the reassembled array')
+  // amend must be able to use those steps as a cache source.
+  const amended = await r2.amend(id, `const a = await agent('x')\nreturn a`, { parent: { id: 'sess-asm' } })
+  await r2.join(amended.id)
+  assert.ok(amended.id, 'amend from a JSONL-backed journal succeeds')
+})
+
+await check('a truncated final JSONL line keeps every complete step before it', async () => {
+  // Appending is not atomic, so a process killed mid-append leaves a partial last
+  // line. That must cost AT MOST that one line — the old format lost the whole
+  // file when a full rewrite was interrupted.
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'steps-torn')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `await agent('a')\nawait agent('b')\nreturn 1`, parent: { id: 'sess-torn' } })
+  await runToDone({ id }, r)
+  const file = join(home, 'workflows', 'runs', id + '.steps.jsonl')
+  const original = readFileSync(file, 'utf8')
+  const lineCount = original.trim().split('\n').length
+  // Chop the last line in half, simulating a kill during append.
+  writeFileSync(file, original.slice(0, original.length - 12))
+  const r2 = makeRegistry(bundle.ctx, home)
+  const rec = r2.get(id)
+  assert.ok(Array.isArray(rec.steps), 'the run still reads')
+  assert.equal(rec.steps.length, lineCount - 1, `every complete line survives (expected ${lineCount - 1}, got ${rec.steps.length})`)
+  assert.ok(rec.steps.length > 0, 'and the earlier steps are intact')
+})
+
+await check('a legacy journal with inline steps still loads (no migration on read)', async () => {
+  // Runs written by an older build keep steps INLINE in the journal and have no
+  // JSONL. They must keep working, and reading must not rewrite anything.
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'steps-legacy')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `await agent('legacy')\nreturn 1`, parent: { id: 'sess-legacy' } })
+  await runToDone({ id }, r)
+  const dir = join(home, 'workflows', 'runs')
+  // Reconstruct an old-style journal: inline the steps, drop the JSONL.
+  const journal = JSON.parse(readFileSync(join(dir, id + '.json'), 'utf8'))
+  const steps = readFileSync(join(dir, id + '.steps.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  journal.steps = steps
+  writeFileSync(join(dir, id + '.json'), JSON.stringify(journal))
+  rmSync(join(dir, id + '.steps.jsonl'), { force: true })
+  rmSync(join(dir, id + '.summary.json'), { force: true })
+
+  const r2 = makeRegistry(bundle.ctx, home)
+  const rec = r2.get(id)
+  assert.equal(rec.steps.length, steps.length, 'the inline steps are still read')
+  // The read path must NOT have created a JSONL (list()/get() are read paths).
+  assert.equal(existsSync(join(dir, id + '.steps.jsonl')), false, 'reading a legacy run does not migrate it')
+  const listed = r2.list().find((x) => x.id === id)
+  assert.equal(listed.stepCount, steps.length, 'list() counts the inline steps of a legacy run')
+})
+
 await check('resume continues a stopped run from cache', async () => {
   const bundle = makeCtx({ slow: true })
   const home = join(tmpBase, 'i')
@@ -393,6 +561,30 @@ await check('stop gives up waiting on an abort-ignoring script (abandoned, not h
 })
 
 // ─── P4b：ask / answer 提问链路 ───────────────────────────────────────────────
+
+// The settle-budget timer must be CLEARED when `handle.done` wins the race.
+// Pre-fix every stop()/amend() of an instantly-settling run left a live Timeout
+// referenced by the event loop for the whole budget: measured 12 leaked handles
+// after 12 stop() calls, and a bare process kept its loop alive accordingly.
+await check('stop() does not leak its settle-budget timer when the run settles first', async () => {
+  const home = join(tmpBase, 'stop-timer')
+  // A budget long enough that a leaked timer is unmistakably still pending.
+  const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 30_000 })
+  const countTimers = () => process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length
+  // Warm up so module-level timers are already accounted for.
+  const warm = await r.start({ script: 'return 0', parent: { id: 'sess-timer' } })
+  await r.stop(warm.id, 'warmup')
+  const before = countTimers()
+  for (let i = 0; i < 10; i += 1) {
+    const { id } = await r.start({ script: 'return ' + i, parent: { id: 'sess-timer' } })
+    await r.stop(id, 'test')
+  }
+  const after = countTimers()
+  assert.ok(
+    after - before <= 1,
+    `stop() must not accumulate budget timers (was ${before}, now ${after} after 10 instant stops)`,
+  )
+})
 
 // 挂起的问题不会自己出现：轮询到 pendingQuestion 落下来。
 async function waitForQuestion(id, registry) {
