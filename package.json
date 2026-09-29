@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "1.26.1",
+  "version": "1.26.2",
   "type": "module",
   "description": "dsh Web UI admin plugin: eleven management panels (extensions, skills, MCP servers, subagents, commands, hooks, automation - cron / webhook / workflow, sessions & web search, usage dashboard, todo dock) inside the official dsh settings UI",
   "main": "lib/index.js",

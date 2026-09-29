@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.26.2] - 2026-09-29
+
 ### Changed
 
 - **原子写配方收敛为 `writeTextAtomic` / `writeJsonAtomic`**（`lib/patch-utils.js`）：`tempPathFor + writeFileSync(0o600) + atomicRename` 三行配方此前在 9 处各写一遍、0600 的凭据理由只有 webhook 一处有注释——收敛后理由住进 helper 一处，cron / webhook×3 / usage-ledger / subagent / command-hook / workflow / plugin-admin manifest 全部改挂（行为逐字节等价）；audit-log 的 JSONL 压实与 writePatch 自身路径刻意不动。
