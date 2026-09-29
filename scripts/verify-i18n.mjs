@@ -85,4 +85,97 @@ assert.ok(i18nSrc.includes('locale.register(I18N_NS, { zh: I18N_ZH, en: I18N_EN 
 // -- 7. the runtime falls back, so an unknown key degrades, never breaks -----
 assert.ok(i18nSrc.includes('function dshT'), 'dshT runtime present')
 
-console.log(`verify-i18n OK: ${callSites.size} call sites, ${dict.size} entries, ${selectorProbes.length} selector probes exempt, ${iconKeys.size} icon keys`)
+// -- 8. no BARE CJK string literals outside dshT(...) ------------------------
+// Section 4 only checks "dshT call site ↔ dictionary"; a UI string that never
+// got wrapped in dshT('…') sailed past both gates (the workflow library's
+// delete-confirm 「取消」 did, until v1.26.x). So scan every single-quoted
+// literal in the browser half for CJK and demand it is either wrapped, a
+// dictionary/icon line, or on the explicit allowlist below. Comments are
+// stripped first (a prose apostrophe can otherwise splice a fake literal).
+//
+// New allowlist entry = you deliberately added non-translated Chinese content:
+// add one line with the reason, not a new exemption mechanism.
+const ALLOWED_BARE_CJK = [
+  // native-coverage.js is a data table: panel labels + official-coverage
+  // notes, Chinese by design (the labels are keyed, not rendered verbatim).
+  // Enumerated, not file-exempt: a new bare string there must be a decision.
+  { text: '扩展插件', why: '官方覆盖数据表（标签+说明），刻意中文' },
+  { text: '插件侧边栏页 (ui-plugin-manager)', why: '官方覆盖数据表' },
+  { text: 'MCP 服务器', why: '官方覆盖数据表' },
+  { text: '无（仅宿主 mcp-client）', why: '官方覆盖数据表' },
+  { text: '技能', why: '官方覆盖数据表' },
+  { text: 'ui-skill（/ 触发与调用卡片）', why: '官方覆盖数据表' },
+  { text: '子智能体', why: '官方覆盖数据表' },
+  { text: 'ui-settings-subagent（深度/容量/模型）', why: '官方覆盖数据表' },
+  { text: '命令', why: '官方覆盖数据表' },
+  { text: 'ui-commands（客户端命令 API', why: '官方覆盖数据表' },
+  { text: '钩子', why: '官方覆盖数据表' },
+  { text: '无（宿主 hook 协议', why: '官方覆盖数据表' },
+  { text: 'Web 与会话', why: '官方覆盖数据表' },
+  { text: 'ui-workspace（浏览/归档/重命名/分叉）', why: '官方覆盖数据表' },
+  { text: 'Web 搜索', why: '官方覆盖数据表' },
+  { text: 'ui-settings-web-search（官方 provider 的配置页）', why: '官方覆盖数据表' },
+  { text: '用量仪表盘', why: '官方覆盖数据表' },
+  { text: '无（dsh 的 token 记账只存在于会话日志）', why: '官方覆盖数据表' },
+  { text: '自动化', why: '官方覆盖数据表' },
+  { text: 'ui-schedule（会话级任务）', why: '官方覆盖数据表' },
+  { text: '待办清单', why: '官方覆盖数据表' },
+  { text: 'ui-conversation TodoPanel（conversation.input.dock 的 todo 条）', why: '官方覆盖数据表' },
+  // Byte-exact probes against the HOST's rendered menu text — translating
+  // these would break the dock's icon detection.
+  { text: '归档会话', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
+  { text: '删除', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
+  // Host-side log lines are not UI chrome; zh logs are the file's convention.
+  { text: '官方已覆盖，让位面板：', why: '宿主日志文案，非界面 chrome' },
+  // The language picker shows each language in its own name, like 'English'.
+  { text: '中文', why: '语言选择器的语言自称（同 English）' },
+  // Template seed content the user is expected to edit: cron/webhook prompt
+  // seeds, the workflow example script, and the workflow template cards.
+  { text: '早安。请给我一份今日简报', why: 'cron 模板种子 prompt（用户可编辑内容）' },
+  { text: '本周快结束了', why: 'cron 模板种子 prompt（用户可编辑内容）' },
+  { text: '例行巡检', why: 'cron 模板种子 prompt（用户可编辑内容）' },
+  { text: 'CI 失败了', why: 'webhook 模板种子 prompt（用户可编辑内容）' },
+  { text: '收到新的 GitHub Issue', why: 'webhook 模板种子 prompt（用户可编辑内容）' },
+  { text: '生产报警', why: 'webhook 模板种子 prompt（用户可编辑内容）' },
+  { text: '审查 ', why: 'workflow 示例脚本体（用户可编辑内容）' },
+  { text: '主题总结', why: 'workflow 模板种子（label 死数据，渲染走 dshT）' },
+  { text: '双角度分析', why: 'workflow 模板种子（label 死数据，渲染走 dshT）' },
+  { text: '润色流水线', why: 'workflow 模板种子（label 死数据，渲染走 dshT）' },
+  { text: '一步工作流', why: 'workflow 示例脚本注释（种子内容）' },
+  { text: '并行工作流', why: 'workflow 示例脚本注释（种子内容）' },
+  { text: '流水线工作流', why: 'workflow 示例脚本注释（种子内容）' },
+  { text: '请用不超过 200 字总结', why: 'workflow 示例脚本体（种子内容）' },
+  { text: '从技术架构角度分析', why: 'workflow 示例脚本体（种子内容）' },
+  { text: '从使用体验角度分析', why: 'workflow 示例脚本体（种子内容）' },
+  { text: '为「', why: 'workflow 示例脚本体（种子内容）' },
+  { text: '写一段 50 字介绍', why: 'workflow 示例脚本体（种子内容）' },
+  { text: '润色得更口语化', why: 'workflow 示例脚本体（种子内容）' },
+]
+
+const stripComments = (text) => text
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+
+/** @type {Array<{ file: string, line: number, text: string }>} */
+const bare = []
+for (const [file, rawSrc] of clientSources) {
+  const stripped = stripComments(rawSrc)
+  // Covered spans: dshT('…') calls, dictionary lines, icon-key lines —
+  // recomputed on the STRIPPED text so spans stay in sync.
+  const covered = []
+  for (const m of stripped.matchAll(/\bdshT\('((?:[^'\\]|\\.)*)'\)/g)) covered.push([m.index, m.index + m[0].length])
+  for (const m of stripped.matchAll(/^ {2}("(?:[^"\\]|\\.)*"): (""|"(?:[^"\\]|\\.)*"),$/gm)) covered.push([m.index, m.index + m[0].length])
+  for (const m of stripped.matchAll(/^ {2}'([^']*[\u4e00-\u9fff][^']*)': /gm)) covered.push([m.index, m.index + m[0].length])
+  const inCovered = (i) => covered.some(([a, b]) => i >= a && i < b)
+  for (const m of stripped.matchAll(/'([^'\\\n]*)'/g)) {
+    const text = m[1]
+    if (!CJK.test(text)) continue
+    if (inCovered(m.index)) continue
+    if (ALLOWED_BARE_CJK.some((e) => (e.file === undefined || e.file === file) && (e.text === null || text.includes(e.text)))) continue
+    bare.push({ file, line: stripped.slice(0, m.index).split('\n').length, text: text.slice(0, 60) })
+  }
+}
+assert.deepEqual(bare, [],
+  `bare CJK literal(s) outside dshT(): ${JSON.stringify(bare.slice(0, 5))}`)
+
+console.log(`verify-i18n OK: ${callSites.size} call sites, ${dict.size} entries, ${selectorProbes.length} selector probes exempt, ${iconKeys.size} icon keys, ${ALLOWED_BARE_CJK.length} bare-CJK allowlist entries`)

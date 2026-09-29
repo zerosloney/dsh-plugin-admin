@@ -7671,7 +7671,7 @@ function WorkflowSection(props) {
         ? h('button', { key: 'del-yes', onClick: function () { deleteSaved(rec.name, rec.scope) }, style: btnStyle('#c00', '#fff') }, dshT('确认删除'))
         : h('button', { key: 'del', onClick: function () { patch({ confirmDelete: rec.name + ':' + rec.scope }) }, style: btnStyle() }, dshT('🗑 删除')),
       isConfirm
-        ? h('button', { key: 'del-no', onClick: function () { patch({ confirmDelete: null }) }, style: btnStyle() }, '取消')
+        ? h('button', { key: 'del-no', onClick: function () { patch({ confirmDelete: null }) }, style: btnStyle() }, dshT('取消'))
         : null,
     ])
     row.push(actions)
