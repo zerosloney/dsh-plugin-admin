@@ -26,6 +26,14 @@
  * Requires a `dsh` on PATH (any version in the supported range). Without one the
  * script SKIPS with exit 0 so it can sit in an opt-in pipeline.
  *
+ * Package mode — set SMOKE_PACKAGE_SPEC to install from a REGISTRY spec
+ * (e.g. SMOKE_PACKAGE_SPEC=dsh-plugin-admin@1.26.1) instead of linking this
+ * checkout. This is the post-publish leg of release.yml: it exercises the
+ * artifact npm users actually receive, and asserts the files whitelist ships
+ * what the docs point at (the v1.26.x regression where docs/ left the
+ * tarball was invisible to every path-based check). Browser section runs
+ * only when a browser is present, as usual.
+ *
  * Run: npm run smoke:real-host      (or: node scripts/smoke-real-host.mjs)
  */
 import { spawn, spawnSync } from 'node:child_process'
@@ -35,6 +43,9 @@ import { relative } from 'node:path'
 import { join } from 'node:path'
 
 const PLUGIN_DIR = process.cwd().replace(/\\/g, '/')
+const PACKAGE_SPEC = typeof process.env.SMOKE_PACKAGE_SPEC === 'string' && process.env.SMOKE_PACKAGE_SPEC.trim() !== ''
+  ? process.env.SMOKE_PACKAGE_SPEC.trim()
+  : null
 const PROFILE = 'smoke'
 const BOOT_TIMEOUT_MS = 120_000
 
@@ -138,7 +149,10 @@ try {
   if (created.status !== 0) fail('profile creation', String(created.stderr || created.stdout).slice(-300))
   else ok('profile created (dump-config, no boot)', `DSH_HOME=${home}`)
 
-  const added = cli(['plugin', '--profile', PROFILE, 'add', `link:${PLUGIN_DIR}`], env)
+  // Package mode installs the published artifact from the registry; default
+  // mode links this checkout (the development path, unchanged).
+  const installSpec = PACKAGE_SPEC ?? `link:${PLUGIN_DIR}`
+  const added = cli(['plugin', '--profile', PROFILE, 'add', installSpec], env)
   if (added.status !== 0) {
     // dsh FORWARDS pnpm's own output to its stdout while it writes its summary
     // ("plugin command failed; diagnostics: …") to stderr: both must be read, or
@@ -158,7 +172,20 @@ try {
     if (forwarded.length > 0) parts.push('output: ' + forwarded.slice(-12).join(' | ').slice(-500))
     if (logTail !== '') parts.push('log: ' + logTail.slice(-300))
     fail('plugin install', parts.join(' :: ') || `exit ${added.status}`)
-  } else ok('plugin installed into the profile', `link:${PLUGIN_DIR}`)
+  } else ok('plugin installed into the profile', installSpec)
+
+  // Package mode: the artifact users receive must ship what the docs point at.
+  // A files-whitelist gap ("docs/ left the tarball", v1.26.x) is invisible to
+  // every path-based check because the checkout always has the files — only a
+  // REGISTRY install can catch it.
+  if (PACKAGE_SPEC !== null) {
+    // dsh's profile layout: $DSH_HOME/profiles/<name>/node_modules/…
+    const installedDir = join(home, 'profiles', PROFILE, 'node_modules', 'dsh-plugin-admin')
+    for (const rel of ['package.json', 'cordis.patch.yml', 'docs/ARCHITECTURE.md', 'docs/COMPAT.md', 'README.md', 'README.en.md']) {
+      if (existsSync(join(installedDir, ...rel.split('/')))) ok(`published package ships ${rel}`, relative(process.cwd(), join(installedDir, rel.split('/')[0])))
+      else fail(`published package ships ${rel}`, `missing in the registry install at ${installedDir} — check package.json "files"`)
+    }
+  }
 
   const dumped = cli([PROFILE, '--dump-config'], env)
   const tree = String(dumped.stdout ?? '')

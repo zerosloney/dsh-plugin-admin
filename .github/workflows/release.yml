@@ -68,3 +68,52 @@ jobs:
         run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # The only check that exercises the artifact npm users actually receive.
+  # Every path-based gate reads the checkout, so a files-whitelist gap
+  # ("docs/ left the tarball", v1.26.x) ships green; installing the just-
+  # published version from the registry into a throwaway profile is the only
+  # way to catch it at the pipeline instead of a user's bug report. No
+  # browser: the smoke's browser section skips when none is required.
+  smoke-published:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      # Same pinned toolchain as the host-smoke job in ci.yml: the real Host
+      # under test, and pnpm because `dsh plugin add` materialises the
+      # profile with it. The smoke script itself has zero npm dependencies.
+      - name: Install the pinned dsh CLI
+        run: npm install --global @deepseek-ai/dsh@0.1.7-rc.2
+
+      - name: Install pnpm (dsh's profile installer)
+        run: npm install --global pnpm@11
+
+      # The registry serves the new version a few seconds after publish;
+      # poll instead of a blind sleep, with a hard 5-minute ceiling so a
+      # genuinely missing publish fails loud rather than hanging.
+      - name: Wait for the registry to serve the published version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            if npm view "dsh-plugin-admin@${VERSION}" version >/dev/null 2>&1; then
+              echo "registry serves dsh-plugin-admin@${VERSION}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::registry never served dsh-plugin-admin@${VERSION} within 5 minutes"
+          exit 1
+
+      - name: Smoke the published package (registry install)
+        # The smoke script inherits the environment minus NODE_OPTIONS itself.
+        run: |
+          export SMOKE_PACKAGE_SPEC="dsh-plugin-admin@${GITHUB_REF_NAME#v}"
+          npm run smoke:real-host
