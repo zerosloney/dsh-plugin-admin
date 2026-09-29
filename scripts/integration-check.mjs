@@ -642,7 +642,7 @@ const PROBES = [
   },
   {
     id: 'session lifecycle events (usage observer)',
-    // lib/index.js:1756-1795 listens for all four and branches on the handle it
+    // lib/index.js's usage observer listens for all four and branches on it
     // receives: `.id`, `.firstLiveSeq === 0` (the log started empty in THIS
     // process, so the accumulator saw every event) and `.header.createdAt/.cwd`.
     // The NAMES were unpinned until now: a rename would silently stop the usage
@@ -678,7 +678,7 @@ const PROBES = [
   },
   {
     id: 'storageDomain facility (projection-cache cleanup)',
-    // lib/index.js:2270 deletes a deleted session's projection-cache row through
+    // lib/session-admin.js deletes a deleted session's projection-cache row through
     // this facility: get('session_projcache') → table('sessions') → delete(id).
     file: 'packages/storage/storage-domain/src/index.ts',
     checks: [
@@ -741,7 +741,7 @@ const PROBES = [
   },
   {
     id: 'sessions.get(id) liveness probe (host)',
-    // lib/index.js:1182 asks whether a session id is live before steering it.
+    // lib/session-admin.js asks whether a session id is live before steering it.
     file: 'packages/core/session/src/index.ts',
     checks: [
       ['the service key is sessions', t => t.includes("super(ctx, 'sessions')")],
