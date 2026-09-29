@@ -58,7 +58,10 @@ function formatDate(ms) {
 function messageOf(error) {
   if (error !== null && typeof error === 'object' && typeof error.message === 'string') return error.message
   if (typeof error === 'string') return error
-  return JSON.stringify(error)
+  // A nullish failure carries nothing readable — an empty string renders
+  // better than the literal "undefined" in a concatenated panel message.
+  if (error === undefined || error === null) return ''
+  return JSON.stringify(error) ?? ''
 }
 
 /* ========================================================================== */

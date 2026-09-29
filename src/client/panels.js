@@ -708,6 +708,9 @@ function SessionsSection(props) {
   }
 
   var alive = kit.alive
+  // Search sequence guard: a slow older search must not overwrite a newer
+  // one's hits when both are in flight.
+  var searchSeq = useRef(0)
 
   function patchSession(partial) {
     kit.patch(partial)
@@ -761,9 +764,10 @@ function SessionsSection(props) {
     var query = (q === undefined || q === null) ? sView.fullNeedle : q
     query = (query || '').trim()
     if (query === '') { patchSession({ fulltext: false, fullHits: null }); return }
+    var seq = ++searchSeq.current
     patchSession({ fullBusy: true, fullHits: null })
     callRemote('sessionAdmin/searchSessions', { query: query }).then(function (result) {
-      if (!alive.current) return
+      if (!alive.current || seq !== searchSeq.current) return
       if (result.ok) {
         var hits = (result.value && result.value.hits) || []
         patchSession({ fullBusy: false, fullHits: hits })
@@ -774,7 +778,7 @@ function SessionsSection(props) {
         patchSession({ fullBusy: false, fullHits: [], error: dshT('全文检索失败：') + messageOf(result.error) })
       }
     }, function (err) {
-      if (!alive.current) return
+      if (!alive.current || seq !== searchSeq.current) return
       if (messageOf(err).indexOf(SEARCH_DISABLED_MARKER) !== -1) {
         patchSession({ fullBusy: false, fullHits: [], error: '', searchDisabled: true })
         return
@@ -1228,6 +1232,9 @@ function McpSection(props) {
   var setMView = kit.set
 
   var alive = kit.alive
+  // Probe sequence guard: the probe of an older click must never overwrite a
+  // newer one's result when both are in flight.
+  var testSeq = useRef(0)
 
   function patchMcp(partial) {
     kit.patch(partial)
@@ -1392,6 +1399,9 @@ function McpSection(props) {
         }
       }
     }
+    // Lines without a top-level `=` cannot become pairs; they are skipped (and
+    // reported in the save note) instead of silently shaping the outcome.
+    var skippedPairLines = 0
     var config
     if (draft.transport === 'streamable-http') {
       config = { transport: 'streamable-http', serverName: draft.serverName, url: draft.url }
@@ -1404,7 +1414,13 @@ function McpSection(props) {
         for (var i = 0; i < pairs.length; i++) {
           var eq = pairs[i].indexOf('=')
           if (eq > 0) headers[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
+          else skippedPairLines += 1
         }
+        // Nothing parsed out of a non-empty box: treat the field as unchanged.
+        // Letting the map stay empty would drop the whole `headers` key on the
+        // floor and the host would erase every stored value (including the
+        // secrets); emptying the box entirely is the explicit "delete all".
+        if (Object.keys(headers).length === 0) headers = draft.headersOriginal
       }
       if (Object.keys(headers).length > 0) config.headers = headers
     } else {
@@ -1421,7 +1437,11 @@ function McpSection(props) {
         for (var i = 0; i < pairs.length; i++) {
           var eq = pairs[i].indexOf('=')
           if (eq > 0) env[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
+          else skippedPairLines += 1
         }
+        // Same unchanged-fallback as headers above: a box of malformed lines
+        // must not silently erase the stored env map.
+        if (Object.keys(env).length === 0) env = draft.envOriginal
       }
       if (Object.keys(env).length > 0) config.env = env
       if (draft.cwd !== '') config.cwd = draft.cwd
@@ -1451,6 +1471,7 @@ function McpSection(props) {
         var note = value.hotApplied
           ? dshT('✅ 已保存并热应用至运行中的 server（无需重启）')
           : (value.hotReason !== undefined ? dshT('✅ 已保存，重启 dsh 后生效 — ') + value.hotReason : dshT('✅ 已保存，重启 dsh 后生效'))
+        if (skippedPairLines > 0) note += dshT('；警告：') + skippedPairLines + dshT(' 行缺少「=」已忽略')
         patchMcp({ mcpBusy: false, mcpEntries: value.entries || [], mcpEditorOpen: false, mcpDraft: null, mcpNote: note })
       } else {
         patchMcp({ mcpBusy: false, mcpError: dshT('保存 MCP 配置失败：') + messageOf(result.error) })
@@ -1496,9 +1517,10 @@ function McpSection(props) {
 
   /** Run a host-side connectivity probe for one entry and stash the result. */
   function testMcpEntry(id) {
+    var seq = ++testSeq.current
     patchMcpTest(id, { busy: true, result: null, error: null })
     callRemote('mcpAdmin/test', { id: id }).then(function (result) {
-      if (!alive.current) return
+      if (!alive.current || seq !== testSeq.current) return
       if (result.ok && result.value !== null && typeof result.value === 'object') {
         // `at` timestamps the probe; it is what the cached label renders.
         patchMcpTest(id, { busy: false, result: result.value, at: Date.now() })
@@ -1506,7 +1528,7 @@ function McpSection(props) {
         patchMcpTest(id, { busy: false, result: null, error: messageOf(result.error) })
       }
     }, function (failure) {
-      if (!alive.current) return
+      if (!alive.current || seq !== testSeq.current) return
       patchMcpTest(id, { busy: false, result: null, error: messageOf(failure) })
     })
   }
@@ -2231,7 +2253,19 @@ function renderPluginCard(plugin, view, remove, patch, upgrade, setEnabled) {
  * handle (stopping any running turn), removes the session from the store,
  * and then deletes the log — no restart needed.
  */
-var LIVE_HINT = dshT('会话在线：仍挂载于 dsh host 内存（本进程内创建或打开过的会话保持在线，不代表正在运行）；可直接"关停并删除"（会中断该会话正在进行的对话）')
+// Evaluated at RENDER time, not module load: a locale switch retranslates it
+// on the next repaint (the shell's locale service triggers one) instead of
+// serving the language that was current when this chunk first loaded.
+function liveHint() {
+  return dshT('会话在线：仍挂载于 dsh host 内存（本进程内创建或打开过的会话保持在线，不代表正在运行）；可直接"关停并删除"（会中断该会话正在进行的对话）')
+}
+
+// Render caps: a multi-thousand-entry list must not freeze the settings page.
+// Truncation is always rendered as a visible note; the filter narrows instead
+// of the DOM growing.
+var SESSION_RENDER_CAP = 400
+var FULLTEXT_RENDER_CAP = 200
+var SKILLS_RENDER_CAP = 400
 
 /**
  * Canonical session status. Live takes precedence over archived (a session
@@ -2726,7 +2760,8 @@ function renderFulltextPanel(view, patch, runFulltext, enableSearch) {
       children.push(h('div', { key: 'empty', className: 'empty' }, dshT('没有命中任何会话。')))
     } else {
       children.push(h('div', { key: 'count', className: 'hint' }, dshT('命中 ') + view.fullHits.length + dshT(' 个会话')))
-      for (var i = 0; i < view.fullHits.length; i++) {
+      var fullRenderCap = Math.min(view.fullHits.length, FULLTEXT_RENDER_CAP)
+      for (var i = 0; i < fullRenderCap; i++) {
         (function (hit) {
           var title = hit.title || (hit.cwd ? baseName(hit.cwd) : dshT('未命名会话'))
           children.push(h('div', { key: 'hit-' + i, className: 'card', style: { padding: '8px 12px', fontSize: '12px' } },
@@ -2737,6 +2772,10 @@ function renderFulltextPanel(view, patch, runFulltext, enableSearch) {
             hit.snippet ? h('div', { key: 's', style: { opacity: 0.75, marginTop: '3px', wordBreak: 'break-word' } }, hit.snippet) : null,
           ))
         })(view.fullHits[i])
+      }
+      if (view.fullHits.length > fullRenderCap) {
+        children.push(h('div', { key: 'hit-cap', className: 'hint' },
+          dshT('已显示前 ') + fullRenderCap + ' / ' + view.fullHits.length + dshT(' 条命中')))
       }
     }
   }
@@ -2761,7 +2800,12 @@ function buildGroupHeader(g, groupKey, collapsed, view, groupUi) {
     className: 'group-header' + (collapsed ? ' collapsed' : ''),
     key: 'header-' + groupKey,
     title: collapsed ? dshT('点击展开该目录的会话') : dshT('点击折叠该目录的会话'),
+    role: 'button',
+    tabIndex: 0,
     onClick: function () { groupUi.toggleCollapse(groupKey) },
+    onKeyDown: function (event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); groupUi.toggleCollapse(groupKey) }
+    },
   },
     createElement('span', { className: 'group-caret', key: 'caret' }, collapsed ? '▸' : '▾'),
     createElement('span', { className: 'group-title', key: 'title' },
@@ -2869,7 +2913,7 @@ function renderSessionsView(view, patch, reload, act, onExport, pinnedIds, toggl
     createElement(UiPill, {
       key: 'filter-live',
       active: view.filter === 'live',
-      title: LIVE_HINT,
+      title: liveHint(),
       onClick: function () { patch({ filter: 'live' }) },
     }, dshT('在线(') + String(liveCount) + ')'),
     createElement(UiPill, {
@@ -2965,6 +3009,8 @@ function renderSessionsView(view, patch, reload, act, onExport, pinnedIds, toggl
   }
 
   var rows = []
+  var renderBudget = SESSION_RENDER_CAP
+  var renderedCards = 0
   for (var gi = 0; gi < groups.length; gi++) {
     var g = groups[gi]
     var groupKey = g.workspaceId === null ? 'ungrouped' : 'ws-' + g.workspaceId
@@ -2972,8 +3018,17 @@ function renderSessionsView(view, patch, reload, act, onExport, pinnedIds, toggl
     rows.push(buildGroupHeader(g, groupKey, collapsed, view, groupUi))
     if (collapsed) continue
     for (var si = 0; si < g.sessions.length; si++) {
+      if (renderBudget <= 0) break
+      renderBudget -= 1
+      renderedCards += 1
       rows.push(renderSessionCard(g.sessions[si], view, act, patch, onExport, pinnedIds, togglePinned, loadHealth))
     }
+    if (renderBudget <= 0) break
+  }
+  if (renderedCards < filtered.length) {
+    // Truncation is visible, never silent: the filter above is the way to the tail.
+    rows.push(createElement('div', { className: 'hint', key: 'render-cap' },
+      dshT('已显示前 ') + renderedCards + ' / ' + filtered.length + dshT(' 个会话——用过滤条件缩小范围查看其余')))
   }
 
   if (rows.length === 0) {
@@ -3048,7 +3103,7 @@ function renderSessionCard(session, view, act, patch, onExport, pinnedIds, toggl
   var health = (view.healthBySession && view.healthBySession[session.id]) || null
   var isConfirming = view.confirming === session.id
   var dotClass = 'dot' + (session.live ? ' live' : session.archived ? ' archived' : '')
-  var dotTitle = session.live ? LIVE_HINT : session.archived ? dshT('已归档') : dshT('已结束')
+  var dotTitle = session.live ? liveHint() : session.archived ? dshT('已归档') : dshT('已结束')
 
   var isPinned = pinnedIds ? pinnedIds.indexOf(session.id) !== -1 : false
   var actions = []
@@ -3131,7 +3186,7 @@ function renderSessionCard(session, view, act, patch, onExport, pinnedIds, toggl
       createElement('span', { className: 'card-title-text', key: 'name', title: session.title || session.cwd },
         session.title || (session.cwd ? baseName(session.cwd) : dshT('未命名会话'))
       ),
-      session.live ? createElement('span', { className: 'tag live', key: 'tag-live', title: LIVE_HINT }, dshT('会话在线'))
+      session.live ? createElement('span', { className: 'tag live', key: 'tag-live', title: liveHint() }, dshT('会话在线'))
         : session.archived ? createElement('span', { className: 'tag archived', key: 'tag-archived' }, dshT('已归档'))
         : null,
       session.messageCount > 0 ? createElement('span', { className: 'tag turns', key: 'tag-turns' }, String(session.messageCount) + dshT(' 条消息')) : null,
@@ -3627,12 +3682,20 @@ function SubagentsPanel(props) {
     })
   }
 
+  // One remove RPC per entry at a time: the confirm button re-enables after
+  // 3.2s, and a double-fire would send two removes (the second reporting a
+  // spurious failure).
+  var removeInFlight = useRef({})
   var removeEntry = function (entry) {
+    if (removeInFlight.current[entry.id]) return
+    removeInFlight.current[entry.id] = true
     call('subagentAdmin/remove', { id: entry.id }).then(function (raw) {
+      delete removeInFlight.current[entry.id]
       var result = unwrap(raw)
       setView(function (prev) { return Object.assign({}, prev, { data: result, loading: false }) })
       setNotice(null)
     }).catch(function (error) {
+      delete removeInFlight.current[entry.id]
       setToast(dshT('删除失败：') + String((error && error.message) || error))
     })
   }
@@ -4367,6 +4430,12 @@ function CliPanel(props) {
     setDrafts(next)
     setBusy({})
   }
+  /** Refresh the list only: a save/uninstall on one card must not reset the
+      drafts another card is editing or release its in-flight busy marker —
+      the full reset above belongs to (re)loads alone. */
+  var adopt = function (result) {
+    setView({ loading: false, error: null, data: result })
+  }
 
   var reload = function () {
     setView(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -4459,7 +4528,8 @@ function CliPanel(props) {
     var busyKey = backend.id
     markBusy(busyKey)
     call('subagentAdmin/cliUpsert', { payload: payload }).then(function (raw) {
-      absorb(unwrap(raw))
+      adopt(unwrap(raw))
+      clearBusy(busyKey)
     }).catch(function (error) {
       clearBusy(busyKey)
       setToast(dshT('保存失败：') + String((error && error.message) || error))
@@ -4471,7 +4541,8 @@ function CliPanel(props) {
     markBusy(backend.id)
     // Generic backends are recognized server-side by their "cli-" id prefix.
     call('subagentAdmin/cliRemove', { id: backend.id }).then(function (raw) {
-      absorb(unwrap(raw))
+      adopt(unwrap(raw))
+      clearBusy(backend.id)
     }).catch(function (error) {
       clearBusy(backend.id)
       setToast(dshT('卸载失败：') + String((error && error.message) || error))
@@ -4483,7 +4554,8 @@ function CliPanel(props) {
     markBusy(backend.id)
     call('subagentAdmin/cliInstall', { backendId: backend.id }).then(function (raw) {
       var result = unwrap(raw)
-      absorb(result)
+      adopt(result)
+      clearBusy(backend.id)
       setToast((result && result.output ? result.output : dshT('依赖包安装完成')) + dshT('，已重新检测'))
     }).catch(function (error) {
       var message = String((error && error.message) || error)
@@ -4502,7 +4574,8 @@ function CliPanel(props) {
     }
     markBusy('__scan__')
     call('subagentAdmin/cliUpsert', { payload: { kind: 'generic', config: { command: command } } }).then(function (raw) {
-      absorb(unwrap(raw))
+      adopt(unwrap(raw))
+      clearBusy('__scan__')
       setCustomCommand('')
     }).catch(function (error) {
       clearBusy('__scan__')
@@ -5050,7 +5123,7 @@ function ChCommandsTab(props) {
           onEdit: function () { setEditing(Object.assign({ originalName: c.name }, c)) },
           onToggle: function () {
             act(call('commandHookAdmin/saveCommand', { entry: Object.assign({}, c, { enabled: !c.enabled }) }), function () {
-              setNote(dshT('命令 /') + c.name + dshT(' 已') + (c.enabled ? dshT('停用') : dshT('启用')) + '。')
+              setNote(dshT('命令 /') + c.name + (c.enabled ? dshT(' 已停用。') : dshT(' 已启用。')))
             })
           },
         })
@@ -6012,9 +6085,11 @@ function AutomationSection(props) {
 /* ========================================================================== */
 
 /* 定时任务 / Webhook 预设模板：普通用户的一键入口 —— 点卡片 = 编辑器全部填好。
-   与工作流的 WF_TEMPLATES 同一版式：title/desc 走 dshT（双语），seed 是
-   openEditor(null, seed) 的预填字段（id / cron / promptTemplate / 动作…）。 */
-var CRON_TEMPLATES = [
+   与工作流的 wfTemplates() 同一版式：title/desc 走 dshT（双语），seed 是
+   openEditor(null, seed) 的预填字段（id / cron / promptTemplate / 动作…）。
+   三组模板都是函数：每次渲染重新求值，语言切换后卡片文案跟随更新。 */
+function cronTemplates() {
+  return [
   {
     title: dshT('工作日早报'),
     desc: dshT('工作日早上 9 点：给会话发一条今日简报提醒'),
@@ -6049,8 +6124,10 @@ var CRON_TEMPLATES = [
     },
   },
 ]
+}
 
-var WEBHOOK_TEMPLATES = [
+function webhookTemplates() {
+  return [
   {
     title: dshT('CI 失败自动处理'),
     desc: dshT('CI/CD 失败事件推给会话，自动定位并尝试修复'),
@@ -6084,6 +6161,7 @@ var WEBHOOK_TEMPLATES = [
     },
   },
 ]
+}
 
 /**
  * One fresh 16-char alphanumeric webhook secret (crypto.randomBytes-backed
@@ -7109,7 +7187,13 @@ function WorkflowSection(props) {
       })
     }, delay)
   }
-  schedulePoll()
+  // Re-arm on runs changes only (mount + every poll result), not on every
+  // render: a render-body call reset the timer on each keystroke and could
+  // indefinitely defer the next listRuns refresh.
+  useEffect(function () {
+    schedulePoll()
+    return function () { if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null } }
+  }, [state.runs])
 
   function openRun(runId) {
     if (state.openRunId === runId) { patch({ openRunId: null, runDetail: null, answerText: '' }); return }
@@ -7310,10 +7394,14 @@ function WorkflowSection(props) {
     // 模板卡片：普通用户的一键入口 —— 点卡片 = 脚本/名称/参数全部填好。
     children.push(h('div', { key: 'tpl-head', style: { fontWeight: '600', marginBottom: '6px' } }, dshT('从模板开始（点卡片自动填好，改参数就能跑）')))
     children.push(h('div', { key: 'tpl-row', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' } },
-      WF_TEMPLATES.map(function (tpl, tplIndex) {
+      wfTemplates().map(function (tpl, tplIndex) {
+        var openTpl = function () { patch({ editor: { runId: null, script: tpl.script, label: tpl.title, argsText: tpl.argsText }, editorError: '', tab: 'runs' }) }
         return h('div', {
           key: 'tpl-' + tplIndex,
-          onClick: function () { patch({ editor: { runId: null, script: tpl.script, label: tpl.title, argsText: tpl.argsText }, editorError: '', tab: 'runs' }) },
+          role: 'button',
+          tabIndex: 0,
+          onClick: openTpl,
+          onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
           style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
         }, [
           h('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
@@ -7323,7 +7411,7 @@ function WorkflowSection(props) {
     ))
     children.push(h('button', {
       key: 'new-run',
-      onClick: function () { patch({ editor: { runId: null, script: EXAMPLE_SCRIPT, label: '', argsText: '{}' }, editorError: '' }) },
+      onClick: function () { patch({ editor: { runId: null, script: exampleScript(), label: '', argsText: '{}' }, editorError: '' }) },
       style: btnStyle(),
     }, dshT('＋ 新建工作流（自己写脚本）')))
 
@@ -7468,7 +7556,7 @@ function WorkflowSection(props) {
     var children = [
       h('button', {
         key: 'new-saved',
-        onClick: function () { patch({ savedEditor: { name: '', scope: 'global', script: EXAMPLE_SCRIPT, description: '', argsText: '' }, savedError: '' }) },
+        onClick: function () { patch({ savedEditor: { name: '', scope: 'global', script: exampleScript(), description: '', argsText: '' }, savedError: '' }) },
         style: btnStyle(),
       }, dshT('＋ 保存一个工作流')),
     ]
@@ -7544,7 +7632,10 @@ function WorkflowSection(props) {
   }
 }
 
-var EXAMPLE_SCRIPT = [
+// Evaluated per call (click handlers / initial editor content) so a locale
+// switch retranslates the comment header.
+function exampleScript() {
+  return [
   dshT('// 可用：agent(prompt, opts?) / parallel(thunks) / pipeline(items, ...stages)'),
   dshT('//       phase(title) / log(msg) / report(key, value) / shell(cmd)'),
   dshT('// 顶层 return 返回结果；单步失败 agent() 返回 null，脚本继续。'),
@@ -7552,8 +7643,10 @@ var EXAMPLE_SCRIPT = [
   'const reviews = await parallel(files.map((f) => () => agent("审查 " + f + " 的类型问题")))',
   'return reviews.filter((r) => r !== null)',
 ].join('\n')
+}
 
-var WF_TEMPLATES = [
+function wfTemplates() {
+  return [
   {
     title: dshT('总结一个主题'),
     desc: dshT('派一个子智能体，按你给的主题输出一段总结'),
@@ -7598,6 +7691,7 @@ var WF_TEMPLATES = [
     ].join('\n'),
   },
 ]
+}
 
 function statusText(s) {
   return s === 'running' ? dshT('运行中')
@@ -8344,7 +8438,7 @@ function SkillsSection(props) {
   // viewport): cards rendered straight into the height-bounded section root
   // were once clipped with no way to reach the tail.
   var cardNodes = []
-  for (let ci = 0; ci < filtered.length; ci++) {
+  for (let ci = 0; ci < filtered.length && ci < SKILLS_RENDER_CAP; ci++) {
     // Block-scoped on purpose: a shared `var` binding would make copy / open
     // act on the LAST skill in the list.
     const skill = filtered[ci]
@@ -8408,6 +8502,10 @@ function SkillsSection(props) {
     ))
   }
 
+  if (filtered.length > SKILLS_RENDER_CAP) {
+    cardNodes.push(createElement('div', { className: 'hint', key: 'skills-cap' },
+      dshT('已显示前 ') + SKILLS_RENDER_CAP + ' / ' + filtered.length + dshT(' 个技能——用上方过滤条件查看其余')))
+  }
   if (filtered.length === 0 && state.skills.length > 0) {
     cardNodes.push(createElement('div', { className: 'empty', key: 'empty-filter' }, dshT('没有匹配当前筛选条件的技能')))
   }
@@ -8523,10 +8621,14 @@ function WebhookRender(view, actions) {
   // 模板卡片：点卡片 = 编辑器全部填好（同工作流「从模板开始」）。
   elements.push(createElement('div', { key: 'tpl-head', style: { fontWeight: '600' } }, dshT('从模板开始（点卡片自动填好，改参数就能跑）')))
   elements.push(createElement('div', { key: 'tpl-row', style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-    WEBHOOK_TEMPLATES.map(function (tpl, tplIndex) {
+    webhookTemplates().map(function (tpl, tplIndex) {
+      var openTpl = function () { actions.openEditor(null, tpl.seed) }
       return createElement('div', {
         key: 'tpl-' + tplIndex,
-        onClick: function () { actions.openEditor(null, tpl.seed) },
+        role: 'button',
+        tabIndex: 0,
+        onClick: openTpl,
+        onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
         style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
@@ -8763,10 +8865,14 @@ function CronRender(view, actions) {
   // 模板卡片：点卡片 = 编辑器全部填好（同工作流「从模板开始」）。
   elements.push(createElement('div', { key: 'tpl-head', style: { fontWeight: '600' } }, dshT('从模板开始（点卡片自动填好，改参数就能跑）')))
   elements.push(createElement('div', { key: 'tpl-row', style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-    CRON_TEMPLATES.map(function (tpl, tplIndex) {
+    cronTemplates().map(function (tpl, tplIndex) {
+      var openTpl = function () { actions.openEditor(null, tpl.seed) }
       return createElement('div', {
         key: 'tpl-' + tplIndex,
-        onClick: function () { actions.openEditor(null, tpl.seed) },
+        role: 'button',
+        tabIndex: 0,
+        onClick: openTpl,
+        onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
         style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
