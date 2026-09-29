@@ -12,6 +12,12 @@
 - **`btnStyle()` 的默认描边色被当成填充色**（`src/client/panels.js`）：`border: '1px solid ' + (bg || 'var(--border, #ddd)')` 与 `background: bg || 'transparent'` 是同一次求值，于是那个灰描边令牌**只进了 border**；`bg` 为空时 background 取 `transparent`。令牌换成真名后这处"名实不符"会读成 bug，故把注释与选法对齐（**渲染结果不变**，无需目视）。
 - **`--dsh-alias-border-l2` 前缀笔误**（`src/client/styles.js`）：文档说用 `--dsw-`（dsh 主题令牌的 `--dsh-` 是壳层的另一族），全仓只有 `[data-dsh-admin-section] .session-panel` 这一处拼成了 `--dsh-`，于是这张卡片一直吃字面回退。改为 `--dsw-alias-border-l2`，与同族其余规则一致。
 
+### Changed
+
+- **README 中英收敛为一页式，架构与安全细节迁入 docs/ARCHITECTURE.md（内容搬家，非删除）**：README 只留「是什么 / 面板一览 / 三行安装 / 常见任务 + 文档导航」。源码结构（顺手补上 README 漏掉的 `src/client/panels.js` 与 `native-coverage.js`，职责描述按现状修正）、写回/降级机制、各面板机制细节（workflow facade 与 realm 边界、cron 调度语义、webhook 安全模型、用量台账三层兜底等）、30 个配置键两张表、信任边界与安全、测试与接缝契约全部迁入新文档 `docs/ARCHITECTURE.md`。安全节取中英并集（英文版 Security posture 此前比中文「信任边界」多出的条目——shell 元字符白名单、0600 权限收紧、进程树击杀、webhook 常量时间比较等——合并进同一节）；配置表以中文 16 键版本为准（英文表的"14 tunables"与缺失的 `installScripts` 行是过期内容，随迁退役）。`package.json` 的 description 压成一句话（keywords 不变）；未知配置键告警的指向文案 `— see README 可调配置键` 同步改为 `— see docs/ARCHITECTURE.md 可调配置键`（`lib/index.js` 两处；host-check 只断言键名部分，不受影响）。
+- **`docs/` 随包发布**（`package.json` 的 `files`：`["lib", "cordis.patch.yml", "README.md"]` → 追加 `docs` 与 `README.en.md`）：搬家把配置键表与全部机制细节移进了 `docs/ARCHITECTURE.md`，但 `files` 白名单没跟上，于是**搬家后的两处指向在 npm 包里全是悬空的**——`lib/index.js` 的运行期告警让用户去看一个装不到的 `docs/ARCHITECTURE.md`（挂载即打印），两个 README 的相对链接在 npmjs 页面 404。`npm pack --dry-run` 实测：修前 tarball 41 个文件、`docs/` 一个都不含；修后 43 个，`docs/ARCHITECTURE.md` 与 `docs/COMPAT.md` 入包。顺带补上原本漏发的 `README.en.md`（英文文档此前只能从 npm 页面的 README 相互跳转拿到）。
+- **文档里三处与代码不符的计数改正**：`docs/ARCHITECTURE.md` 的 RPC 真相表 **89 → 91 方法**（`host-check` 实测；搬来时即错）、`npm test` 的 **35 → 36 个脚本**（原文括号内的枚举 self-check + host-check + 32 个 `verify-*` + integration-check = 35，与"3 道静态闸门 + 35 个脚本"这句的 35 指向的是不同集合，现改为 35 个脚本 / 共 38 步并注明以输出为准）；README 中英的**「十个管理入口」→「十一个管理面板」**（表格列了 11 行，`PANEL_IDS` 也是 11 个；原文"3 + 6 + 1 = 10"的推导把「自动化」页内的第三个页签——工作流——漏在了外面，是该轮搬家新加的、HEAD 原文并没有这句推导）。三处都是"搬家时顺手改了数字反而改错"：HEAD 写的 28 个脚本是当时的真实口径。
+
 ## [1.26.0] - 2026-09-29
 
 按契合度审查收口：**接缝动词**（`shell.run` → `execute`）、**沙箱策略**（按调用会话解析）、**realm 边界**（JSON 桥 + 同步前缀预算）、**密钥面**（env/headers 不回传、脱敏按值形态、自有存储 0600）、**进程管理**（不再同步阻塞宿主）、**webhook 限速/审计**、**删除与安装的护栏**，以及一批轻微项。本轮的快照：`integration-check` 142 条探针、`npm test` 38 步（3 道静态闸门 + 36 个脚本，其中 32 个 `verify-*`）、oxlint 144 warnings / 0 errors；真实宿主冒烟 `smoke:real-host` 28/28。
