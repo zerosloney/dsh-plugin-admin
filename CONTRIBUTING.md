@@ -77,6 +77,10 @@
 
 Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，oxlint 的 `react/hooks` / `react/rules-of-hooks` 只在 `.jsx`/`.tsx` 上触发（实测），自动闸门覆盖不到——新增组件请保持「hook 调用顶层无条件、`useState` 经 `var` 解构自 React」的既有模式。
 
+## strict 轨道（渐进类型收紧）
+
+`npm run check:types-strict`（run-gate 的常驻静态步）跑 `tsconfig.strict.json`：在主配置之上开 `noImplicitAny`，`include` 是一个**只增不减**的文件清单，从并发正确性核心（patch-utils / usage-ledger）开始。把新文件纳入的方式：先在本地把它的隐式 any 清零（给缺类型的参数补 `@param {T}`），再把文件加进 include——纳入即受闸门保护，回退 = 从清单删除。
+
 ## 环境
 
 Node ≥ 22.19（或 ≥ 24）；`npm ci` 后即可跑全部门禁（`smoke:real-host` 例外，另需 dsh CLI + pnpm）。

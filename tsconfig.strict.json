@@ -1,0 +1,19 @@
+{
+  // The strict track (Wave 5 of the improvement plan): a second tsconfig that
+  // turns on the flags the main config does not, over a GROWING list of files.
+  // Start with noImplicitAny over the concurrency-critical core (patch-utils,
+  // usage-ledger); each new file joins by fixing its implicit-any leaks first,
+  // and the include list only ever grows. When it covers everything, fold the
+  // flags back into tsconfig.json and delete this file.
+  //
+  // Run: npm run check:types-strict   (a permanent run-gate step)
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "lib/patch-utils.js",
+    "lib/usage-ledger.js"
+  ]
+}

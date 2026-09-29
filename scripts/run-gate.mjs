@@ -34,6 +34,7 @@ const node = process.execPath
 /** @type {{ name: string, desc: string, cmd: string[], static?: boolean }[]} */
 const STEPS = [
   { name: 'check:types', desc: 'tsc --noEmit (checkJs) over lib/** and src/client/**', cmd: ['npm', 'run', 'check:types'], static: true },
+  { name: 'check:types-strict', desc: 'noImplicitAny over the growing strict include list (tsconfig.strict.json)', cmd: ['npm', 'run', 'check:types-strict'], static: true },
   { name: 'check:lint', desc: 'oxlint over lib src scripts (errors only; warnings recorded)', cmd: ['npm', 'run', 'check:lint'], static: true },
   { name: 'build:client --check', desc: 'built artifacts match src/client/** — catches forgot-to-rebuild', cmd: [node, 'scripts/build-client.mjs', '--check'], static: true },
   { name: 'self-check', desc: 'load the built bundle the way the host loader does; mount every panel in jsdom + en-locale smoke', cmd: [node, 'scripts/self-check.mjs'] },
