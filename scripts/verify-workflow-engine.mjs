@@ -638,6 +638,27 @@ await checkAsync('caller abort cuts eval well before the hard timeout', async ()
   assert.ok(elapsed < 5000, `caller abort should cut eval promptly, took ${elapsed}ms`)
 })
 
+// The 80ms case above only passes when the abort happens to land AFTER the
+// abort listener is attached. The listener is attached after
+// `await compileScript(...)`, so on a loaded machine (cold esbuild, busy event
+// loop) the abort can arrive DURING that window and the signal is then
+// already-cancelled — the race would never fire and only the hard timeout
+// settled it. That was a real gate flake (seen once: an assertion expecting
+// /eval aborted/ got `eval timeout after 10000ms`). A pre-aborted signal is
+// the deterministic form of that window: it must reject at once, with the
+// abort reason, never with the timeout.
+await checkAsync('a pre-aborted caller signal rejects immediately, never waits for the timeout', async () => {
+  const controller = new AbortController()
+  controller.abort('test')
+  const start = Date.now()
+  await assert.rejects(
+    () => evalSnippet(`await new Promise(() => {})`, { timeoutMs: 3000, signal: controller.signal }),
+    /eval aborted/,
+  )
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 1500, `a pre-aborted signal must not wait for the hard timeout, took ${elapsed}ms`)
+})
+
 check('looksLikeTs gates the esbuild-missing fallback (TS refused, plain JS wrapped)', () => {
   // compileScript's catch branch cannot be reached in a process that HAS esbuild
   // installed, so the heuristic that decides "refuse vs wrap" is pinned directly:
