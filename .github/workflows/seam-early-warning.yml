@@ -35,15 +35,15 @@ jobs:
         with:
           node-version: 24
 
-      # Same two checkouts as the seam-matrix job in ci.yml: the pinned
-      # release this plugin is verified against (docs/COMPAT.md), plus dsh
-      # master as the early-warning row. No dependencies are installed —
-      # check-matrix only reads TypeScript sources (see ci.yml).
-      - name: Check out the pinned dsh release
+      # The verification baseline this plugin is checked against
+      # (docs/COMPAT.md) plus dsh master as the early-warning row. No
+      # dependencies are installed — check-matrix only reads TypeScript
+      # sources (see ci.yml).
+      - name: Check out the pinned dsh release (verification baseline)
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.1.7-rc.2
+          ref: dsh-v0.2.0-rc.1
           path: .dsh-release
           fetch-depth: 1
 

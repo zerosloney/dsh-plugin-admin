@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.1.7-rc.2
+          ref: dsh-v0.2.0-rc.1
           path: .dsh-checkout
           fetch-depth: 1
 
@@ -91,7 +91,7 @@ jobs:
       # under test, and pnpm because `dsh plugin add` materialises the
       # profile with it. The smoke script itself has zero npm dependencies.
       - name: Install the pinned dsh CLI
-        run: npm install --global @deepseek-ai/dsh@0.1.7-rc.2
+        run: npm install --global @deepseek-ai/dsh@0.2.0-rc.1
 
       - name: Install pnpm (dsh's profile installer)
         run: npm install --global pnpm@11

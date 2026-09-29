@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> 基线：**dsh 0.1.7-rc.2**（checkout `D:/code/deepseek-harness`，CI 另 pin `deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`）· 插件 v1.26.0。
+> **验证基线：dsh 0.2.0-rc.1**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.0-rc.1`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）· 插件 v1.26.2。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
 > 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
@@ -16,7 +16,7 @@
 
 ## 矩阵
 
-| 面板 / 能力 | 官方对应（0.1.7-rc.2） | 本插件策略 | 机制 | 验证 |
+| 面板 / 能力 | 官方对应（0.2.0-rc.1） | 本插件策略 | 机制 | 验证 |
 |---|---|---|---|---|
 | 扩展插件（装/卸/启停/更新） | `ui-plugin-manager` + `ui-settings-plugin-inventory` + `pluginManager` remote | **让位** | profile `cordis.patch.yml` + pnpm 编排 | integration-check |
 | 技能清单 | `ui-skill`（调用侧）、`skill-filesystem` | 增量（只读全量清单：来源 / 作用域 / 双旗标） | `agentPresets.acquireScope`（⚠ 与宿主同款用法） | verify-skills-admin |
@@ -52,10 +52,10 @@ npm test
 
 # 多版本矩阵：逗号/分号分隔；隐式回退时没有 dsh 的目录记为 SKIP（不算失败），
 # 任何一个存在的 checkout 契约漂移则整体失败。
-DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
+DSH_CHECKOUTS="D:/dsh/0.2.0-rc.1, D:/dsh/next" npm run test:matrix
 ```
 
-**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.1.7-rc.2`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout 该 pin 与 `master` 两档，跑 `npm run test:matrix`（`master` 是预警行：例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过接缝契约探针与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
+**CI 里两者都不是可跳过的**：`.github/workflows/ci.yml` 的 `test` 作业先 `actions/checkout` 一个 pin 住的 dsh（`deepseek-ai/deepseek-harness@dsh-v0.2.0-rc.1`，公开仓库、`fetch-depth: 1`、不安装不构建）并把路径交给 `DSH_CHECKOUT`；`seam-matrix` 作业再 checkout **三档**——验证基线 `0.2.0-rc.1`、支持下限 `0.1.7-rc.2`（回归哨兵：基线证明插件在用户当前版本上可用，这一档证明它在**声明承诺支持的最老版本**上仍可用，只有下限本身移动时才删）、以及 `master` 预警行（例行重构应当通过，契约变化必须先在这里响）。**CI 下没有 checkout 就是失败** —— 跳过接缝契约探针与全部通过会打印同样的绿灯，那正是上游漂移能溜进发布的路径。
 
 矩阵当前覆盖的契约数以 `integration-check` 实际输出为准（历史快照曾为 93/112/124），其中与插件自身最新能力直接相关的几条：
 
@@ -78,7 +78,7 @@ DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" npm run test:matrix
 
 面板是否注册由 `src/client/native-coverage.js` 的探测表决定：**官方已覆盖的面板直接不注册**（不是隐藏、不是禁用），`localStorage['dsh-admin-panels']` 可用逗号分隔的面板 id 强制要回某个面板。下面这张表与该模块同源——改探测逻辑时两边一起改。
 
-| 面板 | 官方对应（0.1.7-rc.2） | 探测信号（客户端） | 当前结论 |
+| 面板 | 官方对应（0.2.0-rc.1） | 探测信号（客户端） | 当前结论 |
 |---|---|---|---|
 | 扩展插件 | 插件侧边栏页 `ui-plugin-manager` + 插件列表页签 `ui-settings-plugin-inventory` | `sidebar.panellist` 有 id `plugins`，或 `settings.plugins.tab` 有 id `all` | **让位**（探测命中即不注册） |
 | MCP 服务器 | 无（仅宿主 `mcp-client`） | — | 保留 |
@@ -112,7 +112,7 @@ npm run smoke:real-host          # 需要 PATH 上有 dsh 与 pnpm（dsh 用它�
 | 3 浏览器半 | shell 的模块表里有 `plugins/??dsh-plugin-admin/client.js`，且取回的是**我们的字节**（`PluginsSection` 等标记） | `dsh.client` 清单被发现、产物被真实 web 服务端出来 |
 | 4 RPC | `POST /api/pluginAdmin/list` 返回 `ok:true` 且列表里是本插件；另用畸形信封确认网关回 `gateway/bad-request` | 服务真的挂上了、typert 描述符真的注册了（网关只受理已声明端点）、strict codec 真的校验了参数 |
 
-实测：dsh `0.1.7-rc.2` 上 **28/28 通过，约 11–30 秒**；其中第 5 步用 **21 次只读调用覆盖 14 个命名空间里的 13 个**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh + pnpm → `npm run smoke:real-host`，`SMOKE_REQUIRE_DSH=1`、`SMOKE_REQUIRE_BROWSER=1`）。
+实测：dsh `0.2.0-rc.1` 上 **28/28 通过，约 11–30 秒**（本地对 `0.2.0-rc.1` 与 `master` 的接缝探针均零漂移）；其中第 5 步用 **21 次只读调用覆盖 14 个命名空间里的 13 个**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh + pnpm → `npm run smoke:real-host`，`SMOKE_REQUIRE_DSH=1`、`SMOKE_REQUIRE_BROWSER=1`）。
 
 v1.25.4 起还有两步：
 
@@ -144,9 +144,9 @@ v1.25.4 起还有两步：
 
 ## 版本策略
 
-**支持范围：dsh ≥ 0.1.7-rc.2。** 自 v1.25.0 起不再支持 dsh 0.1.6，这是**已决策**（不再是"待定"）：
+**支持下限：dsh ≥ 0.1.7-rc.2**（**验证基线已升到 0.2.0-rc.1**：CI 主门禁、`host-smoke`、`smoke-published` 与 `seam-early-warning` 都跑基线档，`seam-matrix` 另留下限档作哨兵）。 自 v1.25.0 起不再支持 dsh 0.1.6，这是**已决策**（不再是"待定"）：
 
 - 客户端直接静态引用平台共享模块（`@deepseek-ai/dsh-client-ui-primitives` / `-ui-slots` / `-client-store`，见 `scripts/build-client.mjs` 的 `PLATFORM_BASELINE`）与 `ctx.locale` 服务：0.1.6 的宿主模块表里没有这些 seed，缺一项就是**整包加载失败**，而不是降级。既然实现里已经没有 0.1.6 的回落分支，"继续支持 0.1.6"就只是一句与代码不符的承诺，本次把口径改成事实。
 - 保留的"先探测、后降级"分支（如 `agentPresets.acquireScope` → `standingKeyFor`、`fiber.update` 能力探测、`workspaceRegistry.unarchiveSession` 的缺失告警）是**同一范围内的防御性探测**（0.1.7 的 rc 与正式版之间、以及未来版本删动词时用），不是 0.1.6 支持。
 - 升级一台 0.1.6 的宿主前请先升 dsh；插件在 0.1.6 上的失败模式是"客户端整包不加载"，不会有半可用状态。
-- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.1.7-rc.2` 跑完整 `npm test`（含接缝契约探针，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.1.7-rc.2` 与 `master` 两档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。当前探针数为 `integration-check` 实际输出为准（历史快照曾为 93/112/124，新增探针只增不改旧数）。
+- CI 矩阵**已落地**（`.github/workflows/ci.yml`）：`test` 作业对 `dsh-v0.2.0-rc.1` 跑完整 `npm test`（含接缝契约探针，无 checkout 即失败），`seam-matrix` 作业对 `dsh-v0.2.0-rc.1`、`dsh-v0.1.7-rc.2`（支持下限哨兵）与 `master` 三档跑 `npm run test:matrix`。加一档新版本只需往 `DSH_CHECKOUTS` 里加路径。当前探针数为 `integration-check` 实际输出为准（历史快照曾为 93/112/124，新增探针只增不改旧数）。

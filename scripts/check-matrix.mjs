@@ -8,7 +8,7 @@
  * over directories with a per-checkout verdict.
  *
  * Usage:
- *   DSH_CHECKOUTS="D:/dsh/0.1.7-rc.2, D:/dsh/next" node scripts/check-matrix.mjs
+ *   DSH_CHECKOUTS="D:/dsh/0.2.0-rc.1, D:/dsh/next" node scripts/check-matrix.mjs
  *   node scripts/check-matrix.mjs            # falls back to $DSH_CHECKOUT, then
  *                                            # the sibling deepseek-harness
  *

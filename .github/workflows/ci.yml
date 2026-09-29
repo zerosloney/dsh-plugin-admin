@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.1.7-rc.2
+          ref: dsh-v0.2.0-rc.1
           path: .dsh-checkout
           fetch-depth: 1
 
@@ -84,7 +84,7 @@ jobs:
 
       # Pinned to the release this plugin is verified against (docs/COMPAT.md).
       - name: Install the pinned dsh CLI
-        run: npm install --global @deepseek-ai/dsh@0.1.7-rc.2
+        run: npm install --global @deepseek-ai/dsh@0.2.0-rc.1
 
       # `dsh plugin … add` materialises the profile with pnpm, which the runner
       # does not ship: without it the install step dies with exit 127.
@@ -124,12 +124,25 @@ jobs:
         with:
           node-version: 24
 
-      - name: Check out the pinned dsh release
+      - name: Check out the pinned dsh release (verification baseline)
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.2.0-rc.1
+          path: .dsh-release
+          fetch-depth: 1
+
+      # The declared SUPPORT FLOOR (docs/COMPAT.md: dsh ≥ 0.1.7-rc.2). Kept in
+      # the matrix as a regression sentinel: the baseline proves the plugin
+      # works on the version users are on now, this row proves it still works
+      # on the oldest version it PROMISES to support. Drop it only when the
+      # floor itself moves.
+      - name: Check out the support floor (dsh 0.1.7-rc.2)
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
           ref: dsh-v0.1.7-rc.2
-          path: .dsh-release
+          path: .dsh-floor
           fetch-depth: 1
 
       - name: Check out dsh master (early warning)
@@ -144,5 +157,5 @@ jobs:
         env:
           # An explicit list makes "nothing to probe" a failure, so a typo here
           # cannot pass as a green matrix (see scripts/check-matrix.mjs).
-          DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-main
+          DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-floor,${{ github.workspace }}/.dsh-main
         run: npm run test:matrix

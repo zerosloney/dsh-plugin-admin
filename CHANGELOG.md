@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Changed
+
+- **验证基线升到 dsh 0.2.0-rc.1，支持下限 0.1.7-rc.2 保留为回归哨兵**：此前全仓 pin 在 0.1.7-rc.2（那是我方声明的**支持下限**，不是最新可用版本），而插件实际早已在 0.2.0-rc.1 上验证通过（`integration-check` 142 条接缝契约零漂移、`smoke:real-host` 28/28）——只是 CI 没跑它。现 CI 的 `test`/`host-smoke` 与之配套的 pinned checkout、`smoke-published` 的全局 dsh 安装、`seam-early-warning` 三处 pin 全部改指 `dsh-v0.2.0-rc.1`；`seam-matrix` 变**三档**（验证基线 0.2.0-rc.1 + 支持下限 0.1.7-rc.2 + master 预警行），下限档在声明承诺移动前不删。`check-matrix.mjs` 用法示例与 `docs/COMPAT.md`（基线段、矩阵表头、版本策略、实测行）、两个 README 的版本行同步更新。语义分工：**基线段证明插件在用户当前版本上可用，下限档证明它在承诺支持的最老版本上仍可用。** 实证：真实 dsh 0.2.0-rc.1 上 `smoke:real-host` 28/28、`test:matrix` 对 0.2.0-rc.1 checkout 142 契约零漂移、`npm test` 39 步全绿。
+
 ## [1.26.2] - 2026-09-29
 
 ### Changed
