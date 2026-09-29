@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **CI 作业补超时兜底 + 宿主接缝预警从拉式改滚动**（`.github/workflows/`）：`ci.yml` 的三个作业与 `release.yml` 的 publish 补 `timeout-minutes`（test 30 / host-smoke 20 / seam-matrix 20 / release 30）——门禁内部的等待（cron 分钟边界轮询、真实宿主 boot 预算）只约束它们知道的那条路径，一次意外挂死不该烧掉 GitHub 默认的 6 小时 runner。新增 `seam-early-warning.yml`：每日 03:17 UTC 定时（+ `workflow_dispatch` 手动触发）对 pinned release 与 `dsh master` 双 checkout 跑同一套接缝探针（`npm run test:matrix`）——`ci.yml` 的 seam-matrix 只在本仓库有 push/PR 时才跑，预警是拉式的：插件静默期内的宿主漂移此前无人察觉（scheduled 运行失败 GitHub 默认邮件通知仓库所有者；该工作流不装依赖，与 seam-matrix 同为两个浅 checkout + 一次 node 运行）。
+
 ## [1.26.1] - 2026-09-29
 
 安全修正一轮 + 对照 dsh 核心（0.1.6 / 0.2.0-rc.1 接缝）的审查收口 + 无障碍与竞态加固。本轮的快照：`npm test` 38 步全绿（`integration-check` 142 条探针）、oxlint 144 warnings / 0 errors、真实宿主冒烟 `smoke:real-host` 28/28（真实 Chromium 渲染本插件面板无未捕获异常）。

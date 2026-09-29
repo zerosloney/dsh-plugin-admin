@@ -18,6 +18,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Full npm test inside (see the `test` job in ci.yml) plus a publish; same
+    # hang-vs-6-hour-default reasoning.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

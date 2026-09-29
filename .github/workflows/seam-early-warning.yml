@@ -1,0 +1,63 @@
+name: Seam early warning
+
+# The seam-matrix job in ci.yml probes dsh master for upstream drift, but it
+# only runs when THIS repo has activity (push / PR) — pull-based early
+# warning: while the plugin is quiet, dsh master can drift for weeks with
+# nobody looking. This workflow schedules the exact same probe (pinned
+# release + master, `npm run test:matrix`) daily, so a contract change is
+# caught in days regardless of plugin activity. A failed scheduled run
+# emails the repo owner — that is the whole notification story, no extra
+# wiring. GitHub disables cron workflows after 60 days without a commit; a
+# repo this quiet has bigger problems, but re-enabling is one click.
+on:
+  schedule:
+    # Daily at 03:17 UTC — off the top of the hour to dodge cron congestion.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A still-running scheduled probe has nothing newer to race; if a manual
+# dispatch overlaps, the newer run wins (same policy as ci.yml).
+concurrency:
+  group: seam-early-warning
+  cancel-in-progress: true
+
+jobs:
+  seam-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Same two checkouts as the seam-matrix job in ci.yml: the pinned
+      # release this plugin is verified against (docs/COMPAT.md), plus dsh
+      # master as the early-warning row. No dependencies are installed —
+      # check-matrix only reads TypeScript sources (see ci.yml).
+      - name: Check out the pinned dsh release
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.1.7-rc.2
+          path: .dsh-release
+          fetch-depth: 1
+
+      - name: Check out dsh master (early warning)
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          path: .dsh-main
+          fetch-depth: 1
+
+      - name: Probe every checkout
+        env:
+          # An explicit list makes "nothing to probe" a failure, so a typo
+          # here cannot pass as a green matrix (see scripts/check-matrix.mjs).
+          DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-main
+        run: npm run test:matrix
