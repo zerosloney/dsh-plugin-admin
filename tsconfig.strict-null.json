@@ -1,0 +1,38 @@
+{
+  // The strict-null track (the second axis of the progressive tightening): its
+  // own GROWING entry-file list under `strictNullChecks`.
+  //
+  // It extends tsconfig.json, NOT tsconfig.strict.json — and that is load
+  // bearing, because the two flags are NOT orthogonal: `noImplicitAny` makes
+  // TypeScript infer a WIDER type for `let x = null` (measured: under
+  // strictNullChecks alone that pattern is 6 errors in patch-utils.js; with
+  // noImplicitAny also on it is 0, because the declaration widens instead of
+  // being pinned to the literal type `null`). Stacking the tracks would
+  // therefore SILENCE exactly the findings this track exists to catch — a file
+  // would look clean while its null handling was unchecked.
+  //
+  // The consequence to remember: a file's membership in the two tracks is
+  // INDEPENDENT. Joining the any track does not check its null handling, and
+  // joining this one does not check its implicit any. Both lists have to be
+  // grown; the eventual goal is folding BOTH flags into tsconfig.json, at which
+  // point the masking stops mattering because nothing is inferred as `any`.
+  //
+  // Measured when this track was created: strictNullChecks alone was 139 errors
+  // over 26 of 50 files, flat-tailed (the largest file had 18). ~44 of those are
+  // the `let x = null` pattern above and ~20 are empty-array literals inferring
+  // `never[]` — both pure annotation fixes. The rest mix "runtime guard exists,
+  // the type cannot see it" (annotate, do NOT change logic — changing it
+  // introduces real bugs) with a small number of genuine defects this flag
+  // catches and noImplicitAny cannot (e.g. a spread that overwrites the fields
+  // written before it). See CONTRIBUTING's strict-track section.
+  //
+  // Run: npm run check:types-strict-null   (a permanent run-gate step)
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strictNullChecks": true
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "lib/patch-utils.js"
+  ]
+}

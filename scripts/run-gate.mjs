@@ -35,6 +35,7 @@ const node = process.execPath
 const STEPS = [
   { name: 'check:types', desc: 'tsc --noEmit (checkJs) over lib/** and src/client/**', cmd: ['npm', 'run', 'check:types'], static: true },
   { name: 'check:types-strict', desc: 'noImplicitAny over the growing strict include list (tsconfig.strict.json)', cmd: ['npm', 'run', 'check:types-strict'], static: true },
+  { name: 'check:types-strict-null', desc: 'strictNullChecks over the same growing list (tsconfig.strict-null.json)', cmd: ['npm', 'run', 'check:types-strict-null'], static: true },
   { name: 'check:lint', desc: 'oxlint over lib src scripts (errors only; warnings recorded)', cmd: ['npm', 'run', 'check:lint'], static: true },
   { name: 'build:client --check', desc: 'built artifacts match src/client/** — catches forgot-to-rebuild', cmd: [node, 'scripts/build-client.mjs', '--check'], static: true },
   // Static in the same sense as the four above: it reads the repo, runs nothing,
