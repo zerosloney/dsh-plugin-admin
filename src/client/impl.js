@@ -26,13 +26,15 @@ var useEffect = React.useEffect
 function useLocaleRevision() {
   var bump = useState(0)[1]
   useEffect(function () {
-    return subscribeLocale(function () { bump(function (n) { return n + 1 }) })
+    return subscribeLocale(function () { bump(function (/** @type {number} */ n) { return n + 1 }) })
   }, [])
 }
 
-/** Wrap one slot component so it repaints on locale changes. */
+/** Wrap one slot component so it repaints on locale changes.
+ * @param {any} Component - the wrapped slot component (host duck type).
+ */
 function withLocale(Component) {
-  return function LocaleAwareSlot(props) {
+  return function LocaleAwareSlot(/** @type {any} */ props) {
     useLocaleRevision()
     return createElement(Component, props)
   }
@@ -40,6 +42,7 @@ function withLocale(Component) {
 
 
 
+/** @param {string|null} path */
 function baseName(path) {
   if (path === null || path === '') return dshT('（无工作目录）')
   var parts = path.replace(/\\/g, '/').split('/')
@@ -47,14 +50,16 @@ function baseName(path) {
   return last === '' ? parts[parts.length - 2] || path : last
 }
 
+/** @param {number} ms */
 function formatDate(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
   var d = new Date(ms)
-  var pad = function (n) { return (n < 10 ? '0' : '') + String(n) }
+  var pad = function (/** @type {number} */ n) { return (n < 10 ? '0' : '') + String(n) }
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
     + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
 }
 
+/** @param {any} error */
 function messageOf(error) {
   if (error !== null && typeof error === 'object' && typeof error.message === 'string') return error.message
   if (typeof error === 'string') return error
@@ -84,17 +89,22 @@ function messageOf(error) {
  *   useState's lazy initializer (localStorage-reading sections).
  * @returns {{ state: any, set: any, alive: any, patch: any, mount: any }}.
  */
+/** @param {any} initial */
 function sectionState(initial) {
   var pair = useState(initial)
   var alive = useRef(false)
+  /** @param {Record<string, any>} partial */
+  /** @param {Record<string, any>} partial */
   function patch(partial) {
-    pair[1](function (cur) {
+    pair[1](function (/** @type {any} */ cur) {
+      /** @type {Record<string, any>} */
       var next = {}
       for (var k in cur) next[k] = cur[k]
       for (var pk in partial) next[pk] = partial[pk]
       return next
     })
   }
+  /** @param {() => void} reload */
   function mount(reload) {
     useEffect(function () {
       alive.current = true
@@ -111,22 +121,29 @@ function sectionState(initial) {
 // node on top — rapid consecutive failures would otherwise overlap and hide
 // the earlier message behind the latest. A toast mid-fade (leaving) is
 // revived by a replacement rather than left to vanish.
-/** @type {{ el: HTMLElement, timer: ReturnType<typeof setTimeout>|null, removalTimer: ReturnType<typeof setTimeout>|null, leaving: boolean }|null} */
+/** One toast's DOM node + its two timers + the mid-fade flag. */
+/** @typedef {{ el: HTMLElement, timer: ReturnType<typeof setTimeout>|null, removalTimer: ReturnType<typeof setTimeout>|null, leaving: boolean }} ToastState */
+/** @type {ToastState|null} */
 var activeToast = null
 
 /**
  * Show a floating toast notification at the top of the viewport.
  * Auto-dismisses after `duration` ms. Supports 'success', 'error', 'info'.
  * Single-slot: a new toast replaces the current one (if any).
+ * @param {string} type - the toast kind ('success' | 'error' | 'info').
+ * @param {string} text - the message body.
+ * @param {number} [duration] - auto-dismiss delay in ms (default 3000).
  */
 function showToast(type, text, duration) {
   if (typeof document === 'undefined') return
   duration = duration || 3000
 
+  /** @param {ToastState|null} state - the tracked toast (null-safe: the replace
+   * closure fires after the guard, and a `var` binding loses that narrowing). */
   function quit(state) {
-    if (state.leaving) return
+    if (state === null || state.leaving) return
     state.leaving = true
-    clearTimeout(state.timer)
+    if (state.timer !== null) clearTimeout(state.timer)
     state.el.classList.add('leaving')
     state.removalTimer = setTimeout(function () {
       if (state.el.parentNode) state.el.parentNode.removeChild(state.el)
@@ -162,6 +179,7 @@ function showToast(type, text, duration) {
  * falls back to a hidden textarea + execCommand for older browsers or
  * non-secure contexts.
  */
+/** @param {string} text */
 function copyTextToClipboard(text) {
   if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
     navigator.clipboard.writeText(text).then(function () {
@@ -174,6 +192,7 @@ function copyTextToClipboard(text) {
   fallbackCopy(text)
 }
 
+/** @param {string} text */
 function fallbackCopy(text) {
   try {
     var ta = document.createElement('textarea')
@@ -190,6 +209,7 @@ function fallbackCopy(text) {
 }
 
 /** Copy without the fixed 会话 ID toast — the caller owns the feedback. */
+/** @param {string} text */
 function copyTextSilently(text) {
   if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
     return navigator.clipboard.writeText(text)
@@ -203,6 +223,8 @@ function copyTextSilently(text) {
 }
 
 /** Trigger a browser download for in-memory text (the session export path). */
+/** @param {string} filename
+ * @param {string} text */
 function downloadTextFile(filename, text) {
   if (typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
     throw new Error(dshT('当前环境不支持文件下载'))
@@ -243,6 +265,9 @@ function downloadTextFile(filename, text) {
 //
 // Web 与会话 carries the search-history glyph: a magnifier whose lens is a
 // clock — Web 搜索's circle-plus-handle over 历史会话's clock hands.
+/** Keyed by the zh-CN label (post-i18nSource) — indexed by DOM text, so the
+ * Record view is the honest model, like I18N_EN. */
+/** @type {Record<string, string>} */
 var SETTINGS_NAV_ICONS = {
   '技能': '<path d="M8 4.6C6.9 3.6 5.3 3.2 3 3.3v8.4c2.3-.1 3.9.3 5 1.3 1.1-1 2.7-1.4 5-1.3V3.3c-2.3-.1-3.9.3-5 1.3z"/><path d="M8 4.6v8.4"/>',
   'MCP服务器': '<rect x="2.25" y="2.25" width="11.5" height="4.75" rx="1.2"/><rect x="2.25" y="9" width="11.5" height="4.75" rx="1.2"/><circle cx="5" cy="4.62" r="0.95" fill="currentColor" stroke="none"/><circle cx="5" cy="11.38" r="0.95" fill="currentColor" stroke="none"/>',
@@ -256,6 +281,8 @@ var SETTINGS_NAV_ICONS = {
 var SETTINGS_NAV_ICON_MARK = 'data-dsh-admin-nav-icon'
 
 /** Build one 16×16 outline SVG carrying the official navIcon css class. */
+/** @param {string} label - the nav row's label (the table key).
+ * @param {string} template - the SVG path markup to inline. */
 function buildNavIconSvg(label, template) {
   var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   svg.setAttribute('viewBox', '0 0 16 16')
@@ -334,6 +361,8 @@ function setupSettingsNavIcons() {
  * popup appears, identifies it as a session or workspace menu by checking
  * the existing button labels, and injects additional items.
  */
+/** @param {(method: string, args: any) => Promise<any>} call - the RPC bound by apply().
+ * @param {(() => void)|null} refreshSessions - optional sidebar-list nudge. */
 function setupMenuInjection(call, refreshSessions) {
   if (typeof document === 'undefined') return function () {}
 
@@ -343,6 +372,7 @@ function setupMenuInjection(call, refreshSessions) {
    * Extracting from the DOM keeps the injection synchronous — no RPC needed
    * just to show the button, so the menu can't close before it appears.
    */
+  /** @param {any} row - the treeitem DOM element. */
   function sessionTitleFromRow(row) {
     var btn = row.querySelector(dshT('button[aria-label*="会话" i][aria-label*="操作" i], button[aria-label*="session" i][aria-label*="actions" i]'))
     if (btn === null) return null
@@ -358,6 +388,7 @@ function setupMenuInjection(call, refreshSessions) {
   }
 
   /** Find the treeitem row for the anchor button nearest the menu. */
+  /** @param {any} menuEl - the popup menu element. */
   function rowForMenu(menuEl) {
     var menuRect = menuEl ? menuEl.getBoundingClientRect() : null
     var allRows = document.querySelectorAll('[role="treeitem"]')
@@ -400,6 +431,7 @@ function setupMenuInjection(call, refreshSessions) {
     return closest
   }
 
+  /** @param {any} menuEl - the popup menu element. */
   function injectItems(menuEl) {
     if (menuEl.querySelector('[data-dsh-admin-injected]')) return
 
@@ -422,17 +454,20 @@ function setupMenuInjection(call, refreshSessions) {
       // match only mis-copies an id); delete must never guess, so it
       // resolves by exact title only and refuses duplicate titles — the
       // panel's rows act on ids and can disambiguate.
+      /** @param {(sessions: any[]) => void} done */
       function fetchSessions(done) {
-        call('sessionAdmin/list', {}).then(function (listResult) {
+        call('sessionAdmin/list', {}).then(function (/** @type {any} */ listResult) {
           done((listResult && listResult.ok && listResult.value && listResult.value.sessions) || [])
         }, function () { showToast('error', dshT('❌ 无法加载会话列表')) })
       }
       // Normalize a title for comparison: trim, collapse spaces, drop
       // trailing ellipsis and truncation artifacts.
+      /** @param {string} v */
       function norm(v) {
         return (v || '').replace(/\s+/g, ' ').replace(/\.{3,}\s*$/, '').trim().toLowerCase()
       }
 
+      /** @param {(session: any) => void} cb */
       function resolveSessionFuzzy(cb) {
         fetchSessions(function (sessions) {
           var match = null
@@ -453,6 +488,7 @@ function setupMenuInjection(call, refreshSessions) {
         })
       }
 
+      /** @param {(session: any) => void} cb */
       function resolveSessionExact(cb) {
         fetchSessions(function (sessions) {
           var nt = norm(title)
@@ -503,7 +539,7 @@ function setupMenuInjection(call, refreshSessions) {
       wsTitle = wsTitle.trim()
       if (wsTitle === '') return
       appendMenuItem(viewport, dshT('在资源管理器打开'), 'normal', function () {
-        call('sessionAdmin/list', {}).then(function (listResult) {
+        call('sessionAdmin/list', {}).then(function (/** @type {any} */ listResult) {
           var workspaces = (listResult && listResult.ok && listResult.value && listResult.value.workspaces) || []
           var wsPath = null
           for (var i = 0; i < workspaces.length; i++) {
@@ -522,6 +558,11 @@ function setupMenuInjection(call, refreshSessions) {
     }
   }
 
+  /** @param {any} viewport - the menu's presentation element.
+   * @param {string} label - item text.
+   * @param {string} kind - 'normal' | 'danger'.
+   * @param {() => void} onClick
+   * @param {string} [confirmText] - when present, the item arms first. */
   function appendMenuItem(viewport, label, kind, onClick, confirmText) {
     // Separator (only if there are already items — always, to visually group)
     var sep = document.createElement('div')
@@ -642,7 +683,7 @@ function loadPanels() {
           downloadTextFile: downloadTextFile,
           // Shared-slot panels resolve the three-state switch through this
           // (apply() installs the real resolver; standalone mounts stay open).
-          panelHidden: function (panel) {
+          panelHidden: function (/** @type {string} */ panel) {
             return typeof panelHiddenResolver === 'function' ? panelHiddenResolver(panel) === true : false
           },
         })
@@ -666,7 +707,7 @@ function loadPanels() {
  * @returns {Function} the slot component.
  */
 function lazyPanel(exportName) {
-  return function LazyPanel(props) {
+  return function LazyPanel(/** @type {any} */ props) {
     var statePair = useState(panelsModule)
     var loaded = statePair[0]
     var setModule = statePair[1]
@@ -716,6 +757,7 @@ function lazyPanel(exportName) {
 /*                             Plugin Entrypoint                              */
 /* ========================================================================== */
 
+/** @param {Record<string, any>} ctx - the client plugin context. */
 function apply(ctx) {
   // Phase E: official-first. Panels whose official counterpart is mounted do
   // not register at all (auto-yield); `dsh-admin-panels` in localStorage
@@ -729,6 +771,8 @@ function apply(ctx) {
   // two-language fallback inside i18n.js keeps working either way.
   ctx.effect(function () { return installLocaleRuntime(ctx) }, 'plugin-admin: locale runtime')
 
+  /** @param {string} method
+   * @param {any} args */
   var call = function (method, args) {
     return ctx.connection.rpc.call('/api', method, { args: args })
   }
@@ -773,12 +817,14 @@ function apply(ctx) {
       return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
     } catch (error) { return {} }
   }
+  /** @param {Record<string, string>} states */
   var writePolicyCache = function (states) {
     try { window.localStorage.setItem(POLICY_CACHE_KEY, JSON.stringify(states)) } catch (error) { /* private mode */ }
   }
   var panelStates = readPolicyCache()
   var slotDisposed = false
   ctx.effect(function () { return function () { slotDisposed = true } }, 'plugin-admin: slot lifecycle')
+  /** @param {string} panel */
   var yielded = function (panel) {
     var state = panelStates[panel] || 'auto'
     if (state === 'off') return true
@@ -922,8 +968,12 @@ function apply(ctx) {
   // should have dropped, and the two maps disagreed about what was installed.
   // Releasing the subscription makes the maps agree and leaves registration to
   // `installOne`, where it belongs.
+  /** @type {Record<string, (() => void)|undefined>} */
   var injectDisposers = {}
+  /** @type {Record<string, (() => void)|undefined>} */
   var registerDisposers = {}
+  /** @param {Record<string, any>} spec - one SLOT_SPECS entry. */
+  /** @param {Record<string, any>} spec - one SLOT_SPECS entry. */
   var installOne = function (spec) {
     if (slotDisposed || injectDisposers[spec.panel] !== undefined) return
     injectDisposers[spec.panel] = ctx.slots.inject(spec.slot, function () {
@@ -933,6 +983,8 @@ function apply(ctx) {
       return dispose
     })
   }
+  /** @param {string} panel */
+  /** @param {string} panel */
   var uninstallOne = function (panel) {
     // Drop the inject subscription too, so a later reconcile can install again.
     // Without this the slot stays injected (harmless in itself) while

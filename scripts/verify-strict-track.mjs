@@ -56,7 +56,7 @@ function check(name, fn) {
  */
 const TRACKS = [
   { key: 'strict (host half)', config: 'tsconfig.strict.json', flag: 'noImplicitAny', floor: 39, graph: 'lib', docPhrase: '宿主文件' },
-  { key: 'strict-client (browser half)', config: 'tsconfig.strict-client.json', flag: 'noImplicitAny', floor: 4, graph: 'client', docPhrase: '浏览器文件' },
+  { key: 'strict-client (browser half)', config: 'tsconfig.strict-client.json', flag: 'noImplicitAny', floor: 5, graph: 'client', docPhrase: '浏览器文件' },
 ]
 
 for (const track of TRACKS) {

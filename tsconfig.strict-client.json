@@ -22,6 +22,7 @@
     "src/client/styles.js",
     "src/client/panels/context.js",
     "src/client/i18n.js",
-    "src/client/native-coverage.js"
+    "src/client/native-coverage.js",
+    "src/client/impl.js"
   ]
 }

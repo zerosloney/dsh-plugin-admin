@@ -121,7 +121,7 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 ### 浏览器半场轨道（`src/client/**`）
 
-主机半场走完后，`noImplicitAny` 想真正"折回 `tsconfig.json` 成为全仓默认"，还差浏览器半场——主配置同时管着 `lib/**` 与 `src/client/**`，任一半不清完都不能开。因此有了第二条同机制轨道：`npm run check:types-strict-client` 跑 `tsconfig.strict-client.json`（同样 extends 主配置、同样只增不减），当前覆盖 **20 个浏览器文件中的 4 个**。它与主机轨道**共用同一个守卫**（`verify-strict-track.mjs` 同时重算并断言两条的覆盖数与地板值），机制、纪律、先例完全相同。
+主机半场走完后，`noImplicitAny` 想真正"折回 `tsconfig.json` 成为全仓默认"，还差浏览器半场——主配置同时管着 `lib/**` 与 `src/client/**`，任一半不清完都不能开。因此有了第二条同机制轨道：`npm run check:types-strict-client` 跑 `tsconfig.strict-client.json`（同样 extends 主配置、同样只增不减），当前覆盖 **20 个浏览器文件中的 5 个**。它与主机轨道**共用同一个守卫**（`verify-strict-track.mjs` 同时重算并断言两条的覆盖数与地板值），机制、纪律、先例完全相同。
 
 浏览器侧的两个外部模块不是本仓代码，类型由 `types/react.d.ts` 接缝声明——沿用 `dsh-seams.d.ts` 的"零依赖接缝"立场，不引入 `@types/react`；签名**刻意保持松**：React 的 hook 是泛型的，而面板按动态方式调用（`useState(null)` 的 setter 后来收对象、`useRef(null)` 后来存 Timeout），严格泛型接缝会把状态字面量钉死、点亮四个面板约 90 条主配置必须保持全绿的错误。接缝只负责让 `import React from 'react'` 可解析（修 TS7016），严格 client 轨道检查的是面板**自己**的代码。客户端第一个入口 `panels/context.js` 的 TS7016 就是这样清零的。实测全量还有 **962 条 / 17 个文件**（最大 `panels/subagents.js` 160 条）；按闭包排序，`styles.js` / `context.js` / `i18n.js` / `native-coverage.js` 四个叶子已先纳入。
 
