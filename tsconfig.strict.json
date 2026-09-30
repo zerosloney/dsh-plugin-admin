@@ -48,6 +48,7 @@
     "lib/workspace-path.js",
     "lib/fs-admin.js",
     "lib/workflow-tools.js",
-    "lib/workflow-library.js"
+    "lib/workflow-library.js",
+    "lib/workflow-admin.js"
   ]
 }
