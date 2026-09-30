@@ -113,7 +113,17 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 **`include` 列的是入口文件，但 `tsc` 会顺着 import 往下走**：一个文件只有在**它和它整条传递 import 闭包**都清零之后才能纳入，否则清单里加一行就带进来别人的一堆错误。所以优先纳入**独立叶子**（无 import，如 `panel-ids.js`）与小而自洽的模块；`patch-utils.js` 之所以能作为第一个入口，正是因为它的闭包只有它自己。想知道某个入口会带进哪些文件、以及还差多少，先量一遍再动手——写一行小脚本走一遍 `from './x.js'` 构图即可，比试错快得多。
 
-当前覆盖 **39 个宿主文件中的 39 个**（**全量**——主机半场（`lib/**`）已全部纳入）。这个数字由 `scripts/verify-strict-track.mjs` 从配置与真实 import 图**重算**并断言，所以改入口清单必须同步这句散文、反之亦然——它同时守住"清单只增不减"（地板值随新增上调）。**主机半场走完后的下一段是浏览器半场**：`src/client/**` 全量开 `noImplicitAny` 实测还有 **962 条 / 17 个文件**（最大的 `panels/subagents.js` 160 条），那需要另一条同样的只增不减轨道（如 `tsconfig.strict-client.json`）——在它清完之前，`noImplicitAny` 不能折进 `tsconfig.json`（主配置同时管着两半）。这条轨道及其"开关真的抓到东西"的历史记录如下。剩下的不是被政策排除，而是**需要真正的类型建模**：全量开 `noImplicitAny` 目前约 1900 条，其中 ~72% 是 `TS7006`（回调参数缺类型），其余多是把 `{}` 字面量逐步加属性（`TS2339`）、用 `string` 索引一个无索引签名的对象（`TS7053`）。这些要补的是接口/typedef，**不是** `@param {any}`——补 `any` 只是把错误挪走，同时废掉这个开关的意义。三条实测先例，都是"开关真的抓到东西"：① 给 `health-report.js` 补 `HealthReport`/`ToolHealth` typedef 时，开关当场抓出**文档注释本身写错**的 `errorCodes` 形状（实际是 `{code,count}[]` 而非 `string[]`）；② 给 `peer-compat.js` 补 `ParsedVersion` 时，"只缓存正结果"的契约才被写成显式类型（`string|null|undefined`）而不是隐式 any；③ 给 `skills-admin.js` 的 `scopeInfoFor` 补返回类型时，发现注释声明 `cwd: string` 而实现实际返回 `string|null`——类型一写下来就露了。
+当前覆盖 **39 个宿主文件中的 39 个**（**全量**——主机半场（`lib/**`）已全部纳入）。这个数字由 `scripts/verify-strict-track.mjs` 从配置与真实 import 图**重算**并断言，所以改入口清单必须同步这句散文、反之亦然——它同时守住"清单只增不减"（地板值随新增上调）。这条轨道上"开关真的抓到东西"的历史记录：① 给 `health-report.js` 补 `HealthReport`/`ToolHealth` typedef 时，开关当场抓出**文档注释本身写错**的 `errorCodes` 形状（实际是 `{code,count}[]` 而非 `string[]`）；② 给 `peer-compat.js` 补 `ParsedVersion` 时，"只缓存正结果"的契约才被写成显式类型（`string|null|undefined`）而不是隐式 any；③ 给 `skills-admin.js` 的 `scopeInfoFor` 补返回类型时，发现注释声明 `cwd: string` 而实现实际返回 `string|null`——类型一写下来就露了；④ `mcp-probe.js` 的 `{ ok: probe.ok, … spread …probe }` 被 `TS2783` 点名（展开在后覆盖掉调用点算出的显式字段）；⑤ `makeSerialQueue` 声明的 `() => Promise<T>` 契约比真实（宽松）契约窄，`subagent-admin` 有 3 处传同步回调，按 Promise 标注立刻暴露。
+
+**`include` 列的是入口文件，但 `tsc` 会顺着 import 往下走**：一个文件只有在**它和它整条传递 import 闭包**都清零之后才能纳入，否则清单里加一行就带进来别人的一堆错误。所以优先纳入**独立叶子**（无 import，如 `panel-ids.js`）与小而自洽的模块；`patch-utils.js` 之所以能作为第一个入口，正是因为它的闭包只有它自己。想知道某个入口会带进哪些文件、以及还差多少，先量一遍再动手——写一行小脚本走一遍 `from './x.js'` 构图即可，比试错快得多。
+
+剩下的不是被政策排除，而是**需要真正的类型建模**：全量开 `noImplicitAny` 目前约 1900 条，其中 ~72% 是 `TS7006`（回调参数缺类型），其余多是把 `{}` 字面量逐步加属性（`TS2339`）、用 `string` 索引一个无索引签名的对象（`TS7053`）。这些要补的是接口/typedef，**不是** `@param {any}`——补 `any` 只是把错误挪走，同时废掉这个开关的意义。
+
+### 浏览器半场轨道（`src/client/**`）
+
+主机半场走完后，`noImplicitAny` 想真正"折回 `tsconfig.json` 成为全仓默认"，还差浏览器半场——主配置同时管着 `lib/**` 与 `src/client/**`，任一半不清完都不能开。因此有了第二条同机制轨道：`npm run check:types-strict-client` 跑 `tsconfig.strict-client.json`（同样 extends 主配置、同样只增不减），当前覆盖 **20 个浏览器文件中的 4 个**。它与主机轨道**共用同一个守卫**（`verify-strict-track.mjs` 同时重算并断言两条的覆盖数与地板值），机制、纪律、先例完全相同。
+
+浏览器侧的两个外部模块不是本仓代码，类型由 `types/react.d.ts` 接缝声明——沿用 `dsh-seams.d.ts` 的"零依赖接缝"立场，不引入 `@types/react`；签名**刻意保持松**：React 的 hook 是泛型的，而面板按动态方式调用（`useState(null)` 的 setter 后来收对象、`useRef(null)` 后来存 Timeout），严格泛型接缝会把状态字面量钉死、点亮四个面板约 90 条主配置必须保持全绿的错误。接缝只负责让 `import React from 'react'` 可解析（修 TS7016），严格 client 轨道检查的是面板**自己**的代码。客户端第一个入口 `panels/context.js` 的 TS7016 就是这样清零的。实测全量还有 **962 条 / 17 个文件**（最大 `panels/subagents.js` 160 条）；按闭包排序，`styles.js` / `context.js` / `i18n.js` / `native-coverage.js` 四个叶子已先纳入。
 
 **`strictNullChecks` 已是主配置默认**（2026-09 折回，见 CHANGELOG）：判别布尔字面量联合时仍优先写 `x.ok === false` 而不是 `!x.ok`——后者在 `strictNullChecks` 关闭时实测**不能**收窄（左 `ok: true` 成员仍在作用域内、`x.message` 报 TS2339），而显式 `=== false` 无论开关状态都直接。给 `catch` 里构造的失败对象加 `@type` 断言也是必需的（catch 绑定是 `any`，不注释会推出 `ok: boolean` 从而毁掉整个联合类型的判别）。
 

@@ -24,6 +24,7 @@
     "test": "node scripts/run-gate.mjs",
     "check:types": "tsc --noEmit",
     "check:types-strict": "tsc -p tsconfig.strict.json --noEmit",
+    "check:types-strict-client": "tsc -p tsconfig.strict-client.json --noEmit",
     "check:lint": "oxlint lib src scripts",
     "build:client": "node scripts/build-client.mjs",
     "test:matrix": "node scripts/check-matrix.mjs",

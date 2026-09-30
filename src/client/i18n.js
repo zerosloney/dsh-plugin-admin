@@ -31,6 +31,11 @@ var I18N_LANG = (function () {
   return /^en\b/i.test(String((typeof navigator !== 'undefined' && navigator.language) || '')) ? 'en' : 'zh'
 })()
 
+/** The English table keyed by its zh-CN source strings. The Record view is
+ * what makes `I18N_EN[s]` legal for an ARBITRARY input string — dshT handles
+ * an unknown key by returning the source (the table is not exhaustive), so
+ * the index signature is the honest model, not a workaround. */
+/** @type {Record<string, string>} */
 var I18N_EN = {
   "（无工作目录）": "(no working directory)",
   // Separators and brackets used to be bare literals at their call sites, so the
@@ -930,7 +935,8 @@ var I18N_ZH = null
 /** @type {((s: string) => any)|null} */
 var boundTranslate = null
 /** Locale id the shell reports as active (null until the service is bound). */
-var localeActiveId = null
+/** @type {string|null} */
+var localeActiveId = /** @type {any} */ (null)
 /** @type {((id: string) => void)|null} */
 var localeSetLocale = null
 /** Panel-level locale subscribers: the React wrappers re-render through these. */
@@ -954,6 +960,7 @@ function activeLanguage() {
 
 /** One listener throwing must not abort the repaint of the others. */
 function notifyLocaleListeners() {
+  /** @type {Array<() => void>} */
   var snapshot = []
   localeListeners.forEach(function (listener) { snapshot.push(listener) })
   for (var i = 0; i < snapshot.length; i += 1) {
@@ -961,7 +968,8 @@ function notifyLocaleListeners() {
   }
 }
 
-/** Read one locale service's active id without trusting its shape. */
+/** Read one locale service's active id without trusting its shape.
+ * @param {Record<string, any>} locale - the shell locale service (duck-typed). */
 function readActiveLocaleId(locale) {
   try {
     var snapshot = typeof locale.getSnapshot === 'function' ? locale.getSnapshot() : null
@@ -1012,7 +1020,8 @@ export function installLocaleRuntime(ctx) {
   }
 }
 
-/** Translate one UI string. Keys are the zh-CN source strings. */
+/** Translate one UI string. Keys are the zh-CN source strings.
+ * @param {string} s */
 function dshT(s) {
   if (boundTranslate !== null) {
     var bound = boundTranslate(s)
@@ -1024,7 +1033,8 @@ function dshT(s) {
 }
 
 /** Map a possibly-translated label back to its zh-CN source key — for the
- * few lookups that KEY by label (nav icon templates) instead of displaying. */
+ * few lookups that KEY by label (nav icon templates) instead of displaying.
+ * @param {string} s */
 function i18nSource(s) {
   if (activeLanguage() !== 'en') return s
   for (var k in I18N_EN) {
@@ -1034,7 +1044,8 @@ function i18nSource(s) {
 }
 
 /** Switch the panel language: through the shell service when bound (live, no
- * reload), else persist and reload so every panel re-reads. */
+ * reload), else persist and reload so every panel re-reads.
+ * @param {string} lang */
 function setAdminLang(lang) {
   var next = lang === 'en' ? 'en' : 'zh'
   try { window.localStorage.setItem('dsh-admin-lang', next) } catch (e) { /* ignore */ }

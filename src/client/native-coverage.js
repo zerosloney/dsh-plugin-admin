@@ -34,7 +34,7 @@ export const NATIVE_COVERAGE = Object.freeze([
     label: '扩展插件',
     official: '插件侧边栏页 (ui-plugin-manager) + 插件列表页签 (ui-settings-plugin-inventory)',
     since: '0.1.7',
-    detect: function (ctx) {
+    detect: function (/** @type {any} */ ctx) {
       return hasSlotEntry(ctx, 'sidebar.panellist', 'plugins') || hasSlotEntry(ctx, 'settings.plugins.tab', 'all')
     },
   }),
@@ -152,6 +152,7 @@ function hasSlotEntry(ctx, name, id) {
  * @returns {Record<string, boolean>} panel id → forced.
  */
 export function forcedPanels() {
+  /** @type {Record<string, boolean>} */
   var forced = {}
   try {
     var raw = window.localStorage.getItem('dsh-admin-panels')
@@ -174,7 +175,9 @@ export function forcedPanels() {
  */
 export function resolveNativeCoverage(ctx) {
   var forced = forcedPanels()
+  /** @type {Record<string, boolean>} */
   var active = {}
+  /** @type {Array<Record<string, any>>} */
   var yielded = []
   for (var i = 0; i < NATIVE_COVERAGE.length; i += 1) {
     var row = NATIVE_COVERAGE[i]
