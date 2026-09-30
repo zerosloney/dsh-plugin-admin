@@ -64,7 +64,7 @@ check('the list only ever grows (no silent removal)', () => {
   // quote the old number. The floor is the current size — raise it when entries
   // are added, never lower it.
   assert.ok(
-    entries.length >= 18,
+    entries.length >= 20,
     `the strict track shrank to ${entries.length} entries; the list only grows (raise this floor when adding entries)`,
   )
 })

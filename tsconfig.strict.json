@@ -37,6 +37,8 @@
     "lib/store-version.js",
     "lib/tool-seed.js",
     "lib/overlay-admin.js",
-    "lib/skills-admin.js"
+    "lib/skills-admin.js",
+    "lib/workflow-command.js",
+    "lib/workspace-admin.js"
   ]
 }
