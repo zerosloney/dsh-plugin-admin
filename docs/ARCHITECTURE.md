@@ -131,7 +131,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 | 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
 | 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
 | 面板开关 | `panels` | `{}` | 逐面板三态开关：`auto`（默认，官方已覆盖就让位）/ `on`（即使官方有也注册）/ `off`（不注册，优先级最高）。键名必须是 11 个面板 id 之一（`extensions` / `mcp` / `skills` / `subagents` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`），值必须是三态之一；写错任一处**挂载期报错**。浏览器半读不到 config 行，所以挂载时经 `pluginAdmin/panels` 问宿主一次，答**上次的答案缓存**在 localStorage（键 `dsh-admin-panels-policy`），新答案到达后对账（关掉该关的、补上该开的）。 |
-| 安装 | `installScripts` | `allow` | pnpm 安装时是否允许依赖的生命周期脚本：`allow`（默认，与 `dsh plugin add` 一致）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来，这一取舍由部署方决定。 |
+| 安装 | `installScripts` | `allow` | pnpm 安装时是否允许依赖的生命周期脚本：`allow`（默认，与 `dsh plugin add` 一致）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来，这一取舍由部署方决定。**运行这些脚本的子进程会继承操作者的环境（只剔除 `DSH_*`）——含 API key 等凭据，详见 §5。** |
 
 **受校验直通覆盖（14）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
 
@@ -156,7 +156,9 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 
 ## 5. 信任边界与安全
 
-浏览器端可触发本地 pnpm 安装（含 package prepare 脚本——可用 `installScripts: 'local-only' | 'deny'` 关掉；pnpm 子进程的 `DSH_*` 环境变量会被剔除，其余环境（含 registry 凭据）按 `dsh plugin add` 的语义继承）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令——暴露到非本机前请务必评估权限范围。
+浏览器端可触发本地 pnpm 安装（含 package prepare 脚本——可用 `installScripts: 'local-only' | 'deny'` 关掉）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令——暴露到非本机前请务必评估权限范围。
+
+关于 pnpm 子进程的环境：**剔除的只有 `DSH_*` 命名空间（大小写不敏感），其余环境原样继承**——包括 `NPM_TOKEN` 这类 registry 凭据，也包括 `DEEPSEEK_API_KEY` / `GITHUB_TOKEN` / `AWS_*` / 任何 `*_PASSWORD` 等与本插件无关的凭据。这是**刻意的**：pnpm 需要 registry 凭据才能装私有包（丢掉会把可用的安装变成看起来像网络故障的 401），而精确区分"pnpm 需要的凭据"与"不该外传的凭据"在环境变量这一层做不到。**后果要如实认知**：`pnpm add` 的依赖，其 `prepare` / `postinstall` 生命周期脚本会继承这份环境，因此**只应安装你信任的包**；默认的 `installScripts: 'allow'` 与 `dsh plugin add` 语义一致（需要本地构建的包能装上），要收紧就用 `installScripts: 'local-only'`（只有本机路径与 `file:` / `link:` 规格可跑脚本）或 `'deny'`（一律 `--ignore-scripts`）。注意 MCP 探测走的是**另一套**更严的策略（按 `KEY|PASSWORD|SECRET|TOKEN` 名称模式剔除），两处不同是刻意的：探测是拿存储凭据去连第三方 server，而 pnpm 是要用凭据访问 registry。
 
 - **pnpm 操作数走 shell 元字符白名单**——`& | > < %` 等注入面不存在。
 - **原子写 + 权限收紧**：`package.json` / `cordis.patch.yml` / 全部 JSON 状态走 temp + rename，被替换的 patch 版本留滚动 `.bak`；凡是可能装着凭据的存储（patch 及其备份、hooks、MCP/子代理行、审计、webhook 规则、工作流脚本）创建即 `0600`，已存在的宽权限文件在下一次写入时收紧。
