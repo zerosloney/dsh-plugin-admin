@@ -61,6 +61,12 @@
     "lib/webhook-triggers.js",
     "lib/fs-admin.js",
     "lib/workflow-library.js",
-    "lib/workflow-tools.js"
+    "lib/workflow-tools.js",
+    "lib/mcp-probe.js",
+    "lib/plugin-admin.js",
+    "lib/web-search-admin.js",
+    "lib/cron-admin.js",
+    "lib/mcp-admin.js",
+    "lib/session-admin.js"
   ]
 }
