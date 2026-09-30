@@ -117,6 +117,28 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 **`strictNullChecks` 仍关着，会改变判别的写法**：这种环境下 `!x.ok` **不能**收窄布尔字面量联合类型（实测：左 `ok: true` 成员仍在作用域内、`x.message` 报 TS2339），而 `x.ok === false` **可以**。遇到"属性不存在"的怪报错时先确认是不是这个原因；给 `catch` 里构造的失败对象加 `@type` 断言也是必需的（catch 绑定是 `any`，不注释会推出 `ok: boolean` 从而毁掉整个联合类型的判别）。
 
+### 开 `strictNullChecks` 的可行性（已实测，2026-09）
+
+**结论：可行，量级只有 `noImplicitAny` 的 1/14，应当优先于继续刷 `noImplicitAny` 覆盖率。** 全量开它是 **139 条**（对照 `noImplicitAny` 约 1900 条），影响 26/50 个文件，且分布平坦——最大的 `impl.js` 也只有 18 条，没有尾部。原因是这个开关只检查「可能为空的值有没有被直接用」，而本仓库的空值来源集中在少数几个模式上。
+
+按成因分四类（实测计数）：
+
+| 类别 | 条数 | 性质 |
+|---|---|---|
+| `let x = null` / `const xs = []` 后赋值 | 44 + 20 | **机械**：补一个 `@type` 即可，不动逻辑 |
+| 「possibly null/undefined」解引用 | 25 | 多为**已有运行时守卫但类型证不出**（如 `if (derived === null) derived = …` 之后再赋值） |
+| null/undefined 作为实参传入 | 8 | 多数也是守卫已存在 |
+| 其余 | 42 | 逐个看，含少量**真问题** |
+
+**已实测的机械性**：`patch-utils.js` 原本 6 条，加 5 处注解（三个 `let quote = null` → `@type {'"'|"'"|null}`、锁句柄 `number|null`、`keyIndent` `string|null`）后**归零**，且 `verify-file-lock` / `verify-store-version` / 全量 `npm test` 均无回归。照此推算，约六成的 139 条属同一手感。
+
+**它确实抓到了真问题（这正是它比 `noImplicitAny` 更值的地方）**：`mcp-probe.js:348/351` 的
+`outcome = { ok: probe.ok, transport: 'stdio', ms: ms(), ...probe }` —— `...probe` 展开在**后面**，而 `probe` 自己的 docblock 就写着它会返回 `ok` / `transport` / `ms`，于是前面那三个显式字段**全部被覆盖**：调用点算出的 `ms` 被丢弃，`transport` 的硬编码值也失效。`TS2783`（"specified more than once, so this usage will be overwritten"）把这类「写了但没生效」的字段直接点名——这是 `noImplicitAny` 看不见的一类缺陷。同一类还有 `mcp-admin.js` / `subagent-admin.js` 里几处 `never[]` 推断（`const steps = []` 这类，空数组字面量在无注解时推成 `never[]`，后续 `push` 才炸）。
+
+**注意区分「真 bug」与「类型证不出」**：`session-admin.js:1003` 的 `derived` 在 `if (derived === null) derived = deriveSessionSummary(events)` 之后使用，运行时是安全的，报错只是 TS 无法穿过那个分支证明它非空。修法是补注解让证明成立，**不是**改逻辑——把这类当成 bug 去"修"反而会引入真 bug。
+
+**建议的推进方式**：不要一次性打开（139 条会淹掉 review），而是照 `noImplicitAny` 那套**只增不减的入口清单**再做一条 `strict-null` 轨道（同一份清单机制，换个 flag），从 `patch-utils` 这类已清的叶子起步。两条轨道最终一起折回 `tsconfig.json`。**收益优先级**：先 `strictNullChecks` 再 `noImplicitAny` 剩余部分——前者 139 条且能抓真缺陷，后者还有 1900 条且多为回调参数标注（体力活）。
+
 ## 环境
 
 Node ≥ 22.19（或 ≥ 24）；`npm ci` 后即可跑全部门禁（`smoke:real-host` 例外，另需 dsh CLI + pnpm）。
