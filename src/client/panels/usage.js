@@ -3,8 +3,31 @@ import { UiButton, UiPill, createElement, dshT, messageOf, sectionState } from '
 import { formatTokenCount, usageDayKey } from './sessions.js'
 
 /**
+ * The renderer-bound props the usage dashboard receives. `call` is the
+ * panel's ONLY RPC boundary (injected by the slot's inject face) and its
+ * result envelope is duck-typed per method (`{ ok: true, value }` /
+ * `{ ok: false, error }`), so the resolved type stays `any` by design: a
+ * boundary, not unmodelled data.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PanelSectionProps
+ */
+
+/**
+ * One aggregated KPI window: the per-row counters accumulated over the
+ * window's rows, plus the two figures `kpiOf` derives after the loop
+ * (`tokens` = input + output + cacheRead, `activeDays` = distinct days).
+ * @typedef {{ sessions: number, input: number, output: number, cacheRead: number, userMsgs: number, assistantMsgs: number, tokens: number, activeDays: number }} UsageKpi
+ */
+
+/**
+ * A `{ input, output, cacheRead }` token fold. The daily trend chart, the
+ * project table and the busiest-day insight all accumulate into this shape.
+ * @typedef {{ input: number, output: number, cacheRead: number }} UsageTokenFold
+ */
+
+/**
  * 用量仪表盘 settings page (standalone settings-nav entry). Loads the row
  * data once on mount, then all range/project slicing happens client-side.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face.
  */
 export function UsageDashboardSection(props) {
   var call = props.call
@@ -16,6 +39,10 @@ export function UsageDashboardSection(props) {
   var setUsage = kit.set
   var alive = kit.alive
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patchUsage(partial) {
     kit.patch(partial)
   }
@@ -76,6 +103,8 @@ export function UsageDashboardSection(props) {
  * daily trend chart, a weekday-x-hour activity heatmap, and locally-derived
  * insights. All analytics run client-side over the host's per-session rows,
  * so range/filter changes never re-fetch.
+ * @param {Record<string, any>} usage - the panel state (rows / range / project / snapshot interval).
+ * @param {(partial: Record<string, any>) => void} patch - the state patch merge.
  */
 export function renderUsageDashboard(usage, patch) {
   var rangeLabels = [
@@ -93,7 +122,7 @@ export function renderUsageDashboard(usage, patch) {
   if (range === 'today') {
     var d0 = new Date(); d0.setHours(0, 0, 0, 0); startMs = d0.getTime()
   } else if (range !== 'all') {
-    var span = { '24h': dayMs, '7d': 7 * dayMs, '30d': 30 * dayMs, '90d': 90 * dayMs }[range]
+    var span = /** @type {Record<string, number>} */ ({ '24h': dayMs, '7d': 7 * dayMs, '30d': 30 * dayMs, '90d': 90 * dayMs })[range]
     if (span !== undefined) startMs = now - span
   }
   var prevStartMs = startMs === null ? null : startMs - (now - startMs)
@@ -108,8 +137,14 @@ export function renderUsageDashboard(usage, patch) {
   }
 
   // --- KPI math (current vs previous window) ---
+  /**
+   * Aggregate one window of session rows into the KPI fold.
+   * @param {Array<Record<string, any>>} list - the window's session rows.
+   * @returns {UsageKpi} the accumulated counters (tokens / activeDays derived).
+   */
   function kpiOf(list) {
-    var k = { sessions: list.length, input: 0, output: 0, cacheRead: 0, userMsgs: 0, assistantMsgs: 0 }
+    var k = /** @type {UsageKpi} */ ({ sessions: list.length, input: 0, output: 0, cacheRead: 0, userMsgs: 0, assistantMsgs: 0 })
+    /** @type {Record<string, boolean>} */
     var days = {}
     for (var i = 0; i < list.length; i++) {
       var x = list[i]
@@ -126,12 +161,20 @@ export function renderUsageDashboard(usage, patch) {
   }
   var curK = kpiOf(cur)
   var prevK = kpiOf(prev)
+  /**
+   * The signed percentage change against the previous window, or null when
+   * there is no previous value to compare against.
+   * @param {number} curV - the current window's value.
+   * @param {number} prevV - the previous window's value.
+   * @returns {number|null} the rounded delta percent, or null when prevV <= 0.
+   */
   function deltaPct(curV, prevV) {
     if (prevV <= 0) return null
     return Math.round(((curV - prevV) / prevV) * 1000) / 10
   }
 
   // --- daily stacked buckets (current range) ---
+  /** @type {Record<string, UsageTokenFold>} */
   var dayMap = {}
   for (var di = 0; di < cur.length; di++) {
     var dayKey = usageDayKey(cur[di].createdAt)
@@ -149,6 +192,7 @@ export function renderUsageDashboard(usage, patch) {
   }
 
   // --- hour-of-week heatmap (session starts, weighted by tokens) ---
+  /** @type {number[][]} */
   var heat = []
   for (var hh = 0; hh < 7; hh++) heat.push(new Array(24).fill(0))
   var heatMax = 0
@@ -161,6 +205,7 @@ export function renderUsageDashboard(usage, patch) {
   var weekdayNames = [dshT('周日'), dshT('周一'), dshT('周二'), dshT('周三'), dshT('周四'), dshT('周五'), dshT('周六')]
 
   // --- projects (current range, by volume) ---
+  /** @type {Record<string, UsageTokenFold>} */
   var projMap = {}
   for (var pi = 0; pi < cur.length; pi++) {
     var pb = projMap[cur[pi].project]
@@ -193,6 +238,17 @@ export function renderUsageDashboard(usage, patch) {
   }
 
   // --- KPI card builder ---
+  /**
+   * Build one KPI card: label, compacted value and the vs-previous-period
+   * delta badge.
+   * @param {string} key - the element key.
+   * @param {string} label - the card label.
+   * @param {string} valueText - the compacted value text.
+   * @param {number} curV - the current window's value.
+   * @param {number} prevV - the previous window's value.
+   * @param {string} [accent] - the optional accent class suffix.
+   * @returns {any} the card element (createElement is an untyped seam).
+   */
   function kpiCard(key, label, valueText, curV, prevV, accent) {
     var d = deltaPct(curV, prevV)
     var badge = d === null ? null : createElement('span', {
@@ -267,7 +323,7 @@ export function renderUsageDashboard(usage, patch) {
           // 选项只带项目名本身（左侧「筛选」段已说明维度），完整值永远在 title 上。
           title: project === '' ? dshT('全部项目') : project,
           'aria-label': dshT('按项目筛选'),
-          onChange: function (e) { patch({ project: e.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ project: e.target.value }) },
         },
         createElement('option', { key: 'all', value: '' }, dshT('全部项目')),
         projectNames.map(function (pn) { return createElement('option', { key: pn, value: pn }, pn) })))),

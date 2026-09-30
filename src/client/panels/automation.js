@@ -3,6 +3,19 @@ import { React, UiButton, UiCheckbox, UiInput, UiPill, createElement, dshT, mess
 import { mergeObject, tabKeyDown } from './shared.js'
 import { WorkflowSection } from './workflow.js'
 
+/**
+ * Types for this panel's helpers. The render / editor helpers below take
+ * the section state and the actions bag as duck-typed pairs (the same seam
+ * sessions.js and shared.js declare); the event shapes describe exactly
+ * what each handler's own body reads, because the React seam
+ * (types/react.d.ts) types createElement's props as `any` (mirrors the
+ * module-local typedefs in shared.js / mcp.js, which are not importable).
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PanelSectionProps - the renderer-bound props; `call` is the host RPC seam whose resolved payload is service-defined JSON.
+ * @typedef {{ target: { value: string } }} InputChangeEvent - the change event the Input / select / textarea handlers read.
+ * @typedef {{ key: string, preventDefault: () => void }} KeyEventLike - the key event the card-row Enter / Space handlers read.
+ * @typedef {{ stopPropagation: () => void }} ClickEventLike - the click event the propagation-stopping row handlers read.
+ */
+
 /* ========================================================================== */
 /*                          Automation section (自动化)                        */
 /* ========================================================================== */
@@ -12,6 +25,14 @@ import { WorkflowSection } from './workflow.js'
 // 触发 suffix; 工作流 joins as the third tab). The SAME panels underneath —
 // every behavior is unchanged. Scoped data-cha-section: it carries the shared
 // segmented-tab styles the former 命令与钩子 section used.
+/**
+ * The automation (自动化) settings entry: one nav surface hosting the
+ * scheduled-task (定时任务) / Webhook / workflow (工作流) tabs — the same
+ * panels underneath, merged into ONE settings nav entry (v1.24.0: the first
+ * two used to be standalone sections, the webhook tab drops the 触发
+ * suffix, and 工作流 joins as the third tab).
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` is threaded to the selected tab's section.
+ */
 export function AutomationSection(props) {
   var tabHooks = useState('cron')
   var tab = tabHooks[0]
@@ -24,7 +45,7 @@ export function AutomationSection(props) {
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
     createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('自动化'),
-      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setTab) } },
+      onKeyDown: function (/** @type {KeyboardEvent} */ event) { tabKeyDown(event, tabs, selected.id, setTab) } },
       tabs.map(function (entry) {
         return createElement('button', {
           type: 'button', role: 'tab', key: entry.id,
@@ -145,6 +166,12 @@ export function generateWebhookSecret() {
   return out
 }
 
+/**
+ * Webhook trigger (Webhook 触发) settings section: rule list / editor /
+ * delivery history, plus the one-click runtime-install banner shown when
+ * the webhook runtime package is not mounted.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` is the host RPC seam for the webhookAdmin methods below.
+ */
 export function WebhookSection(props) {
   var kit = sectionState({
     busy: false,
@@ -167,7 +194,7 @@ export function WebhookSection(props) {
   var setState = kit.set
   var alive = kit.alive
 
-  function patch(partial) {
+  function patch(/** @type {Record<string, any>} */ partial) {
     kit.patch(partial)
   }
 
@@ -195,6 +222,12 @@ export function WebhookSection(props) {
 
   /* ---- Editor ---- */
 
+  /**
+   * Open the rule editor: `rule` edits an existing rule; `seed` prefills
+   * a fresh draft from a template card (id / event / 动作…).
+   * @param {Record<string, any> | null} rule - the rule to edit, or null for a new rule.
+   * @param {Record<string, any>} [seed] - optional template seed for the prefill.
+   */
   function openEditor(rule, seed) {
     patch({
       editorOpen: true,
@@ -230,9 +263,9 @@ export function WebhookSection(props) {
     })
   }
 
-  function patchDraft(partial) {
-    setState(function (cur) {
-      var next = {}
+  function patchDraft(/** @type {Record<string, any>} */ partial) {
+    setState(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.draft = next.draft ? mergeObject(next.draft, partial) : null
       return next
@@ -245,8 +278,8 @@ export function WebhookSection(props) {
 
   /** Reveal/hide the secret input (masked by default, reset per openEditor). */
   function toggleSecret() {
-    setState(function (cur) {
-      var next = {}
+    setState(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.showSecret = !cur.showSecret
       return next
@@ -257,7 +290,7 @@ export function WebhookSection(props) {
     var d = state.draft
     if (!d) return
     patch({ busy: true, error: '' })
-    var entry = {
+    var entry = /** @type {Record<string, any>} */ ({
       id: d.id,
       enabled: d.enabled,
       secret: d.secret,
@@ -266,7 +299,7 @@ export function WebhookSection(props) {
         mode: d.actionMode,
       },
       promptTemplate: d.promptTemplate,
-    }
+    })
     if (d.actionMode === 'steer') {
       entry.action.sessionId = d.sessionId
       entry.action.steer = d.steer
@@ -293,6 +326,10 @@ export function WebhookSection(props) {
     })
   }
 
+  /**
+   * Delete one webhook rule; the delivery history refreshes with the list.
+   * @param {string} id - the rule id.
+   */
   function deleteRule(id) {
     patch({ busy: true, error: '', confirmId: null })
     callRemote('webhookAdmin/deleteRule', { id: id }).then(function (result) {
@@ -309,6 +346,10 @@ export function WebhookSection(props) {
     })
   }
 
+  /**
+   * Fire one rule at its target session now; refreshes the history on success.
+   * @param {string} id - the rule id.
+   */
   function testRule(id) {
     patch({ busy: true, error: '' })
     callRemote('webhookAdmin/testRule', { id: id }).then(function (result) {
@@ -370,6 +411,7 @@ export function WebhookSection(props) {
  * (unlike dsh-schedule, which is session-local), and reuses the Webhook
  * panel's steer/create action vocabulary. The service lives in
  * `cronAdmin` (lib/cron-admin.js); this panel only renders and edits.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` is the host RPC seam for the cronAdmin methods below.
  */
 export function CronSection(props) {
   var kit = sectionState({
@@ -390,7 +432,7 @@ export function CronSection(props) {
   var setState = kit.set
   var alive = kit.alive
 
-  function patch(partial) {
+  function patch(/** @type {Record<string, any>} */ partial) {
     kit.patch(partial)
   }
 
@@ -436,8 +478,8 @@ export function CronSection(props) {
   // service recomputes nextRun on every reload.
   useEffect(function () {
     if (state.tasks.length === 0) return undefined
-    var timer = setInterval(function () { setState(function (cur) {
-      var next = {}
+    var timer = setInterval(function () { setState(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.nowMs = Date.now()
       return next
@@ -454,18 +496,26 @@ export function CronSection(props) {
 
   // Like patchDraft, but the stored cron is always recomposed from the
   // structured schedule fields so the two can never drift apart.
-  function patchSchedule(partial) {
-    setState(function (cur) {
+  function patchSchedule(/** @type {Record<string, any>} */ partial) {
+    setState(function (/** @type {Record<string, any>} */ cur) {
       if (!cur.draft) return cur
       var draft = mergeObject(cur.draft, partial)
       draft.cron = composeCron(draft.schedMode, draft.schedTime, draft.schedDow)
-      var next = {}
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.draft = draft
       return next
     })
   }
 
+  /**
+   * Open the task editor: `task` edits an existing task; `seed` prefills
+   * a fresh draft from a template card. The structured schedule fields
+   * (schedMode/schedTime/schedDow) are parsed out of the cron expression
+   * either one carries.
+   * @param {Record<string, any> | null} task - the task to edit, or null for a new task.
+   * @param {Record<string, any>} [seed] - optional template seed for the prefill.
+   */
   function openEditor(task, seed) {
     var sched = parseCronSchedule(task ? task.cron : (seed && seed.cron) || '0 9 * * *')
     patch({
@@ -505,9 +555,9 @@ export function CronSection(props) {
     })
   }
 
-  function patchDraft(partial) {
-    setState(function (cur) {
-      var next = {}
+  function patchDraft(/** @type {Record<string, any>} */ partial) {
+    setState(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.draft = next.draft ? mergeObject(next.draft, partial) : null
       return next
@@ -522,13 +572,13 @@ export function CronSection(props) {
     var d = state.draft
     if (!d) return
     patch({ busy: true, error: '' })
-    var entry = {
+    var entry = /** @type {Record<string, any>} */ ({
       id: d.id,
       enabled: d.enabled,
       cron: d.cron,
       action: { mode: d.actionMode },
       promptTemplate: d.promptTemplate,
-    }
+    })
     if (d.actionMode === 'steer') {
       entry.action.sessionId = d.sessionId
       entry.action.steer = d.steer
@@ -553,6 +603,10 @@ export function CronSection(props) {
     })
   }
 
+  /**
+   * Delete one cron task; the delivery history refreshes with the list.
+   * @param {string} id - the task id.
+   */
   function deleteTask(id) {
     patch({ busy: true, error: '', confirmId: null })
     callRemote('cronAdmin/remove', { id: id }).then(function (result) {
@@ -569,6 +623,12 @@ export function CronSection(props) {
     })
   }
 
+  /**
+   * Flip one task's enabled flag; only the task list refreshes (no busy
+   * banner — the row checkbox itself shows the in-flight state).
+   * @param {string} id - the task id.
+   * @param {boolean} enabled - the next enabled value.
+   */
   function toggleTask(id, enabled) {
     callRemote('cronAdmin/toggle', { id: id, enabled: enabled }).then(function (result) {
       if (!alive.current) return
@@ -584,6 +644,10 @@ export function CronSection(props) {
     })
   }
 
+  /**
+   * Trigger one task immediately; refreshes the history on success.
+   * @param {string} id - the task id.
+   */
   function runNow(id) {
     patch({ busy: true, error: '' })
     callRemote('cronAdmin/runNow', { id: id }).then(function (result) {
@@ -617,6 +681,12 @@ export function CronSection(props) {
     CronRender(state, cronActions))
 }
 
+/**
+ * The Webhook 触发 tree-builder (a plain keyed fragment builder, not a
+ * React component — call it directly and hand it the actions object).
+ * @param {Record<string, any>} view - the WebhookSection state bag.
+ * @param {Record<string, any>} actions - the section's actions bag.
+ */
 export function WebhookRender(view, actions) {
   var elements = []
 
@@ -668,7 +738,7 @@ export function WebhookRender(view, actions) {
         role: 'button',
         tabIndex: 0,
         onClick: openTpl,
-        onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
+        onKeyDown: function (/** @type {KeyEventLike} */ event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
         style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
@@ -694,13 +764,13 @@ export function WebhookRender(view, actions) {
             rule.event ? createElement('span', { className: 'tag' }, rule.event) : null,
           ),
           createElement('span', { className: 'card-actions' },
-            createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function (e) { e.stopPropagation(); actions.openEditor(rule) } }, dshT('编辑')),
-            createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function (e) { e.stopPropagation(); actions.testRule(rule.id) }, title: dshT('会真实注入消息到目标会话') }, dshT('🧪 触发测试')),
+            createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.openEditor(rule) } }, dshT('编辑')),
+            createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.testRule(rule.id) }, title: dshT('会真实注入消息到目标会话') }, dshT('🧪 触发测试')),
             createElement(UiButton, {
               variant: 'outline',
               size: 'sm',
               className: 'danger',
-              onClick: function (e) { e.stopPropagation(); actions.patch({ confirmId: view.confirmId === rule.id ? null : rule.id }) },
+              onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.patch({ confirmId: view.confirmId === rule.id ? null : rule.id }) },
             }, view.confirmId === rule.id ? '✕' : dshT('删除')),
           ),
         ),
@@ -757,18 +827,23 @@ export function WebhookRender(view, actions) {
   return createElement(React.Fragment, null, elements)
 }
 
+/**
+ * The webhook rule editor card; reads `view.draft` (null = nothing open).
+ * @param {Record<string, any>} view - the WebhookSection state bag.
+ * @param {Record<string, any>} actions - the section's actions bag.
+ */
 export function renderWebhookEditor(view, actions) {
   var d = view.draft
   if (!d) return null
   return createElement('div', { className: 'card mcp-editor', key: 'editor' },
     createElement('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline' } },
       createElement('label', { style: { fontSize: '12px', fontWeight: 600, flex: 'none' } }, 'ID'),
-      createElement(UiInput, {  value: d.id, disabled: !d.isNew, onChange: function (e) { actions.patchDraft({ id: e.target.value }) }, placeholder: dshT('规则标识（英文字母开头，无空格）') }),
+      createElement(UiInput, {  value: d.id, disabled: !d.isNew, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) }, placeholder: dshT('规则标识（英文字母开头，无空格）') }),
     ),
     createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
       createElement(UiCheckbox, {
         checked: d.enabled,
-        onChange: function (next) { actions.patchDraft({ enabled: next }) },
+        onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ enabled: next }) },
         label: dshT('启用'),
       }),
     ),
@@ -779,7 +854,7 @@ export function renderWebhookEditor(view, actions) {
             type: view.showSecret ? 'text' : 'password',
             autoComplete: 'new-password',
             value: d.secret,
-            onChange: function (e) { actions.patchDraft({ secret: e.target.value }) },
+            onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ secret: e.target.value }) },
             placeholder: dshT('共享密钥（必填；编辑时留空表示保持不变）'),
           }),
           createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function () { actions.toggleSecret() } }, view.showSecret ? dshT('隐藏') : dshT('显示')),
@@ -792,7 +867,7 @@ export function renderWebhookEditor(view, actions) {
         ),
       ),
       createElement('div', { style: { flex: 1 } },
-        createElement(UiInput, {  value: d.event, onChange: function (e) { actions.patchDraft({ event: e.target.value }) }, placeholder: dshT('事件过滤（留空 = 任意事件）') }),
+        createElement(UiInput, {  value: d.event, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ event: e.target.value }) }, placeholder: dshT('事件过滤（留空 = 任意事件）') }),
       ),
     ),
     createElement('div', null,
@@ -804,25 +879,25 @@ export function renderWebhookEditor(view, actions) {
     ),
     d.actionMode === 'steer'
       ? createElement('div', null,
-        createElement(UiInput, {  value: d.sessionId, onChange: function (e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
+        createElement(UiInput, {  value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
         createElement('span', { style: { marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' } },
           createElement(UiCheckbox, {
             checked: d.steer,
-            onChange: function (next) { actions.patchDraft({ steer: next }) },
+            onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ steer: next }) },
             label: dshT('steer（插入到下一步之前，勾选后 agent 当前步骤完成后立即处理）'),
           }),
         ),
       )
       : createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-        createElement(UiInput, {  value: d.workspacePath, onChange: function (e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+        createElement(UiInput, {  value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
-          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (p) {
+          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
+            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
               return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
             }),
           ),
-          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (n) {
+          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
+            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
               return createElement('option', { key: n, value: n }, n)
             }),
           ),
@@ -833,7 +908,7 @@ export function renderWebhookEditor(view, actions) {
       createElement('textarea', {
         className: 'input',
         value: d.promptTemplate,
-        onChange: function (e) { actions.patchDraft({ promptTemplate: e.target.value }) },
+        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ promptTemplate: e.target.value }) },
         placeholder: dshT('留空使用默认模板。$RULE / $DELIVERY / $EVENT / $PAYLOAD 会被替换。'),
         rows: 4,
         style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical', marginTop: '4px' },
@@ -850,6 +925,8 @@ export function renderWebhookEditor(view, actions) {
  * Relative-time formatting for the countdown: "3d 02:11:05" / "02:11:05" /
  * "59s" / "< 1s". Pure, so it can run every second without re-rendering
  * anything that does not display a countdown.
+ * @param {number | null} ms - the milliseconds until the next run (null when the task has no next run).
+ * @returns {string} the relative-time text.
  */
 export function formatCountdown(ms) {
   if (ms === null || ms === undefined || ms < 0) return '—'
@@ -860,22 +937,32 @@ export function formatCountdown(ms) {
   var h = Math.floor(rem / 3600)
   var m = Math.floor((rem - h * 3600) / 60)
   var s = rem - h * 3600 - m * 60
-  var pad = function (n) { return (n < 10 ? '0' : '') + n }
+  var pad = function (/** @type {number} */ n) { return (n < 10 ? '0' : '') + n }
   if (days > 0) return days + 'd ' + pad(h) + ':' + pad(m) + ':' + pad(s)
   if (h > 0) return pad(h) + ':' + pad(m) + ':' + pad(s)
   if (m > 0) return pad(m) + ':' + pad(s)
   return s + 's'
 }
 
-/** Local-time rendering of an epoch-ms value for the row tooltip. */
+/**
+ * Local-time rendering of an epoch-ms value for the row tooltip.
+ * @param {number | null} ms - the epoch milliseconds.
+ * @returns {string} the local 'YYYY-MM-DD HH:MM:SS' text.
+ */
 export function formatLocal(ms) {
   if (ms === null || ms === undefined) return '—'
   var d = new Date(ms)
-  var pad = function (n) { return (n < 10 ? '0' : '') + n }
+  var pad = function (/** @type {number} */ n) { return (n < 10 ? '0' : '') + n }
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
     + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
 }
 
+/**
+ * The 定时任务 tree-builder (a plain keyed fragment builder, not a React
+ * component — call it directly and hand it the actions object).
+ * @param {Record<string, any>} view - the CronSection state bag.
+ * @param {Record<string, any>} actions - the section's actions bag.
+ */
 export function CronRender(view, actions) {
   var elements = []
 
@@ -912,7 +999,7 @@ export function CronRender(view, actions) {
         role: 'button',
         tabIndex: 0,
         onClick: openTpl,
-        onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
+        onKeyDown: function (/** @type {KeyEventLike} */ event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
         style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
       }, [
         createElement('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
@@ -943,20 +1030,20 @@ export function CronRender(view, actions) {
           createElement('span', { className: 'card-actions' },
             // The span keeps the inline layout AND the click guard: the atom has no
             // onClick/style props, and the card behind this toggle must not react.
-            createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', marginRight: '4px' }, title: dshT('启用/停用'), onClick: function (e) { e.stopPropagation() } },
+            createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', marginRight: '4px' }, title: dshT('启用/停用'), onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation() } },
               createElement(UiCheckbox, {
                 checked: task.enabled === true,
-                onChange: function (next) { actions.toggleTask(task.id, next) },
+                onChange: function (/** @type {boolean} */ next) { actions.toggleTask(task.id, next) },
                 label: dshT('启用'),
               }),
             ),
-            createElement(UiButton, { variant: 'primary', size: 'sm', onClick: function (e) { e.stopPropagation(); actions.openEditor(task) } }, dshT('编辑')),
-            createElement(UiButton, { variant: 'primary', size: 'sm', onClick: function (e) { e.stopPropagation(); actions.runNow(task.id) }, title: dshT('立即触发一次（会真实注入消息/新建会话）') }, dshT('▶ 立即触发')),
+            createElement(UiButton, { variant: 'primary', size: 'sm', onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.openEditor(task) } }, dshT('编辑')),
+            createElement(UiButton, { variant: 'primary', size: 'sm', onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.runNow(task.id) }, title: dshT('立即触发一次（会真实注入消息/新建会话）') }, dshT('▶ 立即触发')),
             createElement(UiButton, {
               variant: 'outline',
               size: 'sm',
               className: 'danger',
-              onClick: function (e) { e.stopPropagation(); actions.patch({ confirmId: view.confirmId === task.id ? null : task.id }) },
+              onClick: function (/** @type {ClickEventLike} */ e) { e.stopPropagation(); actions.patch({ confirmId: view.confirmId === task.id ? null : task.id }) },
             }, view.confirmId === task.id ? '✕' : dshT('删除')),
           ),
         ),
@@ -1028,8 +1115,16 @@ export function CronRender(view, actions) {
    cron; any expression outside those shapes falls back to 自定义 mode where
    the raw cron is edited directly. `cron` remains the single stored value. */
 
-export function pad2(n) { return (n < 10 ? '0' : '') + n }
+export function pad2(/** @type {number} */ n) { return (n < 10 ? '0' : '') + n }
 
+/**
+ * Compose the 5-field cron from the structured schedule fields; the raw
+ * expression remains the single stored value (see patchSchedule).
+ * @param {string} mode - 'hourly' / 'weekly' (anything else composes the daily shape).
+ * @param {string} time - the 'HH:MM' time of day.
+ * @param {string} dow - the weekday number for weekly mode ('0'-'7').
+ * @returns {string} the composed cron expression.
+ */
 export function composeCron(mode, time, dow) {
   var parts = /^(\d{1,2}):(\d{1,2})$/.exec(time || '09:00')
   var hh = parts ? Number(parts[1]) : 9
@@ -1039,9 +1134,16 @@ export function composeCron(mode, time, dow) {
   return mm + ' ' + hh + ' * * *'
 }
 
+/**
+ * Parse a stored cron expression back into the structured schedule fields;
+ * any expression outside the hourly/daily/weekly shapes reads as 'custom',
+ * where the raw cron is edited directly.
+ * @param {string} cron - the stored 5-field cron expression.
+ * @returns {{ schedMode: string, schedTime?: string, schedDow?: string }} the parsed schedule fields.
+ */
 export function parseCronSchedule(cron) {
   var f = String(cron || '').trim().split(/\s+/)
-  var num = function (s) { return /^\d+$/.test(s) ? Number(s) : null }
+  var num = function (/** @type {string} */ s) { return /^\d+$/.test(s) ? Number(s) : null }
   if (f.length === 5 && f[2] === '*' && f[3] === '*') {
     var m = num(f[0])
     var h = num(f[1])
@@ -1053,8 +1155,16 @@ export function parseCronSchedule(cron) {
   return { schedMode: 'custom' }
 }
 
+/**
+ * One-line human description of the structured schedule fields (weekly
+ * names the weekday through dshT).
+ * @param {string} mode - 'hourly' / 'weekly' (anything else reads as daily).
+ * @param {string} time - the 'HH:MM' time of day.
+ * @param {string} dow - the weekday number for weekly mode.
+ * @returns {string} the localized description.
+ */
 export function describeSchedule(mode, time, dow) {
-  var names = { '0': dshT('周日'), '1': dshT('周一'), '2': dshT('周二'), '3': dshT('周三'), '4': dshT('周四'), '5': dshT('周五'), '6': dshT('周六') }
+  var names = /** @type {Record<string, string>} */ ({ '0': dshT('周日'), '1': dshT('周一'), '2': dshT('周二'), '3': dshT('周三'), '4': dshT('周四'), '5': dshT('周五'), '6': dshT('周六') })
   var parts = String(time || '09:00').split(':')
   if (mode === 'hourly') return dshT('每小时第 ') + parts[1] + dshT(' 分')
   if (mode === 'weekly') return dshT('每周 ') + (names[dow] || dow) + ' ' + time
@@ -1071,6 +1181,11 @@ export function tzLabel() {
   return 'GMT' + sign + hours + (rest === 0 ? '' : ':' + (rest < 10 ? '0' : '') + rest)
 }
 
+/**
+ * The cron task editor card; reads `view.draft` (null = nothing open).
+ * @param {Record<string, any>} view - the CronSection state bag.
+ * @param {Record<string, any>} actions - the section's actions bag.
+ */
 export function renderCronEditor(view, actions) {
   var d = view.draft
   if (!d) return null
@@ -1083,7 +1198,7 @@ export function renderCronEditor(view, actions) {
     createElement('div', { style: { display: 'flex', gap: '14px', alignItems: 'center' } },
       createElement(UiInput, {
         value: d.id,
-        onChange: function (e) { actions.patchDraft({ id: e.target.value }) },
+        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) },
         placeholder: dshT('任务标识（英文字母开头，无空格）'),
         'aria-label': dshT('任务 ID'),
         style: { flex: 1 },
@@ -1091,7 +1206,7 @@ export function renderCronEditor(view, actions) {
       createElement('span', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', flex: 'none', cursor: 'pointer' } },
         createElement(UiCheckbox, {
           checked: d.enabled,
-          onChange: function (next) { actions.patchDraft({ enabled: next }) },
+          onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ enabled: next }) },
           label: dshT('启用'),
         }),
       ),
@@ -1103,7 +1218,7 @@ export function renderCronEditor(view, actions) {
           className: 'input', style: schedSelectStyle,
           value: d.schedMode,
           'aria-label': dshT('调度频率'),
-          onChange: function (e) { actions.patchSchedule({ schedMode: e.target.value }) },
+          onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchSchedule({ schedMode: e.target.value }) },
         },
           [{ v: 'hourly', t: dshT('每小时') }, { v: 'daily', t: dshT('每天') }, { v: 'weekly', t: dshT('每周') }, { v: 'custom', t: dshT('自定义') }].map(function (o) {
             return createElement('option', { key: o.v, value: o.v }, o.t)
@@ -1114,7 +1229,7 @@ export function renderCronEditor(view, actions) {
             className: 'input', style: schedSelectStyle,
             value: d.schedDow,
             'aria-label': dshT('星期'),
-            onChange: function (e) { actions.patchSchedule({ schedDow: e.target.value }) },
+            onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchSchedule({ schedDow: e.target.value }) },
           },
             [['1', dshT('周一')], ['2', dshT('周二')], ['3', dshT('周三')], ['4', dshT('周四')], ['5', dshT('周五')], ['6', dshT('周六')], ['0', dshT('周日')]].map(function (o) {
               return createElement('option', { key: o[0], value: o[0] }, o[1])
@@ -1129,7 +1244,7 @@ export function renderCronEditor(view, actions) {
             className: 'input', style: schedSelectStyle,
             value: Number(String(d.schedTime || '00:00').split(':')[1]),
             'aria-label': dshT('分钟'),
-            onChange: function (e) { actions.patchSchedule({ schedTime: '00:' + pad2(Number(e.target.value)) }) },
+            onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchSchedule({ schedTime: '00:' + pad2(Number(e.target.value)) }) },
           },
             Array.from({ length: 60 }, function (_, i) {
               return createElement('option', { key: i, value: i }, pad2(i))
@@ -1141,13 +1256,13 @@ export function renderCronEditor(view, actions) {
             style: { width: 'auto', height: '32px', padding: '0 8px' },
             value: d.schedTime || '09:00',
             'aria-label': dshT('时间'),
-            onChange: function (e) { actions.patchSchedule({ schedTime: e.target.value || '09:00' }) },
+            onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchSchedule({ schedTime: e.target.value || '09:00' }) },
           })
           : null,
         d.schedMode === 'custom'
           ? createElement(UiInput, {
             value: d.cron,
-            onChange: function (e) { actions.patchDraft({ cron: e.target.value }) },
+            onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ cron: e.target.value }) },
             placeholder: '*/5 * * * *',
             style: { fontFamily: 'monospace', flex: 1, minWidth: '160px' },
             'aria-label': dshT('cron 表达式'),
@@ -1171,25 +1286,25 @@ export function renderCronEditor(view, actions) {
     ),
     d.actionMode === 'steer'
       ? createElement('div', null,
-        createElement(UiInput, {  value: d.sessionId, onChange: function (e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
+        createElement(UiInput, {  value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
         createElement('span', { style: { marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: secondary } },
           createElement(UiCheckbox, {
             checked: d.steer,
-            onChange: function (next) { actions.patchDraft({ steer: next }) },
+            onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ steer: next }) },
             label: dshT('steer（插入到下一步之前，勾选后 agent 当前步骤完成后立即处理）'),
           }),
         ),
       )
       : createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-        createElement(UiInput, {  value: d.workspacePath, onChange: function (e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+        createElement(UiInput, {  value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
-          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (p) {
+          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
+            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
               return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
             }),
           ),
-          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (n) {
+          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
+            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
               return createElement('option', { key: n, value: n }, n)
             }),
           ),
@@ -1200,7 +1315,7 @@ export function renderCronEditor(view, actions) {
       createElement('textarea', {
         className: 'input',
         value: d.promptTemplate,
-        onChange: function (e) { actions.patchDraft({ promptTemplate: e.target.value }) },
+        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ promptTemplate: e.target.value }) },
         placeholder: dshT('留空使用默认模板。$RULE / $DELIVERY / $EVENT / $PAYLOAD 会被替换。'),
         rows: 4,
         style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical', marginTop: '4px' },

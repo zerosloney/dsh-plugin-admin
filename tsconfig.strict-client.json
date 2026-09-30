@@ -33,6 +33,11 @@
     "src/client/panels/workflow.js",
     "src/client/panels/commands-hooks.js",
     "src/client/panels/mcp.js",
-    "src/client/panels/sessions.js"
+    "src/client/panels/sessions.js",
+    "src/client/panels/automation.js",
+    "src/client/panels/plugins.js",
+    "src/client/panels/usage.js",
+    "src/client/panels/index.js",
+    "src/client/index.js"
   ]
 }

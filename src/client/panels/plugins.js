@@ -3,8 +3,96 @@ import { UiButton, UiInput, UiPill, createElement, currentLanguage, dshT, format
 import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateReminders, updateCheckNote } from './mcp.js'
 
 /**
+ * Types for this panel's helpers. `call` stays a duck-typed RPC boundary by
+ * design (the same seam skills.js / mcp.js / web-search.js declare): its result
+ * envelope is per-method, so the resolved value type is `any` — a boundary,
+ * not unmodelled data.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PluginsSectionProps
+ */
+
+/**
+ * One persisted "⬆ 有新版本" reminder, held per bundle name in
+ * PluginUpdateMap (mirrored to localStorage by mcp.js's update-reminder
+ * persistence). `latest`/`at` describe the newest registry version; a
+ * per-plugin check failure rides along in `error` with `updateAvailable`
+ * false (see mcp.js's mergeUpdateReminders).
+ * @typedef {{ latest: string, updateAvailable?: boolean, error?: string, at?: number }} PluginUpdateReminder
+ */
+
+/**
+ * name -> reminder entry; seeded from the persisted reminders on mount and
+ * merged from each fresh check.
+ * @typedef {Record<string, PluginUpdateReminder>} PluginUpdateMap
+ */
+
+/**
+ * Batch-upgrade progress while 全部更新 walks the list serially: the done
+ * count, the total, and the collected per-plugin failures.
+ * @typedef {{ done: number, total: number, failed: Array<PluginFailureRow> }} PluginBulkProgress
+ */
+
+/**
+ * One 全部更新 target: the bundle name and the exact latest version
+ * checkUpdates discovered (pinned, not `@latest` — see upgradePlugin).
+ * @typedef {{ name: string, latest: string }} PluginUpgradeTarget
+ */
+
+/**
+ * One collected batch failure: the bundle and the host's reason (only its
+ * first line reaches the batch summary).
+ * @typedef {{ name: string, reason: string }} PluginFailureRow
+ */
+
+/**
+ * One plugin layer row as projected by the host's `pluginAdmin/list`. Only
+ * the fields this panel reads are typed; the host may attach more (the rest
+ * of the object stays duck-typed).
+ * @typedef {{ name: string, version?: string, removable?: boolean, localPath?: string, disabled?: boolean, disablable?: boolean }} PluginListEntry
+ */
+
+/**
+ * One entry of the Phase F3 privileged-action audit trail (host-side a
+ * bounded file read); fields beyond `at`/`ok` stay host-owned.
+ * @typedef {{ at: number, ok?: boolean, action?: string, detail?: string, error?: string }} PluginAuditEntry
+ */
+
+/**
+ * The change event this panel's own handlers read out of a text input /
+ * select (mirrors mcp.js's McpInputEvent and shared.js's InputChangeEvent,
+ * which are module-local there and therefore not importable).
+ * @typedef {{ target: { value: string } }} PluginsInputEvent
+ */
+
+/**
+ * The 扩展插件 section state bag. The audit fields (auditBusy / auditError /
+ * auditEntries / auditPath) only exist after 操作审计 loaded them, so they
+ * stay optional; everything else is seeded at mount.
+ * @typedef {{
+ * profileDir: string,
+ * plugins: Array<PluginListEntry>,
+ * busy: boolean,
+ * error: string,
+ * spec: string,
+ * confirming: string | null,
+ * note: string,
+ * output: string,
+ * filter: string,
+ * needle: string,
+ * checkingUpdates: boolean,
+ * updateChecked: boolean,
+ * updates: PluginUpdateMap,
+ * bulkUpdate: PluginBulkProgress | null,
+ * auditBusy?: boolean,
+ * auditError?: string | null,
+ * auditEntries?: Array<PluginAuditEntry>,
+ * auditPath?: string,
+ * }} PluginsSectionState
+ */
+
+/**
  * 扩展插件 tab contribution: plugin management rendered inside the shell-owned
  * 插件 settings section (after 插件配置 and 插件列表).
+ * @param {PluginsSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face.
  */
 export function PluginsSection(props) {
   // Lazy initializer: the seed object (and its localStorage read) must be
@@ -48,6 +136,10 @@ export function PluginsSection(props) {
   // Batch summary stamped after the refresh's own note write.
   var bulkNoteRef = useRef('')
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patchPlugin(partial) {
     kit.patch(partial)
   }
@@ -58,7 +150,7 @@ export function PluginsSection(props) {
 
   /**
    * Reload the plugin layer list from the host.
-   * @param keepFeedback - when true, refresh ONLY the rows: busy/error/note
+   * @param {boolean} [keepFeedback] - when true, refresh ONLY the rows: busy/error/note
    *   stay untouched. Failure branches use this after patching the error —
    *   patch + reload in the same microtask otherwise batch into one render
    *   (React 18) and the just-set error text never paints, so a failed
@@ -69,10 +161,10 @@ export function PluginsSection(props) {
     callRemote('pluginAdmin/list', {}).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
-        var next = {
+        var next = /** @type {Record<string, any>} */ ({
           profileDir: (result.value && result.value.profileDir) || '',
           plugins: (result.value && result.value.plugins) || [],
-        }
+        })
         if (!keepFeedback) next.busy = false
         patchPlugin(next)
       } else if (!keepFeedback) {
@@ -126,6 +218,13 @@ export function PluginsSection(props) {
     })
   }
 
+  /**
+   * (Re)query the host for registry updates and merge the results into the
+   * reminder map; the AUTO check on panel open is cache-friendly and a
+   * manual check passes force=true (the full merge semantics are documented
+   * in the section doc block above loadAudit).
+   * @param {boolean} [force] - true to force the host to bypass its update cache.
+   */
   function checkUpdates(force) {
     if (checkingRef.current) return
     checkingRef.current = true
@@ -145,8 +244,8 @@ export function PluginsSection(props) {
       // in-flight check resolving alongside an upgrade commit must survive
       // (a stale-snapshot full replace erased it). The updater stays pure —
       // localStorage persistence is owned by the mirror effect below.
-      setPView(function (cur) {
-        var next = {}
+      setPView(function (/** @type {Record<string, any>} */ cur) {
+        var next = /** @type {Record<string, any>} */ ({})
         for (var k in cur) next[k] = cur[k]
         next.checkingUpdates = false
         next.updates = mergeUpdateReminders(cur.updates || {}, list)
@@ -171,7 +270,7 @@ export function PluginsSection(props) {
   // not fatal — one bad plugin must not block the rest.
   function upgradeAllPlugins() {
     if (busyRef.current || pView.bulkUpdate !== null) return
-    var targets = []
+    var targets = /** @type {Array<PluginUpgradeTarget>} */ ([])
     for (var name in pView.updates) {
       var info = pView.updates[name]
       if (info && info.updateAvailable && info.latest) targets.push({ name: name, latest: info.latest })
@@ -181,14 +280,14 @@ export function PluginsSection(props) {
     patchPlugin({ busy: true, error: '', confirming: null, note: '', bulkUpdate: { done: 0, total: targets.length, failed: [] } })
     var index = 0
     var failedTotal = 0
-    var failures = []
+    var failures = /** @type {Array<PluginFailureRow>} */ ([])
     var compatTotal = 0
     var runNext = function () {
       if (!alive.current) return
       if (index >= targets.length) {
         busyRef.current = false
-        setPView(function (cur) {
-          var next = {}
+        setPView(function (/** @type {Record<string, any>} */ cur) {
+          var next = /** @type {Record<string, any>} */ ({})
           for (var k in cur) next[k] = cur[k]
           next.busy = false
           next.bulkUpdate = null
@@ -222,14 +321,14 @@ export function PluginsSection(props) {
         // 0.1.7+ will skip it at boot — counted separately from failures.
         var compat = result.value && result.value.compat
         if (result.ok && compat && compat.checked === true && compat.ok === false) compatTotal++
-        setPView(function (cur) {
-          var next = {}
+        setPView(function (/** @type {Record<string, any>} */ cur) {
+          var next = /** @type {Record<string, any>} */ ({})
           for (var k in cur) next[k] = cur[k]
           var failed = cur.bulkUpdate !== null ? cur.bulkUpdate.failed : []
           next.bulkUpdate = { done: index, total: targets.length, failed: result.ok ? failed : failed.concat([{ name: target.name, reason: reason }]) }
           if (result.ok) {
             next.plugins = (result.value && result.value.plugins) || cur.plugins
-            var remaining = {}
+            var remaining = /** @type {PluginUpdateMap} */ ({})
             for (var rk in cur.updates) {
               if (rk !== target.name) remaining[rk] = cur.updates[rk]
             }
@@ -244,8 +343,8 @@ export function PluginsSection(props) {
         failedTotal++
         var reason = messageOf(failure)
         failures.push({ name: target.name, reason: reason })
-        setPView(function (cur) {
-          var next = {}
+        setPView(function (/** @type {Record<string, any>} */ cur) {
+          var next = /** @type {Record<string, any>} */ ({})
           for (var k in cur) next[k] = cur[k]
           var failed = cur.bulkUpdate !== null ? cur.bulkUpdate.failed : []
           next.bulkUpdate = { done: index, total: targets.length, failed: failed.concat([{ name: target.name, reason: reason }]) }
@@ -257,7 +356,10 @@ export function PluginsSection(props) {
     runNext()
   }
 
-  /** Upgrade one plugin to its latest version (registry install by name). */
+  /**
+   * Upgrade one plugin to its latest version (registry install by name).
+   * @param {string} name - the bundle name to upgrade.
+   */
   function upgradePlugin(name) {
     if (busyRef.current) return
     busyRef.current = true
@@ -282,15 +384,15 @@ export function PluginsSection(props) {
         // bug). localStorage follows via the shared mirror effect; the forced
         // refresh below confirms the new version is current.
         busyRef.current = false
-        setPView(function (cur) {
-          var next = {}
+        setPView(function (/** @type {Record<string, any>} */ cur) {
+          var next = /** @type {Record<string, any>} */ ({})
           for (var k in cur) next[k] = cur[k]
           next.busy = false
           next.note = dshT('已更新 ') + name + dshT('。更改在重启 dsh 后生效') + compatWarningText(result.value && result.value.compat)
           next.output = (result.value && result.value.output) || ''
           next.profileDir = (result.value && result.value.profileDir) || ''
           next.plugins = (result.value && result.value.plugins) || []
-          var remaining = {}
+          var remaining = /** @type {PluginUpdateMap} */ ({})
           for (var rk in cur.updates) {
             if (rk !== name) remaining[rk] = cur.updates[rk]
           }
@@ -327,6 +429,7 @@ export function PluginsSection(props) {
    * @deepseek-ai/dsh* peer — dsh 0.1.7+ will SKIP such a bundle at boot, so
    * the panel must say so instead of celebrating an install that will
    * silently vanish after a restart.
+   * @param {Record<string, any> | null} compat - the install result's verdict, or a falsy value when the host attached none.
    */
   function compatWarningText(compat) {
     if (!compat || compat.checked !== true || compat.ok !== false) return ''
@@ -376,6 +479,11 @@ export function PluginsSection(props) {
     })
   }
 
+  /**
+   * Uninstall one bundle (host-side pnpm remove); the fresh layer list rides
+   * back in the result.
+   * @param {string} name - the bundle name to remove.
+   */
   function removePlugin(name) {
     if (busyRef.current) return
     busyRef.current = true
@@ -410,6 +518,8 @@ export function PluginsSection(props) {
    * removes) profile-layer `disabled: true` rows for the bundle's own rows.
    * Reversible and cheap — one click, no pnpm, no confirm bar; takes effect
    * on the next dsh restart. The fresh layer list rides back in the result.
+   * @param {string} name - the bundle name to toggle.
+   * @param {boolean} disabled - true to write the disable rows, false to remove them.
    */
   function toggleEnabled(name, disabled) {
     patchPlugin({ busy: true, error: '', note: '' })
@@ -471,6 +581,20 @@ export function PluginsSection(props) {
 /*                           Render Plugins View                              */
 /* ========================================================================== */
 
+/**
+ * Render the 扩展插件 panel: toolbar (search / install / check-updates /
+ * upgrade-all), filter pills, the update-check strip, the plugin cards,
+ * and the 操作审计 footer. Pure — every mutation goes through a callback.
+ * @param {PluginsSectionState} view - the section state bag.
+ * @param {(partial: Record<string, any>) => void} patch - merge into the section state.
+ * @param {() => void} install - install the spec currently in the input box.
+ * @param {(name: string) => void} remove - uninstall one bundle.
+ * @param {(force?: boolean) => void} checkUpdates - query the registry for newer versions; force bypasses the host cache.
+ * @param {(name: string) => void} upgrade - upgrade one bundle to its latest version.
+ * @param {() => void} upgradeAll - serially upgrade every bundle with a pending reminder.
+ * @param {(name: string, disabled: boolean) => void} setEnabled - toggle one bundle's disable rows without uninstalling.
+ * @param {() => void} loadAudit - load the privileged-action audit trail.
+ */
 export function renderPluginsView(view, patch, install, remove, checkUpdates, upgrade, upgradeAll, setEnabled, loadAudit) {
   var elements = []
   // How many plugins currently flag an update — the bulk-upgrade button's count.
@@ -489,7 +613,7 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
         icon: '🔍',
         placeholder: dshT('搜索插件（名称/版本/路径）...'),
         value: view.needle,
-        onChange: function (e) { patch({ needle: e.target.value }) },
+        onChange: function (/** @type {PluginsInputEvent} */ e) { patch({ needle: e.target.value }) },
       }),
       view.needle !== '' ? createElement(UiButton, {
         key: 'btn-clear-search',
@@ -506,7 +630,7 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
       style: { flex: 'none', width: 'auto', cursor: 'pointer' },
       title: dshT('界面语言'),
       value: currentLanguage(),
-      onChange: function (e) { setAdminLang(e.target.value) },
+      onChange: function (/** @type {PluginsInputEvent} */ e) { setAdminLang(e.target.value) },
     },
       createElement('option', { value: 'zh', key: 'zh' }, '中文'),
       createElement('option', { value: 'en', key: 'en' }, 'English')
@@ -518,8 +642,8 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
         placeholder: dshT('安装包名/路径...'),
         value: view.spec,
         disabled: view.busy,
-        onChange: function (e) { patch({ spec: e.target.value }) },
-        onKeyDown: function (e) { if (e.key === 'Enter') install() },
+        onChange: function (/** @type {PluginsInputEvent} */ e) { patch({ spec: e.target.value }) },
+        onKeyDown: function (/** @type {{ key: string }} */ e) { if (e.key === 'Enter') install() },
       })
     ),
     createElement(UiButton, {
@@ -677,6 +801,17 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
   return createElement('div', { key: 'plugins-panel', style: { display: 'flex', flexDirection: 'column', gap: '10px' } }, elements)
 }
 
+/**
+ * Render one plugin card: name, version/source/status tags, the remote
+ * update badge, and the per-row action buttons (停用/启用, 更新, 卸载 —
+ * the last replaced by the confirm bar while confirming).
+ * @param {PluginListEntry} plugin - the layer row to render.
+ * @param {PluginsSectionState} view - the section state bag (badges and button gating read it).
+ * @param {(name: string) => void} remove - uninstall this bundle.
+ * @param {(partial: Record<string, any>) => void} patch - merge into the section state (the confirm bar uses it).
+ * @param {(name: string) => void} upgrade - upgrade this bundle to its latest version.
+ * @param {(name: string, disabled: boolean) => void} setEnabled - toggle this bundle's disable rows.
+ */
 export function renderPluginCard(plugin, view, remove, patch, upgrade, setEnabled) {
   var isConfirming = view.confirming === plugin.name
 
@@ -812,6 +947,7 @@ export function renderPluginCard(plugin, view, remove, patch, upgrade, setEnable
 /**
  * Display rank for the plugin list: 内置 first, then 包安装 (registry
  * install), then 本地安装 (local path). Host order is kept within a rank.
+ * @param {PluginListEntry} plugin - the layer row to rank.
  */
 export function pluginSortRank(plugin) {
   if (!plugin.removable) return 0
@@ -824,9 +960,13 @@ export function pluginSortRank(plugin) {
  * The needle matches case-insensitively against the package name, the
  * installed version, and the local source path, so "tool" finds
  * dsh-custom-tool and "0.2" finds version rows.
+ * @param {Array<PluginListEntry>} plugins - the live host layer list.
+ * @param {string} filter - the active type pill ('all' / 'plugin' / 'builtin').
+ * @param {string} needle - the lowercased search needle ('' matches everything).
+ * @returns {Array<PluginListEntry>} the matching rows in display order.
  */
 export function filterPlugins(plugins, filter, needle) {
-  var result = []
+  var result = /** @type {Array<PluginListEntry>} */ ([])
   for (var i = 0; i < plugins.length; i++) {
     var p = plugins[i]
     if (filter === 'plugin' && !p.removable) continue
