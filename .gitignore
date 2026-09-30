@@ -41,6 +41,12 @@ logs/
 # transient tsc diagnostic dumps (npm run check:types writes only stdout)
 .tsc-report.txt
 
+# scratch working files: the strict-track measurement scripts, per-file probe
+# configs and diff dumps all write tmp-* here — and an untracked file is one
+# `git add -A` away from being committed (that has actually happened three
+# times in a single session).
+tmp-*
+
 # pnpm byproducts. This package is published through npm and commits no pnpm
 # lockfile on purpose, but ANY pnpm run from this directory (a `pnpm add` in a
 # profile anchored at the repo, a stray CLI call) leaves these three files
