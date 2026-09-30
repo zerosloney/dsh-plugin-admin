@@ -27,6 +27,10 @@
     "lib/rpc-schema.js",
     "lib/secret-fields.js",
     "lib/workflow-realm-shared.js",
-    "lib/workflow-realm-worker.js"
+    "lib/workflow-realm-worker.js",
+    "lib/rpc-manifest.js",
+    "lib/audit-log.js",
+    "lib/session-export.js",
+    "lib/peer-compat.js"
   ]
 }

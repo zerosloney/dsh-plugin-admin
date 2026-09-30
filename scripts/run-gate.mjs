@@ -67,6 +67,7 @@ const STEPS = [
   { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-open, 0600, Windows EPERM races', cmd: [node, 'scripts/verify-file-lock.mjs'] },
   { name: 'verify-rpc-schema', desc: 'wire schemas vs manifest: strict-mode coverage, optional wires', cmd: [node, 'scripts/verify-rpc-schema.mjs'] },
   { name: 'verify-service-injects', desc: 'every ctx.<service> read in lib/** is declared in inject', cmd: [node, 'scripts/verify-service-injects.mjs'] },
+  { name: 'verify-strict-track', desc: 'strict track: entries exist, list only grows, docs quote the real coverage', cmd: [node, 'scripts/verify-strict-track.mjs'] },
   { name: 'verify-store-version', desc: 'store files: version read contract, migration chain, refuse-newer', cmd: [node, 'scripts/verify-store-version.mjs'] },
   { name: 'verify-webhook-hardening', desc: 'webhook auth: constant-time secret, rate limits, loopback default', cmd: [node, 'scripts/verify-webhook-hardening.mjs'] },
   { name: 'verify-hooks-codex-bridge', desc: 'codex sibling bridge: pnpm add + patch-row authoring', cmd: [node, 'scripts/verify-hooks-codex-bridge.mjs'] },

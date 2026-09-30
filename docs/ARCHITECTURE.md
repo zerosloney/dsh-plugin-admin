@@ -179,7 +179,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 ## 6. 测试与接缝契约
 
 ```sh
-npm test   # 6 道静态闸门 + 35 个脚本（self-check / host-check / 34 个 verify-* / integration-check），共 41 步；数字以 npm test 输出为准
+npm test   # 6 道静态闸门 + 36 个脚本（self-check / host-check / 35 个 verify-* / integration-check），共 42 步；数字以 npm test 输出为准
 ```
 
 静态闸门（`npm test` 先跑，任一失败即中止）：
