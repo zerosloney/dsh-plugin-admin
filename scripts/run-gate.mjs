@@ -34,8 +34,6 @@ const node = process.execPath
 /** @type {{ name: string, desc: string, cmd: string[], static?: boolean }[]} */
 const STEPS = [
   { name: 'check:types', desc: 'tsc --noEmit (checkJs) over lib/** and src/client/**', cmd: ['npm', 'run', 'check:types'], static: true },
-  { name: 'check:types-strict', desc: 'noImplicitAny over the growing strict include list (tsconfig.strict.json)', cmd: ['npm', 'run', 'check:types-strict'], static: true },
-  { name: 'check:types-strict-client', desc: 'noImplicitAny over the growing client strict include list (tsconfig.strict-client.json)', cmd: ['npm', 'run', 'check:types-strict-client'], static: true },
   { name: 'check:lint', desc: 'oxlint over lib src scripts (errors only; warnings recorded)', cmd: ['npm', 'run', 'check:lint'], static: true },
   { name: 'build:client --check', desc: 'built artifacts match src/client/** — catches forgot-to-rebuild', cmd: [node, 'scripts/build-client.mjs', '--check'], static: true },
   // Static in the same sense as the four above: it reads the repo, runs nothing,
@@ -68,7 +66,6 @@ const STEPS = [
   { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-open, 0600, Windows EPERM races', cmd: [node, 'scripts/verify-file-lock.mjs'] },
   { name: 'verify-rpc-schema', desc: 'wire schemas vs manifest: strict-mode coverage, optional wires', cmd: [node, 'scripts/verify-rpc-schema.mjs'] },
   { name: 'verify-service-injects', desc: 'every ctx.<service> read in lib/** is declared in inject', cmd: [node, 'scripts/verify-service-injects.mjs'] },
-  { name: 'verify-strict-track', desc: 'strict track: entries exist, list only grows, docs quote the real coverage', cmd: [node, 'scripts/verify-strict-track.mjs'] },
   { name: 'verify-store-version', desc: 'store files: version read contract, migration chain, refuse-newer', cmd: [node, 'scripts/verify-store-version.mjs'] },
   { name: 'verify-webhook-hardening', desc: 'webhook auth: constant-time secret, rate limits, loopback default', cmd: [node, 'scripts/verify-webhook-hardening.mjs'] },
   { name: 'verify-hooks-codex-bridge', desc: 'codex sibling bridge: pnpm add + patch-row authoring', cmd: [node, 'scripts/verify-hooks-codex-bridge.mjs'] },
