@@ -64,6 +64,16 @@ export var copyTextSilently = function () {}
 export var downloadTextFile = function () {}
 
 /**
+ * Panel-level switch resolution (config.panels 三态 + 自动让位 + localStorage 强制)，
+ * for panels that share another panel's slot and cannot be uninstalled at slot
+ * granularity — the web 搜索 tab inside the Web 与会话 entry. `true` = the panel
+ * must not render. The main bundle injects the real resolver; standalone
+ * (unconfigured) mounts default to "not hidden" so tests keep working.
+ * @type {(panel: string) => boolean}
+ */
+export var panelHidden = function () { return false }
+
+/**
  * Adopt the main bundle's helpers. Called once, before any panel renders.
  * @param {Record<string, any>} env - the shared helper bag.
  */
@@ -88,4 +98,5 @@ export function configure(env) {
   if (typeof env.copyTextToClipboard === 'function') copyTextToClipboard = env.copyTextToClipboard
   if (typeof env.copyTextSilently === 'function') copyTextSilently = env.copyTextSilently
   if (typeof env.downloadTextFile === 'function') downloadTextFile = env.downloadTextFile
+  if (typeof env.panelHidden === 'function') panelHidden = env.panelHidden
 }

@@ -643,20 +643,51 @@ await checkAsync('a hung script is cut off by the timeout', async () => {
   assert.ok(elapsed < 2000, `timeout should fire near timeoutMs, took ${elapsed}ms`)
 })
 
-await checkAsync('a SYNCHRONOUS infinite loop is cut off in eval too (the race cannot do this)', async () => {
-  // `Promise.race` only settles when the event loop turns, so before the timed
-  // invocation this dry run froze the whole host process — the tool's own
-  // timeoutMs was unreachable for exactly the script shape it was documented to
-  // bound. The vm budget cuts it inside the isolate instead.
+await checkAsync('a SYNCHRONOUS infinite loop is cut off in eval too', async () => {
+  // 脚本跑在 worker 线程里，主线程的事件循环始终自由：worker 内的 vm 预算与
+  // eval 的硬超时定时器**都能**醒来（修复前主线程被同步死循环冻住，race 根本
+  // 到不了——现在两者竞争，谁先到都算过，重点是快速拒绝而不是冻结宿主进程）。
   const start = Date.now()
   await assert.rejects(
     () => evalSnippet(`while (true) {}`, { timeoutMs: 150 }),
-    /synchronous code without reaching an await/,
+    /synchronous code without reaching an await|eval timeout after 150ms/,
   )
   const elapsed = Date.now() - start
-  assert.ok(elapsed < 2000, `the vm budget should cut the loop near timeoutMs, took ${elapsed}ms`)
+  assert.ok(elapsed < 2000, `the budget should cut the loop near timeoutMs, took ${elapsed}ms`)
   // The process is still healthy: a normal eval runs right after.
   assert.equal(await evalSnippet(`return 1 + 1`, { timeoutMs: 1000 }), 2)
+})
+
+await checkAsync('a MICROTASK spin loop cannot freeze the host — eval timeout still lands', async () => {
+  // S1 回归钉：`while (true) { await 0 }` 在首个 await 后靠微任务自续，微任务
+  // 队列永不清空，共享该循环的一切定时器都会饿死。脚本现在跑在 worker 线程里，
+  // 主线程的硬超时照常醒来并 terminate 掉卡死的 isolate——修复前这条用例会把
+  // 整个测试进程永久挂死。
+  const start = Date.now()
+  await assert.rejects(
+    () => evalSnippet(`while (true) { await 0 }`, { timeoutMs: 150 }),
+    (err) => /eval timeout after 150ms|synchronous code/.test(String(err && err.message || err)),
+  )
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 2000, `timeout should fire near timeoutMs, took ${elapsed}ms`)
+  assert.equal(await evalSnippet(`return 'alive'`, { timeoutMs: 1000 }), 'alive')
+})
+
+await checkAsync('a MICROTASK spin loop in run() is reclaimed by terminate()', async () => {
+  // 引擎级同钉：run() 的微任务自旋脚本只冻住 worker；terminate() 让 run 以
+  // 错误落定，主线程全程存活、runner 可继续使用。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const runner = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`while (true) { await 0 }`)
+  const start = Date.now()
+  const pending = runner.run(code, {})
+  setTimeout(() => runner.terminate(), 300)
+  await assert.rejects(() => pending, /exited before the script settled/)
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 5000, `terminate should reclaim the spinning worker quickly, took ${elapsed}ms`)
+  const after = await runner.run(await compileScript(`return 'alive'`).then((c) => c.code), {})
+  assert.equal(after, 'alive', 'the runner stays usable after a terminated script')
 })
 
 await checkAsync('caller abort cuts eval well before the hard timeout', async () => {

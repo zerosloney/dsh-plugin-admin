@@ -76,10 +76,19 @@ export function WebSearchSection(props) {
 
   kit.mount(reload)
 
+  // 一次只允许一个列表变更（select / install / uninstall）在途：动作未决时忽略
+  // 新的点击。这样迟到的应答不可能清掉新动作的 busy 态、也不可能把 `active`
+  // 盖回旧快照—— 与 sessions/mcp 面板的序列号守卫等价（这里入口统一被挡住，
+  // 乱序根本没有入口）。
+  var listActionBusy = useRef(false)
+
   function selectProvider(id) {
     if (state.active !== null && state.active.searchProvider === id) return
+    if (listActionBusy.current) return
+    listActionBusy.current = true
     patch({ busyId: id, error: '' })
     call('webSearchAdmin/setActive', { providerId: id }).then(function (result) {
+      listActionBusy.current = false
       if (!alive.current) return
       if (result.ok) {
         patch({ busyId: '', active: result.value || { searchProvider: id } })
@@ -87,14 +96,18 @@ export function WebSearchSection(props) {
         patch({ busyId: '', error: dshT('切换失败：') + messageOf(result.error) })
       }
     }, function (err) {
+      listActionBusy.current = false
       if (!alive.current) return
       patch({ busyId: '', error: dshT('切换失败：') + messageOf(err) })
     })
   }
 
   function installProvider(id) {
+    if (listActionBusy.current) return
+    listActionBusy.current = true
     patch({ busyId: id, error: '' })
     call('webSearchAdmin/install', { providerId: id }).then(function (result) {
+      listActionBusy.current = false
       if (!alive.current) return
       if (result.ok) {
         patch({ busyId: '' })
@@ -103,14 +116,18 @@ export function WebSearchSection(props) {
         patch({ busyId: '', error: dshT('安装失败：') + messageOf(result.error) })
       }
     }, function (err) {
+      listActionBusy.current = false
       if (!alive.current) return
       patch({ busyId: '', error: dshT('安装失败：') + messageOf(err) })
     })
   }
 
   function uninstallProvider(id) {
+    if (listActionBusy.current) return
+    listActionBusy.current = true
     patch({ busyId: id, error: '' })
     call('webSearchAdmin/uninstall', { providerId: id }).then(function (result) {
+      listActionBusy.current = false
       if (!alive.current) return
       if (result.ok) {
         patch({ busyId: '' })
@@ -119,6 +136,7 @@ export function WebSearchSection(props) {
         patch({ busyId: '', error: dshT('卸载失败：') + messageOf(result.error) })
       }
     }, function (err) {
+      listActionBusy.current = false
       if (!alive.current) return
       patch({ busyId: '', error: dshT('卸载失败：') + messageOf(err) })
     })

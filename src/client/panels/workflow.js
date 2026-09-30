@@ -132,17 +132,23 @@ export function WorkflowSection(props) {
     return function () { if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null } }
   }, [state.runs])
 
+  // 详情卡的请求序号，按"最后一次点击的 run"裁决慢响应：点 A 再快点 B 时，
+  // A 的慢回复不得覆盖 B 的详情——否则详情卡显示错 run，回答还会提交给显示
+  // 中的错误运行。
+  var detailSeq = useRef(0)
+
   function openRun(runId) {
     if (state.openRunId === runId) { patch({ openRunId: null, runDetail: null, answerText: '' }); return }
+    var seq = ++detailSeq.current
     patch({ openRunId: runId, runDetail: null, answerText: '' })
     call('workflowAdmin/getRun', { runId: runId }).then(function (res) {
-      if (!alive.current) return
+      if (!alive.current || seq !== detailSeq.current) return
       if (res.ok) patch({ runDetail: res.value })
       else patch({ runDetail: { error: messageOf(res.error) } })
     }, function (error) {
       // 详情卡只在 `state.runDetail` 有值时渲染：传输失败/宿主半未注册该接口时，
       // 没有这个失败分支就只是"点了没反应"，外加一个未处理的 rejection。
-      if (!alive.current) return
+      if (!alive.current || seq !== detailSeq.current) return
       patch({ runDetail: { error: messageOf(error) } })
     })
   }
@@ -176,14 +182,25 @@ export function WorkflowSection(props) {
     })
   }
 
+  // 列表/详情上的即发即弃动作（stop / resume / run_saved / delete_saved）共用
+  // 一把在途闸：双击不再双发 RPC，迟到的应答也不会与重试叠在一起。成功与失败
+  // 分支都先放闸，再走 alive 守卫。
+  var runActionBusy = useRef(false)
+
   function stopRun(runId) {
+    if (runActionBusy.current) return
+    runActionBusy.current = true
     call('workflowAdmin/stopRun', { runId: runId, reason: 'panel' }).then(function (res) {
+      runActionBusy.current = false
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
       if (r && r.stopped === false) showToast('error', dshT('该运行已不在进行中'))
       if (r && r.abandoned) showToast('error', dshT('停止请求已送达，但运行未在预算内落定（脚本忽略取消信号？）'))
       reload()
-    }, function (e) { showToast('error', dshT('❌ 停止失败：') + messageOf(e)) })
+    }, function (e) {
+      runActionBusy.current = false
+      showToast('error', dshT('❌ 停止失败：') + messageOf(e))
+    })
   }
 
   function amendRun(runId) {
@@ -236,23 +253,35 @@ export function WorkflowSection(props) {
   }
 
   function resumeRun(runId) {
+    if (runActionBusy.current) return
+    runActionBusy.current = true
     call('workflowAdmin/resumeRun', { runId: runId }).then(function (res) {
+      runActionBusy.current = false
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
       if (r && r.id) { patch({ openRunId: r.id }); showToast('success', dshT('▶️ 已从断点续跑')); reload() }
       else showToast('error', messageOf((res && res.error) || (r && r.error)))
-    }, function (e) { showToast('error', dshT('❌ 续跑失败：') + messageOf(e)) })
+    }, function (e) {
+      runActionBusy.current = false
+      showToast('error', dshT('❌ 续跑失败：') + messageOf(e))
+    })
   }
 
   function runSaved(name) {
+    if (runActionBusy.current) return
+    runActionBusy.current = true
     var payload = { spec: { name: name, args: {} } }
     if (parentSessionRef.current) payload.spec.parentSessionId = parentSessionRef.current
     call('workflowAdmin/runSaved', payload).then(function (res) {
+      runActionBusy.current = false
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
       if (r && r.id) { patch({ tab: 'runs', openRunId: r.id }); showToast('success', dshT('🚀 已启动：') + name); reload() }
       else showToast('error', messageOf((res && res.error) || (r && r.error)))
-    }, function (e) { showToast('error', dshT('❌ 启动失败：') + messageOf(e)) })
+    }, function (e) {
+      runActionBusy.current = false
+      showToast('error', dshT('❌ 启动失败：') + messageOf(e))
+    })
   }
 
   function saveSavedFromEditor() {
@@ -270,11 +299,17 @@ export function WorkflowSection(props) {
   }
 
   function deleteSaved(name, scope) {
+    if (runActionBusy.current) return
+    runActionBusy.current = true
     call('workflowAdmin/deleteSaved', { spec: { name: name, scope: scope } }).then(function (res) {
+      runActionBusy.current = false
       if (!alive.current) return
       if (res.ok) { patch({ confirmDelete: null }); showToast('success', dshT('🗑 已删除：') + name); reload() }
       else showToast('error', messageOf(res.error))
-    }, function (e) { showToast('error', dshT('❌ 删除失败：') + messageOf(e)) })
+    }, function (e) {
+      runActionBusy.current = false
+      showToast('error', dshT('❌ 删除失败：') + messageOf(e))
+    })
   }
 
   if (!state.available) {

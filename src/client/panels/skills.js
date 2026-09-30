@@ -271,8 +271,15 @@ export function SkillsSection(props) {
         createElement('span', { className: 'group-path', style: { fontFamily: 'monospace' }, title: skill.path }, skill.path)))
     }
     if (skill.url) {
+      // 只有 http(s) 渲染成链接：skill.url 来自技能 frontmatter，而技能清单含
+      // 项目 `.agents` 作用域（克隆任意仓库即可携带恶意条目），React 不会拦
+      // `javascript:` URL——在设置页点一下就是在 Web UI 源内执行脚本。其余
+      // scheme 一律退回纯文本展示。
+      var safeUrl = /^https?:\/\//i.test(skill.url) ? skill.url : null
       subChildren.push(createElement('div', { className: 'card-sub', key: 'url' },
-        createElement('a', { href: skill.url, target: '_blank', rel: 'noreferrer', className: 'group-path' }, skill.url)))
+        safeUrl !== null
+          ? createElement('a', { href: safeUrl, target: '_blank', rel: 'noreferrer', className: 'group-path' }, skill.url)
+          : createElement('span', { className: 'group-path' }, skill.url)))
     }
     var seenIn = Array.isArray(skill.scopes) ? skill.scopes : []
     subChildren.push(createElement('div', { key: 'scopes', className: 'card-sub', style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #61666b)' } },

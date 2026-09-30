@@ -29,6 +29,7 @@ import {
   validateEntryInput,
   validateGenericCliBackend,
 } from '../lib/subagent-admin.js'
+import { inheritSecretFields, maskSecretFields } from '../lib/secret-fields.js'
 import { TOOL_SEED } from '../lib/tool-seed.js'
 import { MANAGED_BLOCK_MARKER } from '../lib/subagent-admin.js'
 
@@ -463,7 +464,10 @@ await check('detectCliBackends: stub probes, mounted config from patch, scan-onl
     const codexRow = result.backends.find(item => item.id === 'subagent-codex')
     assert.equal(codexRow.mounted, true)
     assert.equal(codexRow.config.providerName, 'codex-primary', 'mounted config echoed')
-    assert.deepEqual(codexRow.config.env, { OPENAI_API_KEY: 'sk-1' })
+    // Write-only 契约（v1.27.1）：内建后端的存储 env 值绝不跨 RPC——浏览器拿
+    // 到键集 + 空值；保存路径（cliUpsert 的 inheritSecretFields）负责把空值
+    // 解释为"沿用已存值"。
+    assert.deepEqual(codexRow.config.env, { OPENAI_API_KEY: '' }, 'stored env values are masked before crossing the RPC boundary')
     assert.deepEqual(codexRow.providerPackage, { ok: true, version: '9.9.9' })
     assert.deepEqual(codexRow.cli, { ok: true, version: 'codex-cli 1.2.3' })
     const claudeRow = result.backends.find(item => item.id === 'subagent-claude-code')
@@ -474,6 +478,25 @@ await check('detectCliBackends: stub probes, mounted config from patch, scan-onl
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+/* 10b ── builtin env mask/inherit pair (write-only contract) */
+await check('builtin CLI env: cliList masks, cliUpsert inherits the stored value for empty', () => {
+  const codex = CLI_BACKENDS.find(item => item.id === 'subagent-codex')
+  const stored = { providerName: 'codex-primary', permissionMode: 'approve-for-me', disposeGraceMs: 5000, env: { OPENAI_API_KEY: 'sk-1' } }
+  // The exact projection cliList performs (on a copy — the shared defaultConfig
+  // constant must never be mutated by a read path):
+  const shown = maskSecretFields({ ...stored }, ['env'])
+  assert.deepEqual(shown.env, { OPENAI_API_KEY: '' }, 'read projection masks env values')
+  assert.equal(stored.env.OPENAI_API_KEY, 'sk-1', 'masking works on a copy; the stored row is untouched')
+  // The exact merge cliUpsert's mutatePatch performs for a masked round-trip
+  // (browser sends the masked '' back): empty inherits, real values win.
+  const finalConfig = inheritSecretFields({ ...codex.defaultConfig, ...shown }, stored, ['env'])
+  assert.equal(finalConfig.env.OPENAI_API_KEY, 'sk-1', 'an empty incoming env value inherits the stored one')
+  assert.equal(finalConfig.providerName, 'codex-primary')
+  // A genuinely new value always wins over the stored one:
+  const replaced = inheritSecretFields({ ...codex.defaultConfig, env: { OPENAI_API_KEY: 'sk-2' } }, stored, ['env'])
+  assert.equal(replaced.env.OPENAI_API_KEY, 'sk-2')
 })
 
 /* 11 ── service-level CLI RPC: validation, mount refusal, unmount guard */

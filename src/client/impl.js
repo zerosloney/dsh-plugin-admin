@@ -601,6 +601,13 @@ var loaderRequire = /** @type {any} */ (require)
 var panelsLoad = null
 /** Load failure, surfaced inside the placeholder instead of a blank panel. */
 var panelsError = null
+/**
+ * Panel-level switch resolver (set by apply() once the policy pipeline exists;
+ * null before that and in standalone test mounts). Shared-slot panels (the
+ * web 搜索 tab) consult it because slot-level uninstall cannot reach them.
+ * @type {((panel: string) => boolean) | null}
+ */
+var panelHiddenResolver = null
 
 /**
  * Load the panel chunk exactly once and hand it the shared helpers.
@@ -627,6 +634,11 @@ function loadPanels() {
           copyTextToClipboard: copyTextToClipboard,
           copyTextSilently: copyTextSilently,
           downloadTextFile: downloadTextFile,
+          // Shared-slot panels resolve the three-state switch through this
+          // (apply() installs the real resolver; standalone mounts stay open).
+          panelHidden: function (panel) {
+            return typeof panelHiddenResolver === 'function' ? panelHiddenResolver(panel) === true : false
+          },
         })
       }
       panelsModule = mod
@@ -766,6 +778,9 @@ function apply(ctx) {
     if (state === 'on') return false
     return coverage.active[panel] === false
   }
+  // 共享 slot 的面板（Web 搜索页签）拿不到独立 slot 的卸载语义，经这个解析器
+  // 读取同一份三态决策；闭包读 panelStates，迟到的宿主答案自动生效。
+  panelHiddenResolver = yielded
 
   // The ten surfaces as data, so a late config answer can install what it enables
   // and uninstall what it disables. Slot names and ids are the wire the shell sees.
@@ -944,9 +959,25 @@ function apply(ctx) {
     ask.then(function (result) {
       var panels = result && result.ok !== false && result.value ? result.value.panels : null
       if (panels === null || panels === undefined || typeof panels !== 'object') return
+      var webSearchWasHidden = yielded('webSearch')
       panelStates = panels
       writePolicyCache(panels)
       reconcileSlots()
+      // The Web 搜索 tab lives INSIDE the shared sessions slot and reads its
+      // visibility at render time; a slot-level reconcile neither re-renders
+      // nor notifies an already-mounted section, so a flipped decision left a
+      // stale tab (or hid a wanted one) until an unrelated repaint. Remount
+      // that one slot when the answer flipped it — this runs once, at mount
+      // plus one RPC round trip, before the user has scrolled anywhere.
+      if (yielded('webSearch') !== webSearchWasHidden) {
+        for (var i = 0; i < SLOT_SPECS.length; i += 1) {
+          if (SLOT_SPECS[i].panel === 'sessions') {
+            uninstallOne('sessions')
+            installOne(SLOT_SPECS[i])
+            break
+          }
+        }
+      }
     }, function () { /* no host answer: the cache or the coverage table decides */ })
   }
 }

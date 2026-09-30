@@ -310,12 +310,24 @@ try {
       promptTemplate: '站会开始',
     })
     const res = await service.runNow('daily-standup')
-    assert.equal(res.ok, true)             // the RPC itself succeeded
+    // The FAILED fire reaches the panel as ok:false with the reason — the old
+    // shape answered ok:true ("the RPC itself succeeded") and left the history
+    // row as the only trace.
+    assert.equal(res.ok, false)
+    assert.match(String(res.error), /webhook 运行时/)
     const listed = await service.list()
     const entry = listed.history.find(h => h.taskId === 'daily-standup')
     assert.ok(entry, 'history entry recorded')
     assert.equal(entry.ok, false)
     assert.match(entry.error, /webhook 运行时/)
+  })
+
+  check('runNow on a disabled task says so instead of silently no-op-ing', async () => {
+    await service.upsert({ id: 'paused-job', cron: '0 10 * * 1-5', action: { mode: 'steer', sessionId: 's1' }, promptTemplate: 'x' })
+    await service.toggle('paused-job', false)
+    const res = await service.runNow('paused-job')
+    assert.equal(res.ok, false)
+    assert.match(String(res.error), /已停用/)
   })
 
   check('runNow rejects an unknown id', async () => {

@@ -695,6 +695,10 @@ export function EnvPairsEditor(props) {
           onChange: function (event) { props.onPatchPair(index, { key: event.target.value }) },
         }),
         createElement(UiInput, {
+          // 受控：宿主只投影掩码后的空值（write-only 契约），草稿值就是唯一
+          // 真相——非受控 + key:index 的组合会在删除中间行时让 DOM 残留文本与
+          // 底层草稿错位，保存写入与屏幕不符的值。
+          value: pair.value,
           placeholder: dshT('变量值'),
           onChange: function (event) { props.onPatchPair(index, { value: event.target.value }) },
         }),

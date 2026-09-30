@@ -1,5 +1,5 @@
 /** sessions — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, sectionState, showToast, useRef, useState } from './context.js'
+import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, panelHidden, sectionState, showToast, useRef, useState } from './context.js'
 import { tabKeyDown } from './shared.js'
 import { WebSearchSection } from './web-search.js'
 
@@ -24,10 +24,15 @@ export function WebSessionsSection(props) {
   var tabHooks = useState('sessions')
   var tab = tabHooks[0]
   var setTab = tabHooks[1]
+  // webSearch 没有独立 slot（与历史会话共用这一条 nav 入口），config.panels 的
+  // off/on/auto 三态在这里落地：off（含自动让位）直接摘掉页签——旋钮不在就只是
+  // 惰性摆设（挂载期还通过校验，承诺了"off 不注册，优先级最高"）。
   var tabs = [
     { id: 'sessions', label: dshT('历史会话'), component: SessionsSection },
-    { id: 'websearch', label: dshT('Web 搜索'), component: WebSearchSection },
   ]
+  if (!panelHidden('webSearch')) {
+    tabs.push({ id: 'websearch', label: dshT('Web 搜索'), component: WebSearchSection })
+  }
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
     createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('Web 与会话'),

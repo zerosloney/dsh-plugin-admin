@@ -346,8 +346,10 @@ export function McpSection(props) {
 
   var alive = kit.alive
   // Probe sequence guard: the probe of an older click must never overwrite a
-  // newer one's result when both are in flight.
-  var testSeq = useRef(0)
+  // newer one's result when both are in flight. Keyed PER ENTRY — a single
+  // counter let "probe A, then probe B" drop A's (perfectly current) response
+  // and leave its row stuck on 「检测中…」 forever.
+  var testSeq = useRef({})
 
   function patchMcp(partial) {
     kit.patch(partial)
@@ -629,10 +631,10 @@ export function McpSection(props) {
 
   /** Run a host-side connectivity probe for one entry and stash the result. */
   function testMcpEntry(id) {
-    var seq = ++testSeq.current
+    var seq = testSeq.current[id] = (testSeq.current[id] || 0) + 1
     patchMcpTest(id, { busy: true, result: null, error: null })
     callRemote('mcpAdmin/test', { id: id }).then(function (result) {
-      if (!alive.current || seq !== testSeq.current) return
+      if (!alive.current || seq !== testSeq.current[id]) return
       if (result.ok && result.value !== null && typeof result.value === 'object') {
         // `at` timestamps the probe; it is what the cached label renders.
         patchMcpTest(id, { busy: false, result: result.value, at: Date.now() })
@@ -640,7 +642,7 @@ export function McpSection(props) {
         patchMcpTest(id, { busy: false, result: null, error: messageOf(result.error) })
       }
     }, function (failure) {
-      if (!alive.current || seq !== testSeq.current) return
+      if (!alive.current || seq !== testSeq.current[id]) return
       patchMcpTest(id, { busy: false, result: null, error: messageOf(failure) })
     })
   }

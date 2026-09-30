@@ -538,7 +538,7 @@ await check('traversal-shaped runIds read as absent, not as arbitrary files', as
   await assert.rejects(() => r.resume('..\\..\\secret'), /not found/, 'resume refuses traversal id')
 })
 
-await check('stop gives up waiting on an abort-ignoring script (abandoned, not hung); amend refuses', async () => {
+await check('stop reaps an abort-ignoring script at the budget (abandoned, not hung); amend proceeds safely', async () => {
   const home = join(tmpBase, 'stop-hang')
   const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
   const { id } = await r.start({
@@ -553,11 +553,60 @@ await check('stop gives up waiting on an abort-ignoring script (abandoned, not h
   assert.equal(result.stopped, true)
   assert.equal(result.abandoned, true, 'non-interruptible run reports abandoned instead of hanging stop')
   assert.ok(elapsed < 5000, `stop should return at the budget, took ${elapsed}ms`)
+  // worker 时代：预算到点 terminate() 把不可抢占的脚本连 isolate 一起回收，
+  // 僵尸句柄不复存在——记录落定为 stopped、journal 落盘。旧契约"amend 拒绝
+  // 从未落定的 run"防的是"脚本可能仍在执行"；线程回收消灭了这个前提，改建
+  // 现在可以安全继续（双跑防线移交给 hasDerivedActiveRun，见下面两例）。
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const rec = r.get(id)
+  assert.equal(rec.status, 'stopped', `the reaped run settles as stopped, got ${rec.status}`)
+  const res2 = await r.amend(id, 'return 1', { parent: { id: 'sess-hang' } })
+  assert.ok(res2.id, 'amend proceeds once the abandoned run has been reaped')
+  await r.join(res2.id)
+})
+
+await check('a second amend of the same journal is refused while the derived run is active', async () => {
+  const home = join(tmpBase, 'amend-double-open')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  const { id } = await r.start({
+    script: `const a = await agent('one')\nconst b = await agent('two')\nreturn a + b`,
+    parent: { id: 'sess-double' },
+  })
+  const res2 = await r.amend(id, `const a = await agent('one')\nconst b = await agent('changed')\nreturn a + b`, { parent: { id: 'sess-double' } })
+  assert.ok(res2.id, 'first amend starts a derived run')
   await assert.rejects(
-    () => r.amend(id, 'return 1'),
-    /did not settle/,
-    'amend refuses a run that never settled (double-run guard)',
+    () => r.amend(id, 'return 0', { parent: { id: 'sess-double' } }),
+    /already has an active amended\/resumed run/,
+    'the same journal cannot be amended again while a derived run is live',
   )
+  await assert.rejects(
+    () => r.resume(id),
+    /already has an active amended\/resumed run/,
+    'resume hits the same double-open guard',
+  )
+  await r.stop(res2.id, 'cleanup')
+})
+
+await check('two concurrent amends start exactly one derived run', async () => {
+  const home = join(tmpBase, 'amend-race')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  const { id } = await r.start({
+    script: `const a = await agent('one')\nconst b = await agent('two')\nreturn a + b`,
+    parent: { id: 'sess-race' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  // 并发改键（不 await 第一份就发第二份）：互斥锁串行化后，第二份必须被
+  // hasDerivedActiveRun 拒绝，而不是各起一份新运行。
+  const results = await Promise.allSettled([
+    r.amend(id, `const a = await agent('one')\nreturn a`, { parent: { id: 'sess-race' } }),
+    r.amend(id, `const b = await agent('two')\nreturn b`, { parent: { id: 'sess-race' } }),
+  ])
+  const fulfilled = results.filter((entry) => entry.status === 'fulfilled' && entry.value.id)
+  const rejected = results.filter((entry) => entry.status === 'rejected')
+  assert.equal(fulfilled.length, 1, `exactly one amend starts a run, got ${fulfilled.length}`)
+  assert.equal(rejected.length, 1, `the other amend is refused, got ${rejected.length}`)
+  const derived = fulfilled[0].value.id
+  await r.stop(derived, 'cleanup')
 })
 
 // ─── P4b：ask / answer 提问链路 ───────────────────────────────────────────────

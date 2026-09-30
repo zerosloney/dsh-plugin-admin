@@ -12,7 +12,7 @@
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -404,6 +404,18 @@ await check('authentication failures and lockouts leave a trace for the operator
   assert.ok(failures.some((entry) => String(entry.error).includes('认证失败')), 'the 401 is in the delivery history')
   assert.ok(failures.some((entry) => String(entry.error).includes('被封锁')), 'the lockout is in the delivery history')
   m.dispose()
+})
+
+await check('the lockout does not exempt its holder from the request budget (source pin)', async () => {
+  // The behavioral window here is wall-clock (60s), so pin the FIX itself.
+  // The first cut's `!wasLockedOut && !rate.allow(bucket)` handed a lock's own
+  // trigger state an UNLIMITED request rate — each request still paying a
+  // synchronous rules read + SHA-256 on the event loop, and every failure
+  // re-arming the lock that opened the hole. The budget must apply to every
+  // caller; a correct secret still ends the lockout once it gets through.
+  const src = readFileSync(new URL('../lib/webhook-triggers.js', import.meta.url), 'utf8')
+  assert.ok(!src.includes('!wasLockedOut && !rate.allow'), 'the lockout-budget exemption is gone')
+  assert.ok(src.includes('if (!rate.allow(bucket)) {'), 'the per-caller request budget is unconditional')
 })
 
 rmSync(dir, { recursive: true, force: true })
