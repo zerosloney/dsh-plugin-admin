@@ -54,6 +54,7 @@
     "lib/cron-admin.js",
     "lib/mcp-probe.js",
     "lib/plugin-admin.js",
-    "lib/mcp-admin.js"
+    "lib/mcp-admin.js",
+    "lib/web-search-admin.js"
   ]
 }
