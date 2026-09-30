@@ -115,7 +115,7 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 当前覆盖 **39 个宿主文件中的 21 个**（21 个入口，其中 4 个是闭包已清但此前未列为入口的"顺带"文件）。这个数字由 `scripts/verify-strict-track.mjs` 从配置与真实 import 图**重算**并断言，所以改入口清单必须同步这句散文、反之亦然——它同时守住"清单只增不减"（地板值随新增上调）。剩下的不是被政策排除，而是**需要真正的类型建模**：全量开 `noImplicitAny` 目前约 1900 条，其中 ~72% 是 `TS7006`（回调参数缺类型），其余多是把 `{}` 字面量逐步加属性（`TS2339`）、用 `string` 索引一个无索引签名的对象（`TS7053`）。这些要补的是接口/typedef，**不是** `@param {any}`——补 `any` 只是把错误挪走，同时废掉这个开关的意义。三条实测先例，都是"开关真的抓到东西"：① 给 `health-report.js` 补 `HealthReport`/`ToolHealth` typedef 时，开关当场抓出**文档注释本身写错**的 `errorCodes` 形状（实际是 `{code,count}[]` 而非 `string[]`）；② 给 `peer-compat.js` 补 `ParsedVersion` 时，"只缓存正结果"的契约才被写成显式类型（`string|null|undefined`）而不是隐式 any；③ 给 `skills-admin.js` 的 `scopeInfoFor` 补返回类型时，发现注释声明 `cwd: string` 而实现实际返回 `string|null`——类型一写下来就露了。
 
-**`strictNullChecks` 仍关着，会改变判别的写法**：这种环境下 `!x.ok` **不能**收窄布尔字面量联合类型（实测：左 `ok: true` 成员仍在作用域内、`x.message` 报 TS2339），而 `x.ok === false` **可以**。遇到"属性不存在"的怪报错时先确认是不是这个原因；给 `catch` 里构造的失败对象加 `@type` 断言也是必需的（catch 绑定是 `any`，不注释会推出 `ok: boolean` 从而毁掉整个联合类型的判别）。
+**`strictNullChecks` 已是主配置默认**（2026-09 折回，见 CHANGELOG）：判别布尔字面量联合时仍优先写 `x.ok === false` 而不是 `!x.ok`——后者在 `strictNullChecks` 关闭时实测**不能**收窄（左 `ok: true` 成员仍在作用域内、`x.message` 报 TS2339），而显式 `=== false` 无论开关状态都直接。给 `catch` 里构造的失败对象加 `@type` 断言也是必需的（catch 绑定是 `any`，不注释会推出 `ok: boolean` 从而毁掉整个联合类型的判别）。
 
 ### 开 `strictNullChecks` 的可行性（已实测，2026-09）
 
@@ -137,22 +137,11 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 **注意区分「真 bug」与「类型证不出」**：`session-admin.js:1003` 的 `derived` 在 `if (derived === null) derived = deriveSessionSummary(events)` 之后使用，运行时是安全的，报错只是 TS 无法穿过那个分支证明它非空。修法是补注解让证明成立，**不是**改逻辑——把这类当成 bug 去"修"反而会引入真 bug。
 
-**建议的推进方式**：不要一次性打开（139 条会淹掉 review），而是照 `noImplicitAny` 那套**只增不减的入口清单**再做一条 `strict-null` 轨道（同一份清单机制，换个 flag），从 `patch-utils` 这类已清的叶子起步。两条轨道最终一起折回 `tsconfig.json`。**收益优先级**：先 `strictNullChecks` 再 `noImplicitAny` 剩余部分——前者 139 条且能抓真缺陷，后者还有 1900 条且多为回调参数标注（体力活）。
+**这条路已经走完了（2026-09）**：`strictNullChecks` 作为默认值写进 `tsconfig.json`，`tsconfig.strict-null.json` 与 `npm run check:types-strict-null` 随之删除（run-gate 回到 **42 步 / 6 道静态闸门**）。折回前按同一套"先量 import 闭包、再逐个补注解"的清单机制把 lib 层 **39/39** 全部清完，并额外清掉 `src/client/**` 的 **32 条**（`impl.js` 18 / `i18n.js` 6 / 四个 panel 8）——所以这个开关现在对全仓是常开的，不再有"轨道"文件。`verify-strict-track.mjs` 现在只守 `noImplicitAny` 一条轨道（flag 是否为真、入口是否存在、清单只增不减、文档覆盖数等于重算结果）。
 
-**这条轨道已经搭好了**：`tsconfig.strict-null.json` + `npm run check:types-strict-null`（run-gate 常驻静态步）。strict-null 轨道当前覆盖 **39 个**（lib 层已全量覆盖：它是第一条清完的轨道）。`verify-strict-track.mjs` 同时守住两条轨道：各自的 flag 是否为真、**继承关系**、入口是否存在、**两条清单都只增不减**（地板值随新增上调）、以及**文档里的两个覆盖数**是否等于重算结果。
+**这段历史里最值得记住的发现，是 `noImplicitAny` 会屏蔽 `strictNullChecks`**（所以当初两条轨道必须独立，各自直接 extends `tsconfig.json`）：最小复现——`let q = null; q = '"'` 在 `strictNullChecks` 单独开启时报错（`q` 被钉成字面量类型 `null`），**同时**打开 `noImplicitAny` 后不再报错（该 flag 让声明推成更宽的联合类型）。在 `patch-utils.js` 上实测：`strictNullChecks` 单独开是 **3 条**，两个 flag 一起开是 **0 条**。现在两条 flag 在 lib 上叠加之所以没有新发现，正因为 lib 已在两条轨道各自独立检查时全部清零——这就是当初规划的"全部折回"的终点。另一个继承下来的经验是**清单扩容的方式**：先量传递 import 闭包、再逐个补注解，已清文件在另一条轨道上多数是**零改动**纳入（那 21 个里有 14 个如此）。
 
-**关键：两条轨道必须彼此独立，各自 extends `tsconfig.json`——不能叠加。** 这条是实测出来的，也是搭这条轨道时最大的一个发现：**`noImplicitAny` 会屏蔽 `strictNullChecks` 的发现**。最小复现：
-
-```js
-let q = null
-q = '"'      // strictNullChecks 单独开：error（q 被钉成字面量类型 null）
-```
-
-同样这段代码，**同时**打开 `noImplicitAny` 后**不再报错**——因为该 flag 让 `let x = null` 推成更宽的联合类型，而不是被钉在 `null` 上。在 `patch-utils.js` 上实测：`strictNullChecks` 单独开是 **3 条**（那三处 `let quote = null`），两个 flag 一起开是 **0 条**。
-
-**所以：一个文件加入 any 轨道，并不等于它的空值处理被检查过**；反之亦然。两条清单都得各自涨。前面那个"139 条"是**只开 `strictNullChecks`**、且**不叠加** `noImplicitAny` 时的数字，对已在 any 轨道上的文件并不适用（那些文件的真实空值问题被屏蔽着，只有最终把两个 flag 都折进 `tsconfig.json`、不再有 `any` 推断时才会全部现形）。`verify-strict-track.mjs` 里有一条断言专门防这个退化：null 轨道不得开启 `noImplicitAny`。
-
-**清单扩容的方式**与 any 轨道相同（先量传递 import 闭包，再逐个补注解）。优先顺序建议：先纳入 any 轨道**还没清**的文件（它的闭包代价同时只付一次），再回头收已清文件——实测已清文件在 null 轨道上多数是**零改动**纳入（那 21 个里有 14 个如此）。
+**`strictNullChecks` 单独开着时能抓到 `noImplicitAny` 看不见的真缺陷**（这也是当时优先做它的原因）：最典型的是 `TS2783` 把"写了但没生效"的展开点名——`mcp-probe.js` 的 `{ ok: probe.ok, transport: 'stdio', ms: ms(), ...probe }` 里 `...probe` 展开在后，probe 自带 `ok`/`transport`/`ms`，于是调用点实时算出的 `ms` 被丢弃、硬编码 `transport` 也失效；同一类还出现在 `webhook-triggers.js` 的三处返回值里。
 
 **补注解时的一个 JSDoc 陷阱（实测踩到）**：`let x = null` 在 `strictNullChecks` 下的类型是**字面量 `null`**，于是「在 Promise 执行器里赋值」报 `TS2322`，之后每次读取都收窄成 `never`：`error TS2349: Type 'never' has no call signatures`。**给这个 `let` 加 `@type {((r?: unknown) => void)|null}` 注解没有用**——实测带注解与不带注解都失败；用 `const` 别名转发同样失败。唯一有效的是把初始化写成 `/** @type {any} */ (null)`（或把可空值放在对象属性上）。看到「`never` 没有调用签名」基本就是这个成因。
 

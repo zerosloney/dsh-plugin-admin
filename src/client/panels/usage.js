@@ -88,6 +88,7 @@ export function renderUsageDashboard(usage, patch) {
   // --- slice by date range + project ---
   var now = Date.now()
   var dayMs = 86400000
+  /** @type {number|null} */
   var startMs = null
   if (range === 'today') {
     var d0 = new Date(); d0.setHours(0, 0, 0, 0); startMs = d0.getTime()

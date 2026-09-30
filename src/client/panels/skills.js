@@ -313,6 +313,7 @@ export function SkillsSection(props) {
     // empty" from "every session scope failed" from "scope key could not
     // resolve". Same shape as the existing warnings; nothing to wire elsewhere.
     var emptyDiagnose = []
+    /** @type {Record<string, any>|null} */
     var globalScope = null
     for (var gi = 0; gi < state.scopes.length; gi++) {
       if (state.scopes[gi].kind === 'global') { globalScope = state.scopes[gi]; break }

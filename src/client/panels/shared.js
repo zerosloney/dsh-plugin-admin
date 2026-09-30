@@ -83,7 +83,8 @@ export function tabKeyDown(event, tabs, selectedId, select) {
   // synchronous focus survives the re-render that flips tabIndex/aria.
   var bar = /** @type {Element|null} */ (event.currentTarget)
   var nodes = bar !== null ? bar.querySelectorAll('[role="tab"]') : []
-  if (nodes[to]) nodes[to].focus()
+  var node = nodes[to]
+  if (node) (/** @type {HTMLElement} */ (node)).focus()
   return true
 }
 
@@ -242,7 +243,8 @@ export function inputStyle(over) {
     borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l2, #ddd)',
     boxSizing: 'border-box',
   }
-  for (var k in (over || {})) base[k] = over[k]
+  var src = over || {}
+  for (var k in src) base[k] = src[k]
   return base
 }
 

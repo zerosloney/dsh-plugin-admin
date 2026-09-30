@@ -39,10 +39,9 @@ function check(name, fn) {
   }
 }
 
-/** The tracks: one config, one flag, one entry list each. Both are checked. */
+/** The tracks: one config, one flag, one entry list each. */
 const TRACKS = [
   { key: 'strict', config: 'tsconfig.strict.json', flag: 'noImplicitAny', floor: 21 },
-  { key: 'strict-null', config: 'tsconfig.strict-null.json', flag: 'strictNullChecks', floor: 39 },
 ]
 
 const strict = readJsonc(join(ROOT, 'tsconfig.strict.json'))
@@ -50,12 +49,11 @@ const entries = strict.include.filter((p) => p.endsWith('.js'))
 
 console.log(`verify-strict-track: ${entries.length} entry file(s) under noImplicitAny`)
 
-// Every track must set its OWN flag. The null track must NOT inherit the any
-// track: `noImplicitAny` widens `let x = null` to a union, which SILENCES the
-// very findings the null track exists to catch (measured: 3 errors in
-// patch-utils.js under strictNullChecks alone, 0 when the two are stacked).
-// Each track therefore extends tsconfig.json directly, and membership in one
-// says nothing about the other.
+// The any track sets its OWN flag. It now inherits `strictNullChecks` from
+// tsconfig.json (that flag is a default since the strict-null track folded
+// after 39/39) — safe because every lib file was already cleaned under it. The
+// guard only enforces the noImplicitAny claim; inherited strictNullChecks is a
+// whole-repo property, not something this track adds.
 check('each track sets its own flag and extends the main config directly', () => {
   for (const track of TRACKS) {
     const cfg = readJsonc(join(ROOT, track.config))
@@ -68,7 +66,7 @@ check('each track sets its own flag and extends the main config directly', () =>
   }
 })
 
-check('every listed entry exists (both tracks)', () => {
+check('every listed entry exists', () => {
   for (const track of TRACKS) {
     const cfg = readJsonc(join(ROOT, track.config))
     for (const entry of cfg.include.filter((p) => p.endsWith('.js'))) {
@@ -142,7 +140,9 @@ check('every entry resolves inside lib/ (an entry outside the graph would be unc
   }
 })
 
-/** Coverage of one track: entries plus their transitive import closures. */
+/**
+ * Coverage of one track: entries plus their transitive import closures.
+ */
 const coverageOf = (track) => {
   const cfg = readJsonc(join(ROOT, track.config))
   const set = new Set()
@@ -153,7 +153,6 @@ const coverageOf = (track) => {
 }
 
 const covered = coverageOf(TRACKS[0])
-const coveredNull = coverageOf(TRACKS[1])
 
 check('the docs quote the real coverage number', () => {
   const contributing = readFileSync(join(ROOT, 'CONTRIBUTING.md'), 'utf8')
@@ -165,30 +164,7 @@ check('the docs quote the real coverage number', () => {
   assert.equal(Number(match[2]), covered.size, `CONTRIBUTING says ${match[2]} are covered; the config actually covers ${covered.size}`)
 })
 
-check('the docs quote the strict-null coverage number', () => {
-  const contributing = readFileSync(join(ROOT, 'CONTRIBUTING.md'), 'utf8')
-  // "strict-null 轨道当前覆盖 **<n> 个**"
-  const match = /strict-null 轨道当前覆盖 \*\*(\d+) 个\*\*/.exec(contributing)
-  assert.ok(match, 'CONTRIBUTING.md should state the strict-null coverage as "strict-null 轨道当前覆盖 **<n> 个**"')
-  assert.equal(
-    Number(match[1]),
-    coveredNull.size,
-    `CONTRIBUTING says the strict-null track covers ${match[1]}; the config actually covers ${coveredNull.size}`,
-  )
-})
-
-check('the two tracks are independent (neither may subsume the other by flag)', () => {
-  // A track that inherited the other's flag would silently check less than it
-  // claims. Guard the specific hazard: the null track must not set
-  // noImplicitAny (it would mask the findings), and the any track must not set
-  // strictNullChecks (it would then fail on files that were never assessed).
-  const anyTrack = readJsonc(join(ROOT, 'tsconfig.strict.json'))
-  const nullTrack = readJsonc(join(ROOT, 'tsconfig.strict-null.json'))
-  assert.notEqual(nullTrack.compilerOptions?.noImplicitAny, true, 'strict-null must NOT enable noImplicitAny — it masks the null findings')
-  assert.notEqual(anyTrack.compilerOptions?.strictNullChecks, true, 'the any track must not silently enable strictNullChecks; that is the other track')
-})
-
-console.log(`verify-strict-track: noImplicitAny ${covered.size}/${graph.size} host files · strictNullChecks ${coveredNull.size}/${graph.size}`)
+console.log(`verify-strict-track: noImplicitAny ${covered.size}/${graph.size} host files`)
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

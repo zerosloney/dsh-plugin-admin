@@ -15,6 +15,11 @@
     "checkJs": true,
     "noEmit": true,
     "strict": false,
+    // strictNullChecks is a permanent default since the strict-null track
+    // reached 39/39 and was folded back (see CONTRIBUTING's strict-track
+    // section). It stays a separate key rather than `strict: true` because the
+    // other strict flags are still being introduced via tsconfig.strict.json.
+    "strictNullChecks": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,

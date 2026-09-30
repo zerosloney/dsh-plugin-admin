@@ -27,7 +27,9 @@ export function loadMcpTestCache() {
   var store = mcpTestStorage()
   if (store === null) return {}
   try {
-    var parsed = JSON.parse(store.getItem(MCP_TEST_CACHE_KEY))
+    var raw = store.getItem(MCP_TEST_CACHE_KEY)
+    if (raw === null) return {}
+    var parsed = JSON.parse(raw)
     if (parsed === null || typeof parsed !== 'object') return {}
     // Purge failure records persisted by older builds: only a durable OK is
     // worth restoring on mount; a stale ❌ from a past outage must not
@@ -131,7 +133,9 @@ export function loadUpdateReminders() {
   var store = safeLocalStorage()
   if (store === null) return {}
   try {
-    var parsed = JSON.parse(store.getItem(UPDATE_REMINDER_KEY))
+    var raw = store.getItem(UPDATE_REMINDER_KEY)
+    if (raw === null) return {}
+    var parsed = JSON.parse(raw)
     var out = {}
     if (parsed !== null && typeof parsed === 'object') {
       for (var name in parsed) {

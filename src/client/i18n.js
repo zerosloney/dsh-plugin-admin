@@ -924,13 +924,14 @@ export const I18N_NS = 'dshAdmin'
 /** Identity dictionary for zh — the keys ARE the zh-CN source strings. Derived
  * from I18N_EN so the two dictionaries cannot drift apart, and materialized
  * lazily so an import in a non-browser context costs nothing. */
+/** @type {Record<string, string>|null} */
 var I18N_ZH = null
 
-/** Bound translator once the shell locale service is mounted (null otherwise). */
+/** @type {((s: string) => any)|null} */
 var boundTranslate = null
 /** Locale id the shell reports as active (null until the service is bound). */
 var localeActiveId = null
-/** setLocale, captured when the service exposes one. */
+/** @type {((id: string) => void)|null} */
 var localeSetLocale = null
 /** Panel-level locale subscribers: the React wrappers re-render through these. */
 var localeListeners = new Set()
@@ -986,6 +987,7 @@ export function installLocaleRuntime(ctx) {
   // A second materialization of this bundle (HMR, a test harness mounting
   // twice) would hit "already has locale": the table is identical either way,
   // so fall back to binding whatever is registered instead of failing the mount.
+  /** @type {(() => void)|null} */
   var dispose = null
   try {
     dispose = locale.register(I18N_NS, { zh: I18N_ZH, en: I18N_EN })

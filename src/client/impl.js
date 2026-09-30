@@ -111,6 +111,7 @@ function sectionState(initial) {
 // node on top — rapid consecutive failures would otherwise overlap and hide
 // the earlier message behind the latest. A toast mid-fade (leaving) is
 // revived by a replacement rather than left to vanish.
+/** @type {{ el: HTMLElement, timer: ReturnType<typeof setTimeout>|null, removalTimer: ReturnType<typeof setTimeout>|null, leaving: boolean }|null} */
 var activeToast = null
 
 /**
@@ -136,8 +137,8 @@ function showToast(type, text, duration) {
   var current = activeToast
   if (current !== null && current.el.parentNode !== null) {
     // Replace: revive a mid-fade toast, swap class/text, restart the countdown.
-    clearTimeout(current.timer)
-    clearTimeout(current.removalTimer)
+    if (current.timer !== null) clearTimeout(current.timer)
+    if (current.removalTimer !== null) clearTimeout(current.removalTimer)
     current.leaving = false
     current.el.className = 'dsh-admin-toast ' + type
     current.el.textContent = text
@@ -149,6 +150,7 @@ function showToast(type, text, duration) {
   toast.className = 'dsh-admin-toast ' + type
   toast.textContent = text
   document.body.appendChild(toast)
+  /** @type {{ el: HTMLElement, timer: ReturnType<typeof setTimeout>|null, removalTimer: ReturnType<typeof setTimeout>|null, leaving: boolean }} */
   var state = { el: toast, timer: null, removalTimer: null, leaving: false }
   activeToast = state
   toast.addEventListener('click', function () { quit(state) })
@@ -542,6 +544,7 @@ function setupMenuInjection(call, refreshSessions) {
     // item and relabels it; only a second click within 4s runs onClick —
     // destructive items must never fire on a single misclick.
     var armed = false
+    /** @type {ReturnType<typeof setTimeout>|null} */
     var disarmTimer = null
     btn.addEventListener('click', function (e) {
       e.stopPropagation()
@@ -555,7 +558,7 @@ function setupMenuInjection(call, refreshSessions) {
         }, 4000)
         return
       }
-      clearTimeout(disarmTimer)
+      if (disarmTimer !== null) clearTimeout(disarmTimer)
       armed = false
       btn.textContent = label
       onClick()
@@ -591,6 +594,7 @@ function setupMenuInjection(call, refreshSessions) {
 /** Package-local chunk holding every panel implementation. */
 var PANELS_CHUNK = './client.panels.js'
 /** Loaded chunk module (null until it arrives). */
+/** @type {Record<string, any>|null} */
 var panelsModule = null
 /** In-flight load, shared by every slot that renders first. */
 /** The loader-shaped require: the host hands the factory a table lookup that
@@ -598,8 +602,10 @@ var panelsModule = null
  * source compiles against Node's Require, which has no such member. */
 /** @type {{ async?: (spec: string) => Promise<Record<string, any>> }} */
 var loaderRequire = /** @type {any} */ (require)
+/** @type {Promise<Record<string, any>>|null} */
 var panelsLoad = null
 /** Load failure, surfaced inside the placeholder instead of a blank panel. */
+/** @type {string|null} */
 var panelsError = null
 /**
  * Panel-level switch resolver (set by apply() once the policy pipeline exists;
@@ -733,7 +739,8 @@ function apply(ctx) {
   // The sessions service lets us nudge the sidebar list after a delete so
   // the removed session disappears immediately instead of lingering in
   // "未分组" until the next reload.
-  var refreshSessions = null
+  /** @type {(() => void)|null} */
+    var refreshSessions = null
   try {
     var sessionsSvc = ctx.get && ctx.get('sessions')
     if (sessionsSvc && typeof sessionsSvc.refresh === 'function') {
@@ -953,6 +960,7 @@ function apply(ctx) {
   // The ask. On success the answer becomes the cache and reconciliation runs again;
   // on failure nothing changes (cache, else auto-yield). A mount WITHOUT a
   // connection (a harness, a headless shell) must not throw here either.
+  /** @type {Promise<any>|null} */
   var ask = null
   try { ask = call('pluginAdmin/panels', {}) } catch (error) { ask = null }
   if (ask !== null && typeof ask.then === 'function') {
