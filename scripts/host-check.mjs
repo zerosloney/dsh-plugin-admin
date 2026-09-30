@@ -39,6 +39,7 @@ const globalEffectDisposers = []
 
 const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows, shouldIgnoreScripts, withInstallScriptsPolicy, scrubbedPnpmEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
 const { assertRevealablePath } = await import(new URL('../lib/workspace-path.js', import.meta.url).href)
+const { isRegistryInstallSpec, assertInstallSpecAllowed } = await import(new URL('../lib/plugin-admin.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -494,6 +495,68 @@ for (const good of ['dsh-plugin-admin', '@scope/pkg', '@scope/pkg@^1.2.3',
   assert.equal(assertPnpmOperand('t', good), good, `allowlist accepts ${good}`)
 }
 
+/* --------------- install() enforces the policy BEFORE pnpm runs ---------------
+ * The mounted default is `allow`, in which case a git URL is a legitimate spec
+ * and must keep working exactly as before. A mount under `registry-only`
+ * refuses it — and the refusal has to be observable on a service that CANNOT
+ * run pnpm (no pnpm on this box, no network), which is the point: the refusal
+ * happens before the package manager would have been spawned.
+ */
+const installPolicySvc = pluginAdminSvc
+let registryOnlyMounted = false
+{
+  // A THROWAWAY profile, not the repo: applyXxx's install() derives its profile
+  // directory from ctx.baseUrl, so a mount anchored at this script's own repo
+  // would let any install() that clears validation write into the repository's
+  // package.json (and drop a pnpm lockfile beside it). The assertions below only
+  // exercise the refusals, which throw before pnpm runs — anchoring them at a
+  // temp profile keeps that true even if a later edit adds an install() call
+  // that passes the policy.
+  const policyProfile = join(here, '../.host-check-tmp/install-policy-profile')
+  rmSync(policyProfile, { recursive: true, force: true })
+  mkdirSync(policyProfile, { recursive: true })
+  writeFileSync(join(policyProfile, 'package.json'), JSON.stringify({ name: 'policy-fixture', dependencies: {} }, null, 2))
+  const registryOnlyCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(policyProfile).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d); return d },
+    get: () => undefined,
+    on: (name, fn) => () => {},
+    typert: { register: () => () => {} },
+    workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+    sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
+  }
+  // The config row is what mounts the policy; everything else keeps its own
+  // default so this mount stays comparable to the ones above.
+  apply(registryOnlyCtx, { installScripts: 'registry-only' })
+  registryOnlyMounted = true
+  // Remote repository / protocol references are refused BY THE POLICY — and the
+  // refusal is observable on a service that cannot run pnpm at all (no binary on
+  // PATH, no registry reachable), which is exactly the proof that it happens
+  // before the package manager would have been spawned.
+  for (const spec of ['git+https://host/repo.git', 'github:user/repo', 'user/repo']) {
+    await assert.rejects(
+      () => registryOnlyCtx.provided.pluginAdmin.install(spec),
+      /registry-only' refuses/,
+      `registry-only: install() refuses ${spec} before pnpm runs`,
+    )
+  }
+  // The specs the policy PERMITS are not pushed through install() here: they
+  // would clear the refusal and actually reach pnpm (a network call). The unit
+  // block above pins that they pass assertInstallSpecAllowed, which is the only
+  // decision the policy makes.
+}
+assert.equal(registryOnlyMounted, true, 'the registry-only mount ran')
+// The default mount is NOT asserted through install() here: it would have to
+// reach pnpm (and the network) to show the absence of a policy refusal, and the
+// unit block above already pins that `allow` passes the same spec through.
+// What IS asserted is that the default mount resolves to 'allow' at all — if a
+// future change flipped the default, every profile's install behaviour would
+// change silently.
+assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the mounted default is still allow')
+
 /* --------------- win32 caret escaping for the cmd.exe shell ---------------
  * pnpm runs through cmd.exe on Windows, which treats `^` as its escape
  * character — an unescaped `name@^1.2.3` operand silently arrives as
@@ -564,6 +627,66 @@ assert.equal(shouldIgnoreScripts('some-plugin', 'allow'), false)
 assert.equal(shouldIgnoreScripts('some-plugin', 'local-only'), true)
 assert.equal(shouldIgnoreScripts('E:/work/pkg', 'local-only'), false)
 assert.equal(shouldIgnoreScripts('E:/work/pkg', 'deny'), true, 'deny beats local-ness')
+
+/* --------- installScripts: 'registry-only' — the state neither older one could express ---------
+ * An operator who wants registry packages to build (a native module needs its
+ * prepare script) previously had to choose: `allow` also fetched and build
+ * arbitrary remote repositories, `local-only` stripped the registry's build
+ * scripts too. `registry-only` permits registry names and local paths and
+ * REFUSES a remote repository/protocol reference outright — the one shape whose
+ * only purpose from a browser payload is to fetch and execute untrusted code.
+ *
+ * The classifier has to tell "published on the registry" apart from every remote
+ * reference, and the refusal has to happen BEFORE pnpm runs (refusing afterwards
+ * would already have cloned and built the repository).
+ */
+for (const registrySpec of ['some-plugin', '@scope/pkg', 'some-plugin@^1.2.3', '@scope/pkg@~2.0', 'is-number@7']) {
+  assert.equal(isRegistryInstallSpec(registrySpec), true, `${registrySpec} is a registry package`)
+  assert.doesNotThrow(() => assertInstallSpecAllowed(registrySpec, 'registry-only'), `${registrySpec} is permitted under registry-only`)
+}
+for (const localSpec of ['E:/work/my-plugin', '/opt/plugins/x', './pkg', '../pkg', 'file:./pkg.tgz', 'link:../dsh-x', '//nas/share/pkg']) {
+  assert.equal(isRegistryInstallSpec(localSpec), false, `${localSpec} is not a registry package`)
+  assert.doesNotThrow(() => assertInstallSpecAllowed(localSpec, 'registry-only'), `the operator's own path ${localSpec} is still permitted`)
+}
+for (const remoteSpec of ['git+https://host/repo.git', 'git+https://host/repo.git#semver:^1.0.0', 'github:user/repo', 'user/repo', 'https://host/pkg.tgz', 'git+ssh://git@host/repo.git']) {
+  assert.equal(isRegistryInstallSpec(remoteSpec), false, `${remoteSpec} is not a registry package`)
+  assert.throws(
+    () => assertInstallSpecAllowed(remoteSpec, 'registry-only'),
+    /registry-only' refuses/,
+    `${remoteSpec} is refused under registry-only`,
+  )
+}
+// The refusal names the way out, so a deployment that needs one git plugin is
+// not stuck guessing.
+assert.throws(
+  () => assertInstallSpecAllowed('git+https://host/repo.git', 'registry-only'),
+  /installScripts: 'allow'|dsh plugin CLI/,
+  'the refusal explains how to permit it',
+)
+// No other state changes: `allow` keeps the documented CLI behaviour (git URLs
+// build there), and `local-only`/`deny` keep using --ignore-scripts rather than
+// refusing the fetch.
+for (const policy of ['allow', 'local-only', 'deny']) {
+  assert.doesNotThrow(() => assertInstallSpecAllowed('git+https://host/repo.git', policy), `${policy} does not refuse the spec`)
+}
+assert.deepEqual(
+  withInstallScriptsPolicy(['add', 'some-plugin'], 'registry-only'),
+  ['add', 'some-plugin'],
+  'registry-only needs no --ignore-scripts: the registry may build',
+)
+assert.equal(shouldIgnoreScripts('some-plugin', 'registry-only'), false, 'and shouldIgnoreScripts agrees')
+assert.equal(
+  isRegistryInstallSpec('some-plugin@'),
+  false,
+  'a bare trailing @ is not a registry spec (it is malformed, not a range)',
+)
+// The DEFAULT is unchanged — an existing profile must not change behaviour
+// underneath an upgrade — and all four states validate at the mount boundary.
+assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the default installScripts policy is unchanged')
+for (const state of ['allow', 'registry-only', 'local-only', 'deny']) {
+  assert.equal(resolvePluginConfig({ installScripts: state }).installScripts, state, `installScripts: '${state}' is accepted`)
+}
+assert.throws(() => resolvePluginConfig({ installScripts: 'registry-only-but-also-git' }), /installScripts/, 'a mistyped policy still fails the mount')
 
 /* ------------- the pnpm child env drops the harness namespace -------------
  * DSH_* carries harness internals (sandbox tokens, ACL identities) that no

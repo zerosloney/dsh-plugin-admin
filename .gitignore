@@ -40,3 +40,15 @@ logs/
 
 # transient tsc diagnostic dumps (npm run check:types writes only stdout)
 .tsc-report.txt
+
+# pnpm byproducts. This package is published through npm and commits no pnpm
+# lockfile on purpose, but ANY pnpm run from this directory (a `pnpm add` in a
+# profile anchored at the repo, a stray CLI call) leaves these three files
+# behind as untracked noise — and an untracked file is one `git add -A` away
+# from being committed.
+/pnpm-lock.yaml
+pnpm-lock.yaml
+/pnpm-workspace.yaml
+pnpm-workspace.yaml
+/.pnpm-store/
+.pnpm-store/
