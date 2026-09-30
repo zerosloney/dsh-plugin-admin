@@ -43,6 +43,8 @@ export function TodoAdminPendingGlyph() {
   )
 }
 
+/** Pick the status glyph by status: completed disc, in-progress ring, pending dashed.
+ * @param {string} status - the todo item's status. */
 export function TodoAdminStatusGlyph(status) {
   if (status === 'completed') return createElement(TodoAdminCompletedGlyph, { key: 'g' })
   if (status === 'in_progress') return createElement(TodoAdminProgressGlyph, { key: 'g' })
@@ -52,6 +54,7 @@ export function TodoAdminStatusGlyph(status) {
 /**
  * Derive the footer's 「第 X / Y 步」 from the list itself: the first
  * in_progress item's position, or the total once everything settled.
+ * @param {Array<Record<string, any>>} list - the host-projected todo rows.
  */
 export function todoAdminStep(list) {
   var total = list.length
@@ -66,14 +69,19 @@ export function todoAdminStep(list) {
   return { current: current, total: total }
 }
 
-/** The file row's status letter, sanitized to the renderable kinds (C = copy). */
+/** The file row's status letter, sanitized to the renderable kinds (C = copy).
+ * @param {string} status - the raw git status letter (anything else reads 'M'). */
 export function todoAdminStatusLetter(status) {
   return status === 'M' || status === 'A' || status === 'D' || status === 'R' || status === 'C' || status === '?' ? status : 'M'
 }
 
 /** One git-status file row: colored letter, dim dir prefix + filename, +/- deltas.
  * A button — clicking reveals the file (or its directory, when deleted) in the
- * system explorer via fsAdmin/reveal. */
+ * system explorer via fsAdmin/reveal.
+ * @param {Record<string, any>} item - one fileStats `changed` row.
+ * @param {number} index - the row's position in the list (the React key).
+ * @param {((path: string | null) => void) | null} reveal - the reveal collaborator;
+ * the row only wires its onClick when it is callable. */
 export function TodoAdminFileRow(item, index, reveal) {
   var st = todoAdminStatusLetter(item.status)
   var path = typeof item.path === 'string' && item.path !== '' ? item.path : dshT('（未知路径）')
@@ -88,6 +96,7 @@ export function TodoAdminFileRow(item, index, reveal) {
   var name = slash > 0 ? path.slice(slash + 1) : path
   var target = typeof item.absPath === 'string' && item.absPath !== '' ? item.absPath
     : (typeof item.absDir === 'string' && item.absDir !== '' ? item.absDir : null)
+  /** @type {Record<string, any>} */
   var rowProps = {
     key: index,
     type: 'button',
@@ -110,7 +119,10 @@ export function TodoAdminFileRow(item, index, reveal) {
   )
 }
 
-/** Collapse-completed summary row: "✓ N 已完成" — click expands the struck items. */
+/** Collapse-completed summary row: "✓ N 已完成" — click expands the struck items.
+ * @param {number} done - how many items are completed (the row's count).
+ * @param {boolean} expanded - whether the struck rows are currently shown.
+ * @param {() => void} toggleDone - flips the hide-done preference. */
 export function TodoAdminDoneRow(done, expanded, toggleDone) {
   return createElement('li', { key: 'done-row', className: 'todo-done-row' },
     createElement('button', {
@@ -125,7 +137,8 @@ export function TodoAdminDoneRow(done, expanded, toggleDone) {
     ))
 }
 
-/** Compact elapsed text: 42秒 / 7分24秒 / 1时2分. */
+/** Compact elapsed text: 42秒 / 7分24秒 / 1时2分.
+ * @param {number} ms - the elapsed milliseconds (non-finite or negative reads ''). */
 export function formatElapsed(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
   var total = Math.floor(ms / 1000)
@@ -139,8 +152,14 @@ export function formatElapsed(ms) {
 /**
  * Render the todo dock: progress bar, todo rows (done section collapsible),
  * the git file-change section with branch badge, footer.
- * @param ui - { collapsed, toggle, activeRef, doneCollapsed, toggleDone,
- *   elapsedOf, reveal, branch, files, added, removed }.
+ * @param {Array<Record<string, any>>} list - the host-projected todo rows.
+ * @param {any} stats - the folded sessionAdmin/fileStats bag. Host-defined
+ * fields, and null until the first poll (and after a git failure) — the two
+ * `stats !== null` guards below are what read it, since a precise union loses
+ * narrowing through the `var hasStats` alias.
+ * @param {Record<string, any>} ui - the dock's bag: { collapsed, toggle,
+ * activeRef, doneCollapsed, toggleDone, elapsedOf, reveal, branch, copyDiff,
+ * diffCopied, notifyEnabled, toggleNotify }.
  */
 export function TodoAdminRender(list, stats, ui) {
   var children = []
@@ -171,6 +190,7 @@ export function TodoAdminRender(list, stats, ui) {
         // the struck-through entries (ai-ux: auto-dismiss, keep accessible).
         if (ui.doneCollapsed) continue
       }
+      /** @type {Record<string, any>} */
       var liProps = { key: i, className: 'todo-item', 'data-status': status }
       if (status === 'in_progress' && !activeAttached && ui.activeRef) {
         liProps.ref = ui.activeRef
@@ -249,7 +269,8 @@ export function TodoAdminRender(list, stats, ui) {
   }, children)
 }
 
-/** Bell outline; the off state adds a slash so the toggle reads at a glance. */
+/** Bell outline; the off state adds a slash so the toggle reads at a glance.
+ * @param {boolean} on - the notify-enabled state (the slash reads when off). */
 export function TodoAdminBellGlyph(on) {
   return createElement('svg', {
     width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
@@ -278,6 +299,11 @@ export function readDoneCollapsed() {
 /**
  * The dock entry component. Framework props: useProjection (session
  * standard kit) — everything else arrives via the registration's inject.
+ * @param {{ useProjection: (name: string) => any, sessionId: string,
+ * call: (method: string, args: any) => Promise<any> }} props - the framework's
+ * session props plus the injected `call` (the host RPC seam: the resolved
+ * payload is service-defined JSON). The typeof guards below are defensive —
+ * the slot framework and the registration always provide all three.
  */
 export function TodoAdminDock(props) {
   var useProjection = props.useProjection
@@ -311,6 +337,7 @@ export function TodoAdminDock(props) {
   useEffect(function () {
     if (!show || typeof sessionId !== 'string') return undefined
     var keyPrefix = sessionId + '\u0000'
+    /** @type {string[]} */
     var actives = []
     for (var i = 0; i < list.length; i++) {
       var item = list[i] || {}
@@ -325,6 +352,7 @@ export function TodoAdminDock(props) {
         addedNew = true
       }
     }
+    /** @type {string[]} */
     var stale = []
     todoActiveSince.forEach(function (v, k) {
       if (k.indexOf(keyPrefix) === 0) {
@@ -343,7 +371,7 @@ export function TodoAdminDock(props) {
     return function () { clearInterval(timer) }
   }, [show, sessionId, todos])
 
-  var elapsedOf = function (content) {
+  var elapsedOf = function (/** @type {string} */ content) {
     if (typeof nowMs !== 'number' || typeof sessionId !== 'string') return null
     var start = todoActiveSince.get(sessionId + '\u0000' + content)
     if (typeof start !== 'number') return null
@@ -351,14 +379,14 @@ export function TodoAdminDock(props) {
   }
 
   var toggleDone = function () {
-    setDoneCollapsed(function (v) {
+    setDoneCollapsed(function (/** @type {boolean} */ v) {
       var next = !v
       try { window.localStorage.setItem(TODO_DONE_KEY, next ? '1' : '0') } catch (e) { /* private mode */ }
       return next
     })
   }
 
-  var reveal = function (path) {
+  var reveal = function (/** @type {string | null} */ path) {
     if (typeof call !== 'function' || typeof path !== 'string' || path === '') return
     // Explorer opening is its own success feedback; a failure would
     // otherwise read as a dead click (the workspace menu already toasts).
@@ -447,7 +475,7 @@ export function TodoAdminDock(props) {
   var toggleNotify = function () {
     if (typeof Notification === 'undefined') return
     if (Notification.permission === 'granted') {
-      setNotifyEnabled(function (v) {
+      setNotifyEnabled(function (/** @type {boolean} */ v) {
         var next = !v
         try { window.localStorage.setItem(TODO_NOTIFY_KEY, next ? '1' : '0') } catch (e) { /* private mode */ }
         return next
@@ -500,10 +528,10 @@ export function TodoAdminDock(props) {
         // clearing the stats rather than rendering all-zeroes, which would
         // assert "no changes" from a reading that never happened.
         if (typeof value.error === 'string' && value.error !== '') {
-          setStats(function (prev) { return prev === null ? prev : null })
+          setStats(function (/** @type {Record<string, any> | null} */ prev) { return prev === null ? prev : null })
           return
         }
-        setStats(function (prev) {
+        setStats(function (/** @type {Record<string, any> | null} */ prev) {
           if (prev && prev.files === value.files && prev.added === value.added && prev.removed === value.removed
             && prev.branch === (typeof value.branch === 'string' ? value.branch : null)) return prev
           return {
@@ -525,7 +553,7 @@ export function TodoAdminDock(props) {
 
   return TodoAdminRender(list, stats, {
     collapsed: collapsed,
-    toggle: function () { setCollapsed(function (v) { return !v }) },
+    toggle: function () { setCollapsed(function (/** @type {boolean} */ v) { return !v }) },
     activeRef: activeItemRef,
     doneCollapsed: doneCollapsed,
     toggleDone: toggleDone,

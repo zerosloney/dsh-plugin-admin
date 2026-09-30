@@ -15,6 +15,9 @@ import { UiButton, UiInput, createElement, dshT, messageOf, sectionState } from 
  * workspaceAdmin RPC but the panel only surfaces the count summary.
  * The session archive set (global, not per-workspace) is also
  * surfaced via a top-level "已归档" badge + bulk restore gesture.
+ * @param {{ call: (method: string, args: any) => Promise<any> }} props - the
+ * registration face. `call` is the host RPC seam: the resolved payload is
+ * service-defined JSON, which is what the `.then` bodies below read.
  */
 export function WorkspacesSection(props) {
   var call = props.call
@@ -53,7 +56,7 @@ export function WorkspacesSection(props) {
   var setState = kit.set
   var alive = kit.alive
 
-  function patch(partial) {
+  function patch(/** @type {Record<string, any>} */ partial) {
     kit.patch(partial)
   }
 
@@ -94,8 +97,9 @@ export function WorkspacesSection(props) {
     patch({ createOpen: false, createPath: '', createTitle: '', createError: '', createBusy: false })
   }
 
-  function setCreateField(field, value) {
-    setState(function (cur) {
+  function setCreateField(/** @type {'path' | 'title'} */ field, /** @type {string} */ value) {
+    setState(function (/** @type {Record<string, any>} */ cur) {
+      /** @type {Record<string, any>} */
       var next = {}
       for (var k in cur) next[k] = cur[k]
       if (field === 'path') next.createPath = value
@@ -133,6 +137,7 @@ export function WorkspacesSection(props) {
       return
     }
     patch({ createBusy: true, createError: '' })
+    /** @type {Record<string, any>} */
     var args = { path: path }
     if (title !== '') args.title = title
     call('workspaceAdmin/create', args).then(function (result) {
@@ -151,13 +156,13 @@ export function WorkspacesSection(props) {
 
   // ---------- Rename ----------
 
-  function openRename(id, currentTitle) {
+  function openRename(/** @type {string} */ id, /** @type {string} */ currentTitle) {
     patch({ renameId: id, renameDraft: currentTitle || '', renameError: '' })
   }
   function cancelRename() {
     patch({ renameId: null, renameDraft: '', renameError: '' })
   }
-  function setRenameDraft(value) {
+  function setRenameDraft(/** @type {string} */ value) {
     patch({ renameDraft: value })
   }
   function submitRename() {
@@ -184,8 +189,9 @@ export function WorkspacesSection(props) {
 
   // ---------- Reorder ----------
 
-  function moveWorkspace(id, beforeId) {
+  function moveWorkspace(/** @type {string} */ id, /** @type {string | undefined} */ beforeId) {
     patch({ busy: true, error: '' })
+    /** @type {Record<string, any>} */
     var args = { workspaceId: id }
     if (typeof beforeId === 'string' && beforeId !== '') args.beforeWorkspaceId = beforeId
     call('workspaceAdmin/insertBefore', args).then(function (result) {
@@ -201,13 +207,13 @@ export function WorkspacesSection(props) {
     })
   }
 
-  function moveUp(id, index) {
+  function moveUp(/** @type {string} */ id, /** @type {number} */ index) {
     if (index <= 0) return
     var before = state.workspaces[index - 1]
     if (!before) return
     moveWorkspace(id, before.workspaceId)
   }
-  function moveDown(id, index) {
+  function moveDown(/** @type {string} */ id, /** @type {number} */ index) {
     var next = state.workspaces[index + 1]
     if (!next) return
     // To move "after next", insertBefore next with anchor = next.nextSibling (or undefined for tail).
@@ -217,7 +223,7 @@ export function WorkspacesSection(props) {
 
   // ---------- Delete ----------
 
-  function askDelete(id) {
+  function askDelete(/** @type {string} */ id) {
     patch({ deleteId: id, deleteError: '' })
   }
   function cancelDelete() {
@@ -243,7 +249,7 @@ export function WorkspacesSection(props) {
 
   // ---------- Live status probe ----------
 
-  function checkStatus(id) {
+  function checkStatus(/** @type {string} */ id) {
     call('workspaceAdmin/status', { workspaceId: id }).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
@@ -268,7 +274,7 @@ export function WorkspacesSection(props) {
     if (state.archivedSessionIds.length === 0 || state.bulkUnarchiveBusy) return
     var ids = state.archivedSessionIds.slice()
     patch({ bulkUnarchiveBusy: true })
-    var step = function (i) {
+    var step = function (/** @type {number} */ i) {
       if (i >= ids.length || !alive.current) {
         if (alive.current) {
           patch({ bulkUnarchiveBusy: false })
@@ -332,9 +338,9 @@ export function WorkspacesSection(props) {
       ),
       createElement('div', { key: 'row-path', style: { display: 'flex', gap: '6px' } },
         createElement(UiButton, { variant: 'outline', size: 'sm', key: 'pick', disabled: !state.pickerAvailable, onClick: pickDirectory }, dshT('📁 选择目录')),
-        createElement(UiInput, {  key: 'path', placeholder: dshT('或手动输入绝对目录路径'), value: state.createPath, onChange: function (e) { setCreateField('path', e.target.value) } }),
+        createElement(UiInput, {  key: 'path', placeholder: dshT('或手动输入绝对目录路径'), value: state.createPath, onChange: function (/** @type {{ target: { value: string } }} */ e) { setCreateField('path', e.target.value) } }),
       ),
-      createElement(UiInput, {  key: 'title', placeholder: dshT('显示标题（留空则用目录最后一段）'), value: state.createTitle, onChange: function (e) { setCreateField('title', e.target.value) } }),
+      createElement(UiInput, {  key: 'title', placeholder: dshT('显示标题（留空则用目录最后一段）'), value: state.createTitle, onChange: function (/** @type {{ target: { value: string } }} */ e) { setCreateField('title', e.target.value) } }),
       state.createError !== ''
         ? createElement('div', { className: 'error', key: 'create-err', style: { fontSize: '12px' } }, state.createError)
         : null,
@@ -364,8 +370,8 @@ export function WorkspacesSection(props) {
         ? createElement('span', { style: { display: 'inline-flex', gap: '6px' } },
             createElement(UiInput, {
               value: state.renameDraft, autoFocus: true,
-              onChange: function (e) { setRenameDraft(e.target.value) },
-              onKeyDown: function (e) { if (e.key === 'Enter') submitRename(); else if (e.key === 'Escape') cancelRename() },
+              onChange: function (/** @type {{ target: { value: string } }} */ e) { setRenameDraft(e.target.value) },
+              onKeyDown: function (/** @type {{ key: string }} */ e) { if (e.key === 'Enter') submitRename(); else if (e.key === 'Escape') cancelRename() },
             }),
             createElement(UiButton, { variant: 'primary', size: 'sm', key: 'rename-save', disabled: state.renameBusy, onClick: submitRename }, dshT('保存')),
             createElement(UiButton, { variant: 'outline', size: 'sm', key: 'rename-cancel', disabled: state.renameBusy, onClick: cancelRename }, dshT('取消')),

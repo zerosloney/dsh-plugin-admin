@@ -21,6 +21,17 @@ import { ConfirmButton, Picker, Spinner, tabKeyDown } from './shared.js'
 // Same grammar as the host's TOOLNAME_PATTERN (subagent-admin.js) — the host
 // rejects what this accepts, so keeping them identical avoids a preflight
 // pass on a name the host then refuses.
+/** One subagent form draft (emptyDraft / draftFromEntry shape). */
+/** @typedef {{
+ *   id: string, toolName: string, provider: string, persona: string,
+ *   allow: string[], deny: string[], agentProvider: string, agentModel: string,
+ *   maxTokens: string, maxDepthManaged: boolean, maxDepth: string,
+ *   backgroundMode: string, enableRunInBackground: boolean,
+ * }} SubagentDraft */
+
+/** The slot props every panel receives: the RPC seam plus (untyped) extras. */
+/** @typedef {{ call: (method: string, args: any) => Promise<any> }} PanelCallProps */
+
 export var TOOLNAME_RE = /^[a-z][a-z0-9_]{1,47}$/
 
 export var TOOL_REF_RE = /^[a-z][a-z0-9_]*$/
@@ -30,6 +41,7 @@ export var ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 export var RESERVED_TOOL_NAMES = ['subagent', 'subagent_fork', 'run_code']
 
 /** The gateway wraps every remote result in an { ok, value | error } envelope. */
+/** @param {any} result - the RPC envelope (duck-typed). */
 export function unwrap(result) {
   if (result && typeof result === 'object' && 'ok' in result) {
     if (result.ok) return result.value
@@ -61,6 +73,7 @@ export function emptyDraft() {
   }
 }
 
+/** @param {Record<string, any>} entry - one managed row ({ id, config }). */
 export function draftFromEntry(entry) {
   var config = entry.config || {}
   return {
@@ -81,8 +94,12 @@ export function draftFromEntry(entry) {
 }
 
 /** Remove options the newly selected provider cannot execute. */
+/** @param {SubagentDraft} draft
+ * @param {Record<string, any>} provider - the provider meta (duck-typed). */
 export function adjustDraftForProvider(draft, provider) {
+  /** @type {Record<string, any>} */
   var patch = {}
+  /** @type {string[]} */
   var adjusted = []
   if (!provider) return { patch: patch, adjusted: adjusted }
   if (provider.capabilities.persona === false && draft.persona !== '') {
@@ -106,6 +123,11 @@ export function adjustDraftForProvider(draft, provider) {
 }
 
 /** Client-side validation mirroring the host rules; returns an error string or null. */
+/** @param {SubagentDraft} draft
+ * @param {boolean} isCreate
+ * @param {string[]} otherToolNames
+ * @param {Record<string, Record<string, any>>} providerMeta
+ * @param {string[]} candidateNames */
 export function validateDraft(draft, isCreate, otherToolNames, providerMeta, candidateNames) {
   if (isCreate && !ID_RE.test(draft.id)) return dshT('实例 ID 只能包含字母、数字、下划线和中划线（字母或数字开头，最长 64 位）')
   if (!TOOLNAME_RE.test(draft.toolName)) return dshT('子智能体名称必须是 2-48 位小写字母/数字/下划线且字母开头')
@@ -131,7 +153,9 @@ export function validateDraft(draft, isCreate, otherToolNames, providerMeta, can
   return null
 }
 
+/** @param {SubagentDraft} draft */
 export function draftToPayload(draft) {
+  /** @type {Record<string, any>} */
   var config = { provider: draft.provider, toolName: draft.toolName }
   if (draft.persona.trim() !== '') config.persona = draft.persona
   if (draft.allow.length > 0 || draft.deny.length > 0) {
@@ -139,6 +163,7 @@ export function draftToPayload(draft) {
     if (draft.allow.length > 0) config.toolFilter.allow = draft.allow.slice()
     if (draft.deny.length > 0) config.toolFilter.deny = draft.deny.slice()
   }
+  /** @type {Record<string, any>} */
   var agentOptions = {}
   if (draft.agentProvider.trim() !== '') agentOptions.provider = draft.agentProvider.trim()
   if (draft.agentModel.trim() !== '') agentOptions.model = draft.agentModel.trim()
@@ -155,6 +180,7 @@ export function draftToPayload(draft) {
 /*                              Subagents panel                               */
 /* ========================================================================== */
 
+/** @param {PanelCallProps & Record<string, any>} props */
 export function SubagentsPanel(props) {
   var call = props.call
 
@@ -183,11 +209,11 @@ export function SubagentsPanel(props) {
   var setToast = toastState[1]
 
   var reload = function () {
-    setView(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
-    call('subagentAdmin/list', {}).then(function (raw) {
+    setView(function (/** @type {any} */ prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+    call('subagentAdmin/list', {}).then(function (/** @type {any} */ raw) {
       var result = unwrap(raw)
       setView({ loading: false, error: null, data: result })
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       setView({ loading: false, error: String((error && error.message) || error), data: null })
     })
   }
@@ -202,13 +228,14 @@ export function SubagentsPanel(props) {
   var data = view.data
   var entries = (data && data.entries) || []
   var meta = (data && data.meta) || { tools: [], providers: [], llmProviders: [], llmModels: {} }
-  var candidateNames = meta.tools.map(function (tool) { return tool.name })
+  var candidateNames = meta.tools.map(function (/** @type {Record<string, any>} */ tool) { return tool.name })
+  /** @type {Record<string, Record<string, any>>} */
   var providerMeta = {}
-  meta.providers.forEach(function (provider) { providerMeta[provider.name] = provider })
+  meta.providers.forEach(function (/** @type {Record<string, any>} */ provider) { providerMeta[provider.name] = provider })
   var llmProviders = meta.llmProviders || []
   var llmModels = meta.llmModels || {}
 
-  var filtered = entries.filter(function (entry) {
+  var filtered = entries.filter(function (/** @type {Record<string, any>} */ entry) {
     var config = entry.config || {}
     if (providerFilter !== '' && config.provider !== providerFilter) return false
     if (needle === '') return true
@@ -221,7 +248,7 @@ export function SubagentsPanel(props) {
     setNotice(null)
     setForm({ draft: emptyDraft(), editing: false, saving: false, error: null, capabilityNotice: null, advanced: false })
   }
-  var openEdit = function (entry) {
+  var openEdit = function (/** @type {Record<string, any>} */ entry) {
     setNotice(null)
     setForm({ draft: draftFromEntry(entry), editing: true, saving: false, error: null, capabilityNotice: null, advanced: false })
   }
@@ -230,8 +257,8 @@ export function SubagentsPanel(props) {
   var saveForm = function () {
     if (!form || form.saving) return
     var otherToolNames = entries
-      .filter(function (entry) { return !form.editing || entry.id !== form.draft.id })
-      .map(function (entry) { return (entry.config || {}).toolName })
+      .filter(function (/** @type {Record<string, any>} */ entry) { return !form.editing || entry.id !== form.draft.id })
+      .map(function (/** @type {Record<string, any>} */ entry) { return (entry.config || {}).toolName })
       .filter(Boolean)
     var clientError = validateDraft(form.draft, !form.editing, otherToolNames, providerMeta, candidateNames)
     if (clientError) {
@@ -241,12 +268,12 @@ export function SubagentsPanel(props) {
     var saving = Object.assign({}, form, { saving: true, error: null })
     setForm(saving)
     var payload = draftToPayload(saving.draft)
-    call('subagentAdmin/upsert', { entry: payload }).then(function (raw) {
+    call('subagentAdmin/upsert', { entry: payload }).then(function (/** @type {any} */ raw) {
       var result = unwrap(raw)
-      setView(function (prev) { return Object.assign({}, prev, { data: result, loading: false }) })
+      setView(function (/** @type {any} */ prev) { return Object.assign({}, prev, { data: result, loading: false }) })
       setForm(null)
       setNotice(result.warnings && result.warnings.length > 0 ? result.warnings : null)
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       var message = String((error && error.message) || error)
       setForm(Object.assign({}, saving, { saving: false, error: message }))
       setToast(dshT('保存失败：') + message)
@@ -257,27 +284,27 @@ export function SubagentsPanel(props) {
   // 3.2s, and a double-fire would send two removes (the second reporting a
   // spurious failure).
   var removeInFlight = useRef({})
-  var removeEntry = function (entry) {
+  var removeEntry = function (/** @type {Record<string, any>} */ entry) {
     if (removeInFlight.current[entry.id]) return
     removeInFlight.current[entry.id] = true
-    call('subagentAdmin/remove', { id: entry.id }).then(function (raw) {
+    call('subagentAdmin/remove', { id: entry.id }).then(function (/** @type {any} */ raw) {
       delete removeInFlight.current[entry.id]
       var result = unwrap(raw)
-      setView(function (prev) { return Object.assign({}, prev, { data: result, loading: false }) })
+      setView(function (/** @type {any} */ prev) { return Object.assign({}, prev, { data: result, loading: false }) })
       setNotice(null)
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       delete removeInFlight.current[entry.id]
       setToast(dshT('删除失败：') + String((error && error.message) || error))
     })
   }
 
-  var patchDraft = function (patch) {
-    setForm(function (prev) {
+  var patchDraft = function (/** @type {Record<string, any>} */ patch) {
+    setForm(function (/** @type {any} */ prev) {
       return Object.assign({}, prev, { draft: Object.assign({}, prev.draft, patch) })
     })
   }
-  var patchProvider = function (providerName) {
-    setForm(function (prev) {
+  var patchProvider = function (/** @type {string} */ providerName) {
+    setForm(function (/** @type {any} */ prev) {
       var adjustment = adjustDraftForProvider(prev.draft, providerMeta[providerName])
       return Object.assign({}, prev, {
         draft: Object.assign({}, prev.draft, { provider: providerName }, adjustment.patch),
@@ -289,7 +316,7 @@ export function SubagentsPanel(props) {
     })
   }
   var toggleAdvanced = function () {
-    setForm(function (prev) { return Object.assign({}, prev, { advanced: prev.advanced !== true }) })
+    setForm(function (/** @type {any} */ prev) { return Object.assign({}, prev, { advanced: prev.advanced !== true }) })
   }
 
   var children = []
@@ -302,7 +329,7 @@ export function SubagentsPanel(props) {
       createElement(UiInput, {
         placeholder: dshT('搜索子智能体（名称/ID/后端/提示词/模型）...'),
         value: needle,
-        onChange: function (event) { setNeedle(event.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ event) { setNeedle(event.target.value) },
       })
     ),
     createElement(UiButton, { variant: 'primary', size: 'sm', key: 'create', onClick: openCreate }, dshT('＋ 新建子智能体')),
@@ -319,7 +346,7 @@ export function SubagentsPanel(props) {
         size: 'sm', className: (providerFilter === '' ? ' active' : ''),
         onClick: function () { setProviderFilter('') },
       }, dshT('全部')),
-      meta.providers.map(function (provider) {
+      meta.providers.map(function (/** @type {Record<string, any>} */ provider) {
         return createElement(UiButton, {
           type: 'button', key: 'pill-' + provider.name,
           variant: 'outline',
@@ -349,7 +376,7 @@ export function SubagentsPanel(props) {
 
   if (notice) {
     children.push(createElement('div', { className: 'warn-strip', key: 'notice' },
-      notice.map(function (warning, index) {
+      notice.map(function (/** @type {string} */ warning, /** @type {number} */ index) {
         return createElement('div', { key: index }, '⚠️ ', warning)
       })
     ))
@@ -369,7 +396,7 @@ export function SubagentsPanel(props) {
           ? dshT('还没有受管子智能体。点击「＋ 新建子智能体」创建第一个：名称、提示词、工具约束、模型指定全部可配。')
           : dshT('没有匹配当前搜索/筛选的子智能体。')))
     } else {
-      children.push(createElement('div', { className: 'list', key: 'cards' }, filtered.map(function (entry) {
+      children.push(createElement('div', { className: 'list', key: 'cards' }, filtered.map(function (/** @type {Record<string, any>} */ entry) {
         return SubagentCard({
           entry: entry,
           onEdit: openEdit,
@@ -388,6 +415,7 @@ export function SubagentsPanel(props) {
   )
 }
 
+/** @param {Record<string, any>} props */
 export function SubagentForm(props) {
   var form = props.form
   var draft = form.draft
@@ -434,7 +462,7 @@ export function SubagentForm(props) {
           value: draft.id,
           disabled: form.editing,
           placeholder: dshT('如 researcher、code-reviewer'),
-          onChange: function (event) { onPatch({ id: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ id: event.target.value }) },
         }),
         createElement('span', { className: 'field-hint' }, dshT('补丁行标识，创建后不可改；持久化在 profile 的 cordis.patch.yml'))
       ),
@@ -443,7 +471,7 @@ export function SubagentForm(props) {
         createElement(UiInput, {
           value: draft.toolName,
           placeholder: dshT('如 web_researcher（模型用它发起委托）'),
-          onChange: function (event) { onPatch({ toolName: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ toolName: event.target.value }) },
         }),
         createElement('span', { className: 'field-hint' }, dshT('不能用保留名 subagent / subagent_fork / run_code，且各实例间唯一'))
       ),
@@ -451,9 +479,9 @@ export function SubagentForm(props) {
         createElement('span', { className: 'field-label' }, dshT('执行后端（provider）')),
         createElement('select', {
           className: 'input', value: draft.provider, disabled: form.saving,
-          onChange: function (event) { onProviderChange(event.target.value) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onProviderChange(event.target.value) },
         },
-          meta.providers.map(function (provider) {
+          meta.providers.map(function (/** @type {Record<string, any>} */ provider) {
             return createElement('option', { key: provider.name, value: provider.name }, provider.name)
           })
         ),
@@ -463,7 +491,7 @@ export function SubagentForm(props) {
         createElement('span', { className: 'field-label' }, dshT('后台模式')),
         createElement('select', {
           className: 'input', value: draft.backgroundMode, disabled: form.saving,
-          onChange: function (event) { onPatch({ backgroundMode: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ backgroundMode: event.target.value }) },
         },
           createElement('option', { value: 'one-shot' }, dshT('one-shot（一次性任务）')),
           createElement('option', { value: 'continuable', disabled: !providerInfo || providerInfo.continuable !== true }, dshT('continuable（可持续会话）'))
@@ -471,7 +499,7 @@ export function SubagentForm(props) {
         createElement(UiCheckbox, {
           checked: draft.enableRunInBackground === true,
           disabled: form.saving,
-          onChange: function (next) { onPatch({ enableRunInBackground: next }) },
+        onChange: function (/** @type {boolean} */ next) { onPatch({ enableRunInBackground: next }) },
           label: dshT('暴露 run_in_background 参数'),
           className: 'checkbox-row',
         })
@@ -481,7 +509,7 @@ export function SubagentForm(props) {
         createElement('textarea', {
           className: 'input', value: draft.persona, rows: 4, disabled: form.saving || providerInfo?.capabilities.persona === false,
           placeholder: dshT('该子智能体的人设/职责说明…支持 {{model}} 与 {{cwd}} 模板变量'),
-          onChange: function (event) { onPatch({ persona: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ persona: event.target.value }) },
         }),
         createElement('span', { className: 'field-hint' }, providerInfo?.capabilities.persona === false
           ? dshT('当前后端不支持提示词；切换后端时已有内容会自动清除')
@@ -500,9 +528,9 @@ export function SubagentForm(props) {
           createElement('span', { className: 'field-label' }, dshT('仅允许（allow 白名单）')),
           createElement(Picker, {
             multi: true, kind: 'allow', allowCustom: true, disabled: form.saving || providerInfo?.capabilities.toolFilter === false,
-            values: draft.allow, options: candidateNames.map(function (n) { return { value: n, label: n } }),
+            values: draft.allow, options: candidateNames.map(function (/** @type {Record<string, any>} */ n) { return { value: n, label: n } }),
             placeholder: dshT('输入或选择工具名，如 read / glob / grep'), ariaLabel: dshT('仅允许工具'),
-            onChange: function (next) { onPatch({ allow: next }) },
+        onChange: function (/** @type {string[]} */ next) { onPatch({ allow: next }) },
           }),
           createElement('span', { className: 'field-hint' }, dshT('设置后子智能体只保留名单内工具，其余从提示词移除且拒绝执行'))
         ),
@@ -510,9 +538,9 @@ export function SubagentForm(props) {
           createElement('span', { className: 'field-label' }, dshT('禁止（deny 黑名单）')),
           createElement(Picker, {
             multi: true, kind: 'deny', allowCustom: true, disabled: form.saving || providerInfo?.capabilities.toolFilter === false,
-            values: draft.deny, options: candidateNames.map(function (n) { return { value: n, label: n } }),
+            values: draft.deny, options: candidateNames.map(function (/** @type {Record<string, any>} */ n) { return { value: n, label: n } }),
             placeholder: dshT('输入或选择工具名，如 bash / pwsh'), ariaLabel: dshT('禁止工具'),
-            onChange: function (next) { onPatch({ deny: next }) },
+        onChange: function (/** @type {string[]} */ next) { onPatch({ deny: next }) },
           }),
           createElement('span', { className: 'field-hint' }, providerInfo?.capabilities.toolFilter === false
             ? dshT('当前后端不支持工具约束；切换后端时已有约束会自动清除')
@@ -527,9 +555,9 @@ export function SubagentForm(props) {
             createElement(Picker, {
               multi: false, allowCustom: true,
               values: draft.agentProvider ? [draft.agentProvider] : [],
-              options: llmProviders.map(function (p) { return { value: p.id, label: p.name } }),
+              options: llmProviders.map(function (/** @type {Record<string, any>} */ p) { return { value: p.id, label: p.name } }),
               placeholder: dshT('留空继承，如 optirouter / deepseek-official'), ariaLabel: 'LLM provider',
-              onChange: function (next) { onPatch({ agentProvider: next[0] || '' }) },
+        onChange: function (/** @type {string[]} */ next) { onPatch({ agentProvider: next[0] || '' }) },
             })
           ),
           createElement('div', { className: 'field' },
@@ -537,9 +565,9 @@ export function SubagentForm(props) {
             createElement(Picker, {
               multi: false, allowCustom: true,
               values: draft.agentModel ? [draft.agentModel] : [],
-              options: modelOptions.map(function (m) { return { value: m.id, label: m.name } }),
+              options: modelOptions.map(function (/** @type {Record<string, any>} */ m) { return { value: m.id, label: m.name } }),
               placeholder: dshT('留空继承，如 auto'), ariaLabel: dshT('模型标识'),
-              onChange: function (next) { onPatch({ agentModel: next[0] || '' }) },
+        onChange: function (/** @type {string[]} */ next) { onPatch({ agentModel: next[0] || '' }) },
             }),
             createElement('span', { className: 'field-hint' }, dshT('从已配置模型中选择，或手填模型 id（需在该 provider 路由上注册）'))
           ),
@@ -548,7 +576,7 @@ export function SubagentForm(props) {
             createElement(UiInput, {
               value: draft.maxTokens,
               placeholder: dshT('留空使用默认'), inputMode: 'numeric',
-              onChange: function (event) { onPatch({ maxTokens: event.target.value.replace(/[^0-9]/g, '') }) },
+              onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ maxTokens: event.target.value.replace(/[^0-9]/g, '') }) },
             })
           ),
           createElement('div', { className: 'field' },
@@ -558,13 +586,13 @@ export function SubagentForm(props) {
                 value: draft.maxDepth,
                 disabled: form.saving || draft.maxDepthManaged || providerInfo?.capabilities.depthLimit === false,
                 placeholder: dshT('3（默认）'), inputMode: 'numeric',
-                onChange: function (event) { onPatch({ maxDepth: event.target.value.replace(/[^0-9]/g, '') }) },
+                onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ maxDepth: event.target.value.replace(/[^0-9]/g, '') }) },
               }),
               createElement('span', { style: { flex: 'none' } },
                 createElement(UiCheckbox, {
                   checked: draft.maxDepthManaged,
                   disabled: form.saving || providerInfo?.capabilities.depthLimit === false,
-                  onChange: function (next) { onPatch({ maxDepthManaged: next }) },
+        onChange: function (/** @type {boolean} */ next) { onPatch({ maxDepthManaged: next }) },
                   label: dshT('交由后端管理'),
                   className: 'checkbox-row',
                 })
@@ -583,6 +611,7 @@ export function SubagentForm(props) {
   )
 }
 
+/** @param {Record<string, any>} props */
 export function SubagentCard(props) {
   var entry = props.entry
   var config = entry.config || {}
@@ -628,13 +657,13 @@ export function SubagentCard(props) {
   var chips = []
   if (config.toolFilter && config.toolFilter.allow && config.toolFilter.allow.length > 0) {
     chips.push(createElement('span', { key: 'allow-label', style: { fontSize: '10px', color: '#047857', fontWeight: 600 } }, dshT('仅允许')))
-    config.toolFilter.allow.forEach(function (name) {
+    config.toolFilter.allow.forEach(function (/** @type {string} */ name) {
       chips.push(createElement('span', { key: 'a-' + name, className: 'chip allow' }, name))
     })
   }
   if (config.toolFilter && config.toolFilter.deny && config.toolFilter.deny.length > 0) {
     chips.push(createElement('span', { key: 'deny-label', style: { fontSize: '10px', color: '#b91c1c', fontWeight: 600 } }, dshT('禁止')))
-    config.toolFilter.deny.forEach(function (name) {
+    config.toolFilter.deny.forEach(function (/** @type {string} */ name) {
       chips.push(createElement('span', { key: 'd-' + name, className: 'chip deny' }, name))
     })
   }
@@ -655,27 +684,30 @@ export function SubagentCard(props) {
 /* ========================================================================== */
 
 /** Draft shape for one CLI backend's editable config. */
+/** @param {Record<string, any>|null} config - the stored backend config (null-safe). */
 export function cliDraftFromConfig(config) {
   config = config || {}
   return {
     providerName: config.providerName !== undefined ? String(config.providerName) : '',
     permissionMode: config.permissionMode !== undefined ? String(config.permissionMode) : '',
     disposeGraceMs: config.disposeGraceMs !== undefined ? String(config.disposeGraceMs) : '3000',
-    envPairs: Object.keys(config.env || {}).map(function (key) {
+    envPairs: Object.keys(config.env || {}).map(function (/** @type {string} */ key) {
       return { key: key, value: String(config.env[key]) }
     }),
   }
 }
 
 /** Convert a draft back into the wire config object. */
+/** @param {Record<string, any>} draft */
 export function cliConfigFromDraft(draft) {
+  /** @type {Record<string, any>} */
   var config = {
     providerName: draft.providerName.trim(),
     permissionMode: draft.permissionMode,
     disposeGraceMs: Number(draft.disposeGraceMs.trim()),
     env: {},
   }
-  draft.envPairs.forEach(function (pair) {
+  draft.envPairs.forEach(function (/** @type {{ key: string, value: string }} */ pair) {
     var key = pair.key.trim()
     if (key !== '') config.env[key] = pair.value
   })
@@ -683,16 +715,17 @@ export function cliConfigFromDraft(draft) {
 }
 
 /** Shared env key/value pair editor (used by every CLI backend card). */
+/** @param {Record<string, any>} props */
 export function EnvPairsEditor(props) {
   var pairs = props.pairs || []
   return createElement('div', { className: 'fieldset' },
     createElement('span', { className: 'fieldset-legend' }, dshT('env（传给 CLI 子进程的额外环境变量）')),
-    pairs.map(function (pair, index) {
+    pairs.map(function (/** @type {{ key: string, value: string }} */ pair, /** @type {number} */ index) {
       return createElement('div', { className: 'env-row', key: index },
         createElement(UiInput, {
           value: pair.key,
           placeholder: dshT('变量名（如 OPENAI_API_KEY）'),
-          onChange: function (event) { props.onPatchPair(index, { key: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { props.onPatchPair(index, { key: event.target.value }) },
         }),
         createElement(UiInput, {
           // 受控：宿主只投影掩码后的空值（write-only 契约），草稿值就是唯一
@@ -700,7 +733,7 @@ export function EnvPairsEditor(props) {
           // 底层草稿错位，保存写入与屏幕不符的值。
           value: pair.value,
           placeholder: dshT('变量值'),
-          onChange: function (event) { props.onPatchPair(index, { value: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { props.onPatchPair(index, { value: event.target.value }) },
         }),
         createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function () { props.onRemove(index) } }, '✕'),
       )
@@ -710,6 +743,7 @@ export function EnvPairsEditor(props) {
 }
 
 /** One CLI backend card: collapsible status header + config form + mount/save/unmount. */
+/** @param {Record<string, any>} props */
 export function CliBackendCard(props) {
   var backend = props.backend
   var draft = props.draft
@@ -784,15 +818,15 @@ export function CliBackendCard(props) {
         createElement(UiInput, {
           value: draft.providerName,
           placeholder: dshT('如 codex / claude-code（子智能体表单的执行后端选项）'),
-          onChange: function (event) { onPatch({ providerName: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ providerName: event.target.value }) },
         }),
       ),
       createElement('div', { className: 'field' },
         createElement('span', { className: 'field-label' }, dshT('permissionMode（CLI 权限模式）')),
         createElement('select', {
           className: 'input', value: modeValue,
-          onChange: function (event) { onPatch({ permissionMode: event.target.value }) },
-        }, backend.permissionModes.map(function (mode) {
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ permissionMode: event.target.value }) },
+        }, backend.permissionModes.map(function (/** @type {string} */ mode) {
           return createElement('option', { key: mode, value: mode }, mode)
         })),
         createElement('span', { className: 'field-hint' }, dshT('枚举来自该 provider 包的 Config schema'))
@@ -802,7 +836,7 @@ export function CliBackendCard(props) {
         createElement(UiInput, {
           value: draft.disposeGraceMs,
           placeholder: '3000',
-          onChange: function (event) { onPatch({ disposeGraceMs: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ disposeGraceMs: event.target.value }) },
         }),
       ),
     ),
@@ -817,6 +851,7 @@ export function CliBackendCard(props) {
 }
 
 /** Draft shape for one generic external-CLI backend's editable config. */
+/** @param {Record<string, any>} backend - the mounted generic backend (null-safe). */
 export function cliDraftFromGeneric(backend) {
   backend = backend || {}
   return {
@@ -824,14 +859,16 @@ export function cliDraftFromGeneric(backend) {
     argsText: Array.isArray(backend.args) ? backend.args.join(' ') : '{prompt}',
     providerName: backend.providerName !== undefined ? String(backend.providerName) : '',
     disposeGraceMs: backend.disposeGraceMs !== undefined ? String(backend.disposeGraceMs) : '3000',
-    envPairs: Object.keys(backend.env || {}).map(function (key) {
+    envPairs: Object.keys(backend.env || {}).map(function (/** @type {string} */ key) {
       return { key: key, value: String(backend.env[key]) }
     }),
   }
 }
 
 /** Convert a generic draft into the wire config object (args split on whitespace). */
+/** @param {Record<string, any>} draft */
 export function cliConfigFromGenericDraft(draft) {
+  /** @type {Record<string, any>} */
   var config = {
     command: draft.command.trim(),
     args: draft.argsText.trim().split(/\s+/).filter(Boolean),
@@ -839,7 +876,7 @@ export function cliConfigFromGenericDraft(draft) {
     disposeGraceMs: Number(draft.disposeGraceMs.trim()),
     env: {},
   }
-  draft.envPairs.forEach(function (pair) {
+  draft.envPairs.forEach(function (/** @type {{ key: string, value: string }} */ pair) {
     var key = pair.key.trim()
     if (key !== '') config.env[key] = pair.value
   })
@@ -847,6 +884,7 @@ export function cliConfigFromGenericDraft(draft) {
 }
 
 /** One generic external-CLI backend card (served by this plugin's command provider). */
+/** @param {Record<string, any>} props */
 export function GenericCliCard(props) {
   var backend = props.backend
   var draft = props.draft
@@ -892,7 +930,7 @@ export function GenericCliCard(props) {
         createElement(UiInput, {
           value: draft.command,
           placeholder: dshT('如 gemini / qwen / C:\\tools\\aider.exe'),
-          onChange: function (event) { onPatch({ command: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ command: event.target.value }) },
         }),
       ),
       createElement('div', { className: 'field' },
@@ -900,7 +938,7 @@ export function GenericCliCard(props) {
         createElement(UiInput, {
           value: draft.providerName,
           placeholder: dshT('如 cli-gemini（子智能体表单的执行后端选项）'),
-          onChange: function (event) { onPatch({ providerName: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ providerName: event.target.value }) },
         }),
       ),
       createElement('div', { className: 'field full' },
@@ -908,7 +946,7 @@ export function GenericCliCard(props) {
         createElement(UiInput, {
           value: draft.argsText,
           placeholder: '-p {prompt}',
-          onChange: function (event) { onPatch({ argsText: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ argsText: event.target.value }) },
         }),
         createElement('span', { className: 'field-hint' }, dshT('one-shot 纯文本：stdout 即委托结果，非零退出记为失败；prompt 经 {prompt} 传入')),
       ),
@@ -917,7 +955,7 @@ export function GenericCliCard(props) {
         createElement(UiInput, {
           value: draft.disposeGraceMs,
           placeholder: '3000',
-          onChange: function (event) { onPatch({ disposeGraceMs: event.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { onPatch({ disposeGraceMs: event.target.value }) },
         }),
       ),
     ),
@@ -931,6 +969,7 @@ export function GenericCliCard(props) {
   )
 }
 
+/** @param {PanelCallProps & Record<string, any>} props */
 export function CliPanel(props) {
   var call = props.call
 
@@ -954,8 +993,8 @@ export function CliPanel(props) {
   var expanded = expandedState[0]
   var setExpanded = expandedState[1]
 
-  var toggleExpanded = function (backendId) {
-    setExpanded(function (prev) {
+  var toggleExpanded = function (/** @type {string} */ backendId) {
+    setExpanded(function (/** @type {any} */ prev) {
       var next = Object.assign({}, prev)
       next[backendId] = prev[backendId] !== true
       return next
@@ -966,16 +1005,16 @@ export function CliPanel(props) {
   // flag set by an in-flight sibling request (two cards saved back-to-back),
   // re-enabling the first button mid-request. Failure paths clear ONLY the
   // key they own — `setBusy({})` would release every in-flight marker.
-  var markBusy = function (key) {
-    setBusy(function (prev) {
+  var markBusy = function (/** @type {string} */ key) {
+    setBusy(function (/** @type {any} */ prev) {
       if (prev[key] === true) return prev
       var next = Object.assign({}, prev)
       next[key] = true
       return next
     })
   }
-  var clearBusy = function (key) {
-    setBusy(function (prev) {
+  var clearBusy = function (/** @type {string} */ key) {
+    setBusy(function (/** @type {any} */ prev) {
       if (prev[key] !== true) return prev
       var next = Object.assign({}, prev)
       delete next[key]
@@ -994,10 +1033,11 @@ export function CliPanel(props) {
   }, [toast])
 
   /** Adopt a detection payload: view data + reset drafts to the served configs. */
-  var absorb = function (result) {
+  var absorb = function (/** @type {Record<string, any>} */ result) {
     setView({ loading: false, error: null, data: result })
+    /** @type {Record<string, any>} */
     var next = {}
-    ;(result.backends || []).forEach(function (backend) {
+    ;(result.backends || []).forEach(function (/** @type {Record<string, any>} */ backend) {
       next[backend.id] = backend.kind === 'generic'
         ? cliDraftFromGeneric(backend)
         : cliDraftFromConfig(backend.config)
@@ -1008,22 +1048,22 @@ export function CliPanel(props) {
   /** Refresh the list only: a save/uninstall on one card must not reset the
       drafts another card is editing or release its in-flight busy marker —
       the full reset above belongs to (re)loads alone. */
-  var adopt = function (result) {
+  var adopt = function (/** @type {Record<string, any>} */ result) {
     setView({ loading: false, error: null, data: result })
   }
 
   var reload = function () {
-    setView(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
-    call('subagentAdmin/cliList', {}).then(function (raw) {
+    setView(function (/** @type {any} */ prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+    call('subagentAdmin/cliList', {}).then(function (/** @type {any} */ raw) {
       absorb(unwrap(raw))
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       setView({ loading: false, error: String((error && error.message) || error), data: null })
     })
   }
   useEffect(reload, [])
 
-  var patchDraft = function (backendId, patch) {
-    setDrafts(function (prev) {
+  var patchDraft = function (/** @type {string} */ backendId, /** @type {Record<string, any>} */ patch) {
+    setDrafts(function (/** @type {any} */ prev) {
       var current = prev[backendId] || cliDraftFromConfig(null)
       var next = Object.assign({}, prev)
       next[backendId] = Object.assign({}, current, patch)
@@ -1033,10 +1073,10 @@ export function CliPanel(props) {
 
   // Env-pair edits derive from the latest queued state (functional update), so
   // rapid consecutive edits can never overwrite each other via stale drafts.
-  var patchEnvPair = function (backendId, index, patch) {
-    setDrafts(function (prev) {
+  var patchEnvPair = function (/** @type {string} */ backendId, /** @type {number} */ index, /** @type {Record<string, any>} */ patch) {
+    setDrafts(function (/** @type {any} */ prev) {
       var current = prev[backendId] || cliDraftFromConfig(null)
-      var pairs = (current.envPairs || []).map(function (pair, i) {
+      var pairs = (current.envPairs || []).map(function (/** @type {{ key: string, value: string }} */ pair, /** @type {number} */ i) {
         return i === index ? Object.assign({}, pair, patch) : pair
       })
       var next = Object.assign({}, prev)
@@ -1044,24 +1084,24 @@ export function CliPanel(props) {
       return next
     })
   }
-  var addEnvPair = function (backendId) {
-    setDrafts(function (prev) {
+  var addEnvPair = function (/** @type {string} */ backendId) {
+    setDrafts(function (/** @type {any} */ prev) {
       var current = prev[backendId] || cliDraftFromConfig(null)
       var next = Object.assign({}, prev)
       next[backendId] = Object.assign({}, current, { envPairs: (current.envPairs || []).concat([{ key: '', value: '' }]) })
       return next
     })
   }
-  var removeEnvPair = function (backendId, index) {
-    setDrafts(function (prev) {
+  var removeEnvPair = function (/** @type {string} */ backendId, /** @type {number} */ index) {
+    setDrafts(function (/** @type {any} */ prev) {
       var current = prev[backendId] || cliDraftFromConfig(null)
       var next = Object.assign({}, prev)
-      next[backendId] = Object.assign({}, current, { envPairs: (current.envPairs || []).filter(function (_, i) { return i !== index }) })
+      next[backendId] = Object.assign({}, current, { envPairs: (current.envPairs || []).filter(function (/** @type {any} */ _, /** @type {number} */ i) { return i !== index }) })
       return next
     })
   }
 
-  var runUpsert = function (backend) {
+  var runUpsert = function (/** @type {Record<string, any>} */ backend) {
     if (busy[backend.id]) return
     var draft = drafts[backend.id]
     if (!draft) return
@@ -1072,7 +1112,7 @@ export function CliPanel(props) {
         return
       }
       var args = draft.argsText.trim().split(/\s+/).filter(Boolean)
-      if (args.length === 0 || args.length > 20 || !args.every(function (arg) { return arg.length <= 256 })) {
+      if (args.length === 0 || args.length > 20 || !args.every(function (/** @type {string} */ arg) { return arg.length <= 256 })) {
         setToast(dshT('args 必须是 1-20 个非空片段（单条 ≤ 256 字符），用 {prompt} 占位提示词'))
         return
       }
@@ -1102,37 +1142,37 @@ export function CliPanel(props) {
     }
     var busyKey = backend.id
     markBusy(busyKey)
-    call('subagentAdmin/cliUpsert', { payload: payload }).then(function (raw) {
+    call('subagentAdmin/cliUpsert', { payload: payload }).then(function (/** @type {any} */ raw) {
       adopt(unwrap(raw))
       clearBusy(busyKey)
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       clearBusy(busyKey)
       setToast(dshT('保存失败：') + String((error && error.message) || error))
     })
   }
 
-  var runUnmount = function (backend) {
+  var runUnmount = function (/** @type {Record<string, any>} */ backend) {
     if (busy[backend.id]) return
     markBusy(backend.id)
     // Generic backends are recognized server-side by their "cli-" id prefix.
-    call('subagentAdmin/cliRemove', { id: backend.id }).then(function (raw) {
+    call('subagentAdmin/cliRemove', { id: backend.id }).then(function (/** @type {any} */ raw) {
       adopt(unwrap(raw))
       clearBusy(backend.id)
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       clearBusy(backend.id)
       setToast(dshT('卸载失败：') + String((error && error.message) || error))
     })
   }
 
-  var runInstall = function (backend) {
+  var runInstall = function (/** @type {Record<string, any>} */ backend) {
     if (busy[backend.id]) return
     markBusy(backend.id)
-    call('subagentAdmin/cliInstall', { backendId: backend.id }).then(function (raw) {
+    call('subagentAdmin/cliInstall', { backendId: backend.id }).then(function (/** @type {any} */ raw) {
       var result = unwrap(raw)
       adopt(result)
       clearBusy(backend.id)
       setToast((result && result.output ? result.output : dshT('依赖包安装完成')) + dshT('，已重新检测'))
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       var message = String((error && error.message) || error)
       if (message.indexOf('404') !== -1) {
         message += dshT('（宿主端未注册该接口：请重启 dsh 加载最新插件后重试）')
@@ -1142,17 +1182,17 @@ export function CliPanel(props) {
     })
   }
 
-  var runGenericMount = function (command) {
+  var runGenericMount = function (/** @type {string} */ command) {
     if (!/^[^\s]+$/.test(command)) {
       setToast(dshT('command 不能包含空格（PATH 命令名或绝对路径）'))
       return
     }
     markBusy('__scan__')
-    call('subagentAdmin/cliUpsert', { payload: { kind: 'generic', config: { command: command } } }).then(function (raw) {
+    call('subagentAdmin/cliUpsert', { payload: { kind: 'generic', config: { command: command } } }).then(function (/** @type {any} */ raw) {
       adopt(unwrap(raw))
       clearBusy('__scan__')
       setCustomCommand('')
-    }).catch(function (error) {
+    }).catch(function (/** @type {any} */ error) {
       clearBusy('__scan__')
       setToast(dshT('挂载失败：') + String((error && error.message) || error))
     })
@@ -1164,8 +1204,8 @@ export function CliPanel(props) {
   // builtin codex/claude-code cards and mounted generic cards follow below.
   var backends = (view.data && view.data.backends) || []
   var others = (view.data && view.data.others) || []
-  var busyAny = Object.keys(busy).some(function (key) { return busy[key] === true })
-  var genericBackends = backends.filter(function (backend) { return backend.kind === 'generic' })
+  var busyAny = Object.keys(busy).some(function (/** @type {string} */ key) { return busy[key] === true })
+  var genericBackends = backends.filter(function (/** @type {Record<string, any>} */ backend) { return backend.kind === 'generic' })
 
   children.push(createElement('div', { className: 'card', key: 'local-cli' },
     createElement('div', { className: 'card-header' },
@@ -1183,7 +1223,7 @@ export function CliPanel(props) {
         createElement(UiInput, {
           value: customCommand,
           placeholder: dshT('添加自定义 CLI：输入命令名或绝对路径，如 aider（挂载为 one-shot 后端）'),
-          onChange: function (event) { setCustomCommand(event.target.value) },
+          onChange: function (/** @type {{ target: { value: string } }} */ event) { setCustomCommand(event.target.value) },
         }),
         createElement(UiButton, {
           variant: 'outline',
@@ -1193,13 +1233,13 @@ export function CliPanel(props) {
         }, dshT('挂载')),
       ),
       (function () {
-        var mountedCommands = new Set(genericBackends.map(function (backend) {
+        var mountedCommands = new Set(genericBackends.map(function (/** @type {Record<string, any>} */ backend) {
           return backend.command.toLowerCase()
         }))
         return others
-          .filter(function (item) { return !!(item.cli && item.cli.ok) })
-          .filter(function (item) { return !mountedCommands.has(item.name.toLowerCase()) })
-          .map(function (item) {
+          .filter(function (/** @type {Record<string, any>} */ item) { return !!(item.cli && item.cli.ok) })
+          .filter(function (/** @type {Record<string, any>} */ item) { return !mountedCommands.has(item.name.toLowerCase()) })
+          .map(function (/** @type {Record<string, any>} */ item) {
             return createElement('div', { className: 'cli-scan-card', key: item.name },
               createElement('span', { className: 'cli-title' }, '⌨️ ' + item.name),
               createElement('span', { className: 'cli-tags' },
@@ -1214,7 +1254,7 @@ export function CliPanel(props) {
             )
           })
       })(),
-      others.length > 0 && others.every(function (item) { return !(item.cli && item.cli.ok) })
+      others.length > 0 && others.every(function (/** @type {Record<string, any>} */ item) { return !(item.cli && item.cli.ok) })
         ? createElement('span', { className: 'tag', key: 'none' }, dshT('未检测到其他 agent CLI'))
         : null,
     ),
@@ -1223,32 +1263,32 @@ export function CliPanel(props) {
   if (view.error) {
     children.push(createElement('div', { className: 'error-strip', key: 'error' }, dshT('⚠️ 加载失败：'), view.error))
   } else {
-    genericBackends.forEach(function (backend) {
+    genericBackends.forEach(function (/** @type {Record<string, any>} */ backend) {
       children.push(GenericCliCard({
         backend: backend,
         draft: drafts[backend.id] || cliDraftFromGeneric(backend),
         busy: busy[backend.id] === true,
         expanded: expanded[backend.id] === true,
         onToggle: function () { toggleExpanded(backend.id) },
-        onPatch: function (patch) { patchDraft(backend.id, patch) },
-        onPatchEnvPair: function (index, patch) { patchEnvPair(backend.id, index, patch) },
+        onPatch: function (/** @type {Record<string, any>} */ patch) { patchDraft(backend.id, patch) },
+        onPatchEnvPair: function (/** @type {number} */ index, /** @type {Record<string, any>} */ patch) { patchEnvPair(backend.id, index, patch) },
         onAddEnvPair: function () { addEnvPair(backend.id) },
-        onRemoveEnvPair: function (index) { removeEnvPair(backend.id, index) },
+        onRemoveEnvPair: function (/** @type {number} */ index) { removeEnvPair(backend.id, index) },
         onSave: function () { runUpsert(backend) },
         onUnmount: function () { runUnmount(backend) },
       }))
     })
-    backends.filter(function (backend) { return backend.kind !== 'generic' }).forEach(function (backend) {
+    backends.filter(function (/** @type {Record<string, any>} */ backend) { return backend.kind !== 'generic' }).forEach(function (/** @type {Record<string, any>} */ backend) {
       children.push(CliBackendCard({
         backend: backend,
         draft: drafts[backend.id] || cliDraftFromConfig(backend.config),
         busy: busy[backend.id] === true,
         expanded: expanded[backend.id] === true,
         onToggle: function () { toggleExpanded(backend.id) },
-        onPatch: function (patch) { patchDraft(backend.id, patch) },
-        onPatchEnvPair: function (index, patch) { patchEnvPair(backend.id, index, patch) },
+        onPatch: function (/** @type {Record<string, any>} */ patch) { patchDraft(backend.id, patch) },
+        onPatchEnvPair: function (/** @type {number} */ index, /** @type {Record<string, any>} */ patch) { patchEnvPair(backend.id, index, patch) },
         onAddEnvPair: function () { addEnvPair(backend.id) },
-        onRemoveEnvPair: function (index) { removeEnvPair(backend.id, index) },
+        onRemoveEnvPair: function (/** @type {number} */ index) { removeEnvPair(backend.id, index) },
         onSave: function () { runUpsert(backend) },
         onInstall: function () { runInstall(backend) },
         onUnmount: function () { runUnmount(backend) },
@@ -1266,6 +1306,7 @@ export function CliPanel(props) {
 /*                              Section entrypoint                            */
 /* ========================================================================== */
 
+/** @param {PanelCallProps & Record<string, any>} props */
 export function SubagentAdminSection(props) {
   // Two tabs only (v1.24.0): the 运行中 live-children view is gone — dsh's own
   // subagent surfaces cover live children — and the 变更记录 journal view is
@@ -1281,7 +1322,7 @@ export function SubagentAdminSection(props) {
 
   return createElement('div', { 'data-dsh-sa-section': '' },
     createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('子智能体管理'),
-      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setActiveTab) } },
+      onKeyDown: function (/** @type {KeyboardEvent} */ event) { tabKeyDown(event, tabs, selected.id, setActiveTab) } },
       tabs.map(function (tab) {
         return createElement('button', {
           type: 'button', key: tab.id,

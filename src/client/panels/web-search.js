@@ -2,6 +2,15 @@
 import { UiButton, UiInput, createElement, dshT, messageOf, sectionState, useRef } from './context.js'
 
 /**
+ * The renderer-bound props every admin section receives. `call` is the
+ * panel's ONLY RPC boundary (injected by the slot's inject face — see
+ * src/client/impl.js) and its result envelope is duck-typed per method
+ * (`{ ok: true, value }` / `{ ok: false, error }`), so the resolved type
+ * stays `any` by design: a boundary, not unmodelled data.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PanelSectionProps
+ */
+
+/**
  * Web search provider administration settings section.
  *
  * Surfaces dsh's three web-search providers (DeepSeek native / Exa /
@@ -24,6 +33,7 @@ import { UiButton, UiInput, createElement, dshT, messageOf, sectionState, useRef
  *
  * Restart dsh after a pick / install / uninstall; a settings-backed config
  * change applies immediately.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face.
  */
 export function WebSearchSection(props) {
   var call = props.call
@@ -50,6 +60,10 @@ export function WebSearchSection(props) {
   // user already collapsed must not populate the editor.
   var configRequest = useRef('')
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patch(partial) {
     kit.patch(partial)
   }
@@ -82,6 +96,10 @@ export function WebSearchSection(props) {
   // 乱序根本没有入口）。
   var listActionBusy = useRef(false)
 
+  /**
+   * Point the profile's `web` row at one provider (applied on restart).
+   * @param {string} id - the provider id from the list() row.
+   */
   function selectProvider(id) {
     if (state.active !== null && state.active.searchProvider === id) return
     if (listActionBusy.current) return
@@ -102,6 +120,10 @@ export function WebSearchSection(props) {
     })
   }
 
+  /**
+   * Install one provider: appends its cordis row + npm dependency.
+   * @param {string} id - the provider id from the list() row.
+   */
   function installProvider(id) {
     if (listActionBusy.current) return
     listActionBusy.current = true
@@ -122,6 +144,10 @@ export function WebSearchSection(props) {
     })
   }
 
+  /**
+   * Uninstall one provider: removes its cordis row + npm dependency.
+   * @param {string} id - the provider id from the list() row.
+   */
   function uninstallProvider(id) {
     if (listActionBusy.current) return
     listActionBusy.current = true
@@ -144,7 +170,8 @@ export function WebSearchSection(props) {
 
   // ---------- Provider configuration ----------
 
-  /** Fetch one provider's editable configuration into the open editor. */
+  /** Fetch one provider's editable configuration into the open editor.
+   * @param {string} id - the provider id whose config to read. */
   function loadConfig(id) {
     configRequest.current = id
     // Note: the save-confirmation note is NOT cleared here — a save reloads the
@@ -158,6 +185,7 @@ export function WebSearchSection(props) {
       }
       var view = result.value || {}
       var fields = Array.isArray(view.fields) ? view.fields : []
+      /** @type {Record<string, string>} */
       var draft = {}
       for (var i = 0; i < fields.length; i++) {
         // Only EXPLICITLY set values are staged. An inherited default stays
@@ -175,7 +203,8 @@ export function WebSearchSection(props) {
     })
   }
 
-  /** Open one provider's editor (loading its config) or close the open one. */
+  /** Open one provider's editor (loading its config) or close the open one.
+   * @param {string} id - the provider id whose editor to open / close. */
   function toggleConfig(id) {
     if (state.configOpen === id) {
       configRequest.current = ''
@@ -187,16 +216,21 @@ export function WebSearchSection(props) {
     loadConfig(id)
   }
 
-  /** Stage one field edit (per-key map; a plain merge cannot express it). */
+  /** Stage one field edit (per-key map; a plain merge cannot express it).
+   * @param {string} key - the config field key.
+   * @param {string} value - the staged input value ('' when cleared). */
   function setDraftField(key, value) {
+    /** @type {Record<string, string>} */
     var next = {}
     for (var existing in state.draft) next[existing] = state.draft[existing]
     next[key] = value
     patch({ draft: next })
   }
 
-  /** Toggle the pending removal of one key (secrets need an explicit click). */
+  /** Toggle the pending removal of one key (secrets need an explicit click).
+   * @param {string} key - the config field key to toggle. */
   function toggleClear(key) {
+    /** @type {Record<string, boolean>} */
     var next = {}
     for (var existing in state.cleared) next[existing] = state.cleared[existing]
     next[key] = state.cleared[key] !== true
@@ -208,11 +242,13 @@ export function WebSearchSection(props) {
    * set are removed; secret fields are only ever written when filled in, and
    * only ever removed through the explicit 清除 toggle — so an untouched key
    * field can never wipe a working API key.
+   * @param {string} id - the provider id whose editor is open.
    */
   function saveProviderConfig(id) {
     var view = state.config
     if (view === null) return
     var fields = Array.isArray(view.fields) ? view.fields : []
+    /** @type {Record<string, string|number>} */
     var values = {}
     var unset = []
     for (var i = 0; i < fields.length; i++) {
@@ -362,13 +398,60 @@ export function WebSearchSection(props) {
 }
 
 /**
+ * One editable Config key of a provider, as projected by the host
+ * (`webSearchAdmin/config` → projectConfigFields): the panel renders
+ * exactly the keys the provider package declares. Secret fields project
+ * an empty `value` — the stored secret never crosses the RPC boundary —
+ * with `set` carrying the only signal.
+ * @typedef {{
+ * key: string,
+ * label: string,
+ * kind: string,
+ * value: any,
+ * set: boolean,
+ * default?: any,
+ * choices?: string[],
+ * hint?: string,
+ * }} ConfigField
+ */
+/**
+ * One provider's configuration read (`webSearchAdmin/config`): where a
+ * save lands (`source`: 'settings' = the provider's settings namespace,
+ * anything else = its cordis.patch.yml row), the revision guard the save
+ * must carry, and the projected field descriptors.
+ * @typedef {{
+ * namespace: string,
+ * source: string,
+ * revision: number|null,
+ * restartRequired: boolean,
+ * fields: ConfigField[],
+ * note: string,
+ * }} ProviderConfigView
+ */
+/**
+ * The staged-editor surface `renderProviderConfig` drives: the per-key
+ * draft / cleared maps, the busy / error / note flags, and the three
+ * handlers the card loop threads in.
+ * @typedef {{
+ * draft: Record<string, string>,
+ * cleared: Record<string, boolean>,
+ * busy: boolean,
+ * configError: string,
+ * note: string,
+ * setField: (key: string, value: string) => void,
+ * toggleClear: (key: string) => void,
+ * save: () => void,
+ * }} ConfigEditorUi
+ */
+
+/**
  * One provider's staged configuration form. Field descriptors come from the
  * host (`webSearchAdmin/config`), so the panel renders exactly the keys the
  * provider package's Config declares — with its enum choices, its minimums
  * and its defaults. Secret fields are write-only and can only be removed
  * through the explicit 清除 toggle.
- * @param view - { label, namespace, source, restartRequired, fields, note }.
- * @param ui - { draft, cleared, busy, configError, note, setField, toggleClear, save }.
+ * @param {ProviderConfigView} view - the config read: { namespace, source, revision, restartRequired, fields, note }.
+ * @param {ConfigEditorUi} ui - the editor surface: { draft, cleared, busy, configError, note, setField, toggleClear, save }.
  */
 export function renderProviderConfig(view, ui) {
   var fields = Array.isArray(view.fields) ? view.fields : []
@@ -389,7 +472,7 @@ export function renderProviderConfig(view, ui) {
       input = createElement('select', {
         className: 'input', key: 'input', value: staged, disabled: ui.busy,
         'aria-label': field.label,
-        onChange: function (e) { ui.setField(field.key, e.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ui.setField(field.key, e.target.value) },
       }, options)
     } else {
       var placeholder = field.kind === 'secret'
@@ -398,7 +481,7 @@ export function renderProviderConfig(view, ui) {
       input = createElement(UiInput, {
         type: field.kind === 'secret' ? 'password' : (field.kind === 'number' ? 'number' : 'text'),
         value: staged, placeholder: placeholder, disabled: ui.busy, 'aria-label': field.label,
-        onChange: function (e) { ui.setField(field.key, e.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ui.setField(field.key, e.target.value) },
       })
     }
     rows.push(createElement('div', {
@@ -451,11 +534,39 @@ export function renderProviderConfig(view, ui) {
 }
 
 /**
+ * One `webSearchAdmin/list` provider row, as the config-editor slot needs
+ * it: the card loop reads the rest (packageName / envVar / installed /
+ * bundled).
+ * @typedef {{ id: string, label: string }} ProviderRow
+ */
+/**
+ * The section state `buildProviderConfigElement` reads: the open
+ * editor's config read (null while loading / closed) plus the staged
+ * draft and cleared maps and their flags.
+ * @typedef {{
+ * config: ProviderConfigView|null,
+ * configBusy: boolean,
+ * configError: string,
+ * configNote: string,
+ * draft: Record<string, string>,
+ * cleared: Record<string, boolean>,
+ * }} WebSearchSectionState
+ */
+/**
+ * The three editor handlers the card loop threads into the editor slot.
+ * @typedef {{
+ * setField: (key: string, value: string) => void,
+ * toggleClear: (key: string) => void,
+ * save: () => void,
+ * }} ConfigEditorHandlers
+ */
+
+/**
  * The editor slot for one provider card: a loading banner, the load failure,
  * or the form itself. Kept separate so the card loop stays declarative.
- * @param provider - the list() row (id + label).
- * @param state - the section state (config / configBusy / configError / draft).
- * @param handlers - { setField, toggleClear, save }.
+ * @param {ProviderRow} provider - the list() row (id + label).
+ * @param {WebSearchSectionState} state - the section state (config / configBusy / configError / configNote / draft / cleared).
+ * @param {ConfigEditorHandlers} handlers - { setField, toggleClear, save }.
  */
 export function buildProviderConfigElement(provider, state, handlers) {
   if (state.config === null) {

@@ -23,6 +23,12 @@
     "src/client/panels/context.js",
     "src/client/i18n.js",
     "src/client/native-coverage.js",
-    "src/client/impl.js"
+    "src/client/impl.js",
+    "src/client/panels/skills.js",
+    "src/client/panels/web-search.js",
+    "src/client/panels/todo.js",
+    "src/client/panels/workspaces.js",
+    "src/client/panels/shared.js",
+    "src/client/panels/subagents.js"
   ]
 }

@@ -4,6 +4,15 @@ import { UiButton, UiInput, copyTextSilently, createElement, dshT, messageOf, se
 export var SKILLS_RENDER_CAP = 400
 
 /**
+ * The renderer-bound props every admin section receives. `call` is the
+ * panel's ONLY RPC boundary (injected by the slot's inject face — see
+ * src/client/impl.js) and its result envelope is duck-typed per method
+ * (`{ ok: true, value }` / `{ ok: false, error }`), so the resolved type
+ * stays `any` by design: a boundary, not unmodelled data.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PanelSectionProps
+ */
+
+/**
  * Skills administration settings section.
  *
  * Renders the FULL skill roster of this deployment. The host merges the
@@ -29,6 +38,7 @@ export var SKILLS_RENDER_CAP = 400
  * Strictly read-only: no SKILL.md body is ever loaded and nothing on disk
  * is written. The path action only reveals a directory in the OS file
  * manager via `fsAdmin/reveal`.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face.
  */
 export function SkillsSection(props) {
   var call = props.call
@@ -47,6 +57,10 @@ export function SkillsSection(props) {
   var state = kit.state
   var alive = kit.alive
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patch(partial) {
     kit.patch(partial)
   }
@@ -68,7 +82,7 @@ export function SkillsSection(props) {
       var sessions = result.value && Array.isArray(result.value.sessions) ? result.value.sessions : []
       // Non-archived sessions first: the host caps how many sessions it
       // resolves, and an archived session's scope is the least useful one.
-      var ordered = sessions.slice().sort(function (left, right) {
+      var ordered = sessions.slice().sort(function (/** @type {Record<string, any>} */ left, /** @type {Record<string, any>} */ right) {
         return (left.archived === true ? 1 : 0) - (right.archived === true ? 1 : 0)
       })
       var ids = []
@@ -120,6 +134,10 @@ export function SkillsSection(props) {
 
   kit.mount(reload)
 
+  /**
+   * Copy one skill's `/name` invocation to the clipboard.
+   * @param {string} name - the skill name (without the leading slash).
+   */
   function copySlashName(name) {
     // copyTextSilently carries the textarea/execCommand fallback for
     // non-secure contexts and older engines.
@@ -130,12 +148,16 @@ export function SkillsSection(props) {
         if (!alive.current) return
         patch({ copiedName: '' })
       }, 1500)
-    }, function (err) {
+    }, function (/** @type {unknown} */ err) {
       if (!alive.current) return
       showToast('error', dshT('❌ 复制失败：') + messageOf(err) + dshT('（可手动复制 /') + name + dshT('）'))
     })
   }
 
+  /**
+   * Reveal one SKILL.md's directory in the OS file manager.
+   * @param {string} path - the SKILL.md path from the roster row.
+   */
   function openPath(path) {
     if (!path) return
     // The explorer window is its own success feedback; a failure toasts
@@ -169,7 +191,7 @@ export function SkillsSection(props) {
   }
   // Unresolved session scopes stay visible above the roster: a workspace whose
   // skills could not be read must not be hidden by an otherwise healthy list.
-  var unresolvedSessions = state.sessions.filter(function (s) { return s.ok !== true })
+  var unresolvedSessions = state.sessions.filter(function (/** @type {Record<string, any>} */ s) { return s.ok !== true })
   for (var us = 0; us < unresolvedSessions.length; us++) {
     elements.push(createElement('div', { className: 'hint', key: 'scope-fail-' + us, style: { fontSize: '11px' } },
       unresolvedSessionText(unresolvedSessions[us])))
@@ -177,13 +199,14 @@ export function SkillsSection(props) {
 
   // Display shortening comes from the host (`short`), so the panel never
   // re-parses a label string to render it.
+  /** @type {Record<string, any>} */
   var scopeShortByLabel = {}
   for (var ssl = 0; ssl < state.scopes.length; ssl++) {
     scopeShortByLabel[state.scopes[ssl].label] = state.scopes[ssl].short !== undefined ? state.scopes[ssl].short : state.scopes[ssl].label
   }
 
   var needle = state.needle.trim().toLowerCase()
-  var filtered = state.skills.filter(function (skill) {
+  var filtered = state.skills.filter(function (/** @type {Record<string, any>} */ skill) {
     if (needle === '') return true
     var haystack = [skill.name, skill.description, skill.whenToUse, skill.path, skill.url].join(' ').toLowerCase()
     return haystack.indexOf(needle) !== -1
@@ -200,7 +223,7 @@ export function SkillsSection(props) {
       createElement(UiInput, {
       placeholder: dshT('按名称 / 描述 / 路径过滤…'),
         value: state.needle, 'aria-label': dshT('过滤技能'),
-        onChange: function (e) { patch({ needle: e.target.value }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ needle: e.target.value }) },
       }),
     ),
   ))
@@ -208,10 +231,14 @@ export function SkillsSection(props) {
   // Roster summary: the section lists the skills it could actually load, so
   // the line only states how many that is — plus the filter match count when a
   // filter narrows the view. Why a layer came up short is the warnings' job.
-  var presetScopes = state.scopes.filter(function (s) { return s.kind === 'preset' })
-  var sessionScopes = state.scopes.filter(function (s) { return s.kind !== 'global' && s.kind !== 'preset' })
+  var presetScopes = state.scopes.filter(function (/** @type {Record<string, any>} */ s) { return s.kind === 'preset' })
+  var sessionScopes = state.scopes.filter(function (/** @type {Record<string, any>} */ s) { return s.kind !== 'global' && s.kind !== 'preset' })
   // One label per unresolved session, shared by the top-level hint line so the
   // wording cannot drift from the roster below it.
+  /**
+   * One unresolved-scope line for the hint list.
+   * @param {Record<string, any>} session - the session row whose scope the host could not resolve.
+   */
   function unresolvedSessionText(session) {
     return dshT('⚠ 会话 ') + session.sessionId + dshT(' 的作用域未能解析：') + session.message
   }
@@ -283,7 +310,7 @@ export function SkillsSection(props) {
     }
     var seenIn = Array.isArray(skill.scopes) ? skill.scopes : []
     subChildren.push(createElement('div', { key: 'scopes', className: 'card-sub', style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #61666b)' } },
-      dshT('可见于：') + seenIn.map(function (label) { return scopeShortByLabel[label] || label }).join(dshT('、'))
+      dshT('可见于：') + seenIn.map(function (/** @type {string} */ label) { return scopeShortByLabel[label] || label }).join(dshT('、'))
       + (skill.provider ? ' · provider: ' + skill.provider : '')))
     cardNodes.push(createElement('div', { className: 'card', key: 'skill-' + skill.name },
       createElement('div', { className: 'card-header', key: 'h' },
@@ -354,8 +381,10 @@ export function SkillsSection(props) {
   return createElement('div', { 'data-dsh-admin-section': '' }, elements)
 }
 
-/** Friendly label for one dsh-skill `source` value. */
+/** Friendly label for one dsh-skill `source` value.
+ * @param {string} source - the dsh-skill `source` value. */
 export function skillsSourceLabel(source) {
+  /** @type {Record<string, string>} */
   var labels = {
     'project-agents': dshT('项目 .agents'),
     'project-dsh': dshT('项目 .dsh'),
