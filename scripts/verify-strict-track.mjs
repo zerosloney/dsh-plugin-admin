@@ -41,7 +41,7 @@ function check(name, fn) {
 
 /** The tracks: one config, one flag, one entry list each. */
 const TRACKS = [
-  { key: 'strict', config: 'tsconfig.strict.json', flag: 'noImplicitAny', floor: 21 },
+  { key: 'strict', config: 'tsconfig.strict.json', flag: 'noImplicitAny', floor: 22 },
 ]
 
 const strict = readJsonc(join(ROOT, 'tsconfig.strict.json'))

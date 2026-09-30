@@ -185,7 +185,7 @@ npm test   # 6 道静态闸门 + 36 个脚本（self-check / host-check / 35 个
 静态闸门（`npm test` 先跑，任一失败即中止）：
 
 - `check:types`：`tsc --noEmit`（`checkJs`）覆盖 `lib/**` 与 `src/client/**`；`lib/client.js` 作为产物被排除。**`strictNullChecks` 已是这里的默认值**——那条 `strict-null` 轨道在 lib 层 39/39 全量清完后折进了 `tsconfig.json`（2026-09，见 CHANGELOG），`src/client` 也随之清完，这个开关现在是全仓约束。
-- `check:types-strict`：`tsconfig.strict.json` 的 `noImplicitAny` 覆盖一个**只增不减**的入口文件清单（**注意 `tsc` 会顺 import 往下走**，因此一个文件要等它整条传递闭包清零才能纳入）；当前覆盖 39 个宿主文件中的 21 个，其余需要真正的类型建模而非 `any` 注解，见 CONTRIBUTING 的 strict 轨道一节。清单覆盖全量后并入 `tsconfig.json` 并删掉该文件。
+- `check:types-strict`：`tsconfig.strict.json` 的 `noImplicitAny` 覆盖一个**只增不减**的入口文件清单（**注意 `tsc` 会顺 import 往下走**，因此一个文件要等它整条传递闭包清零才能纳入）；当前覆盖 39 个宿主文件中的 22 个，其余需要真正的类型建模而非 `any` 注解，见 CONTRIBUTING 的 strict 轨道一节。清单覆盖全量后并入 `tsconfig.json` 并删掉该文件。
 - `check:lint`：oxlint（error 为闸门，warning 记录在案）。
 - `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
 - `verify-doc-claims`：**文档里可机械校验的声明必须与仓库一致**——步数 / 静态闸门数 / verify-* 脚本数、文档点名的脚本与模块路径是否存在、最新 CHANGELOG 各节的 `N → M checks` 是否自洽且不超出该套件声明的用例数、config 键数是否等于 `lib/index.js` 导出的两张表。它守的是整条链**自己的数字**，所以排在链首。
