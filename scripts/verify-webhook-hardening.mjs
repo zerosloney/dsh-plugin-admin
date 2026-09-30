@@ -237,12 +237,69 @@ await check('the limiter reclaims drained callers instead of growing forever', (
   assert.deepEqual(rate.trackedCallers(), { hits: 1, fails: 0 }, 'the drained failure bucket is dropped, not parked empty')
   assert.equal(rate.allow('a'), true)
   assert.deepEqual(rate.trackedCallers(), { hits: 1, fails: 0 }, 'the drained request bucket is dropped too')
-  // A burst of one-shot callers used to leave two permanent entries each.
+  // A burst of one-shot callers used to leave two permanent entries each. It is
+  // now additionally HARD-BOUNDED (see the rotation check below), so a 600-entry
+  // burst is capped rather than all retained — the point here is that the
+  // survivors are reclaimed once their window drains, not that all 600 persist.
   for (let i = 0; i < 600; i += 1) rate.allow('burst-' + i)
-  assert.ok(rate.trackedCallers().hits >= 600, 'the live burst is tracked')
+  assert.ok(rate.trackedCallers().hits > 0, 'the live burst is tracked')
+  assert.ok(rate.trackedCallers().hits <= 600, 'and never exceeds the burst size (the cap is a ceiling)')
   clock += 1_001
   rate.allow('after-sweep')
   assert.ok(rate.trackedCallers().hits <= 2, 'the sweep reclaimed the drained burst (got ' + rate.trackedCallers().hits + ')')
+})
+
+// The check above only covers the case where the whole window DRAINS, which is
+// the case a size-guarded sweep can already handle. An address-rotating attacker
+// never lets a window drain, so the sweep used to be disarmed exactly when it
+// mattered: it returned early while `size <= 512`, and by the time the 513th
+// caller arrived there was nothing drained to reclaim. Measured before the fix:
+// 5000 distinct callers left 5000 entries in EACH map on the same event loop
+// that serves the UI. The cap has to be a HARD bound, not a sweep trigger.
+await check('the limiter stays BOUNDED under address rotation (no drained window to reclaim)', () => {
+  const rate = createRateLimiter({ max: 60, windowMs: 60_000, authFailMax: 10 })
+  for (let i = 0; i < 5_000; i += 1) {
+    const caller = `198.51.100.${i % 256}:${i}`
+    rate.allow(caller)
+    rate.noteAuthFailure(caller)
+  }
+  const tracked = rate.trackedCallers()
+  assert.ok(tracked.hits <= 600, `5000 rotating callers must not leave 5000 request buckets (got ${tracked.hits})`)
+  assert.ok(tracked.fails <= 600, `nor 5000 failure buckets (got ${tracked.fails})`)
+  // Keep going: the bound must not ratchet upward as rotation continues.
+  for (let i = 5_000; i < 50_000; i += 1) {
+    const caller = `198.51.100.${i % 256}:${i}`
+    rate.allow(caller)
+    rate.noteAuthFailure(caller)
+  }
+  const later = rate.trackedCallers()
+  assert.ok(later.hits <= 600, `the bound holds after 50k rotations (got ${later.hits})`)
+  assert.ok(later.fails <= 600, `and for the failure map too (got ${later.fails})`)
+})
+
+// Eviction has to be LEAST-recently-used, not first-in-first-out: a long-lived
+// integration is inserted once and touched forever, so under FIFO it would be
+// the first casualty of a rotation flood while the attacker's freshest keys
+// survived. That is why `prune` re-inserts on touch (delete-then-set moves the
+// key to the end; a plain set keeps its original position — measured).
+await check('eviction is LRU: an actively-touched caller survives a rotation flood, an idle one does not', () => {
+  const rate = createRateLimiter({ max: 1_000_000, windowMs: 60_000, authFailMax: 10 })
+  rate.allow('veteran') // inserted FIRST — the worst case for a FIFO policy
+  for (let i = 0; i < 2_000; i += 1) {
+    rate.allow('veteran') // keeps being touched, as a real integration would
+    rate.allow(`rot-${i}`)
+    rate.noteAuthFailure(`rot-${i}`)
+  }
+  assert.ok(rate.retryAfterSeconds('veteran') > 0, 'the touched caller keeps its bucket despite being the oldest insertion')
+
+  const idle = createRateLimiter({ max: 1_000_000, windowMs: 60_000, authFailMax: 10 })
+  idle.allow('idle')
+  idle.noteAuthFailure('idle')
+  for (let i = 0; i < 2_000; i += 1) {
+    idle.allow(`rot-${i}`)
+    idle.noteAuthFailure(`rot-${i}`)
+  }
+  assert.equal(idle.retryAfterSeconds('idle'), 0, 'the coldest key is the one evicted')
 })
 
 await check('a non-loopback caller is refused unless the config opts in', async () => {
