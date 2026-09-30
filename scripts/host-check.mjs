@@ -26,7 +26,7 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -38,6 +38,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const globalEffectDisposers = []
 
 const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows, shouldIgnoreScripts, withInstallScriptsPolicy, scrubbedPnpmEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { assertRevealablePath } = await import(new URL('../lib/workspace-path.js', import.meta.url).href)
 
 // The log artifact deleteSession is expected to remove from disk. The plugin
 // derives the physical directory from the JSONL backend's layout under
@@ -402,9 +403,14 @@ for (const tail of ['commands/listCommands', 'commands/saveCommand', 'commands/d
 }
 
 
-// fsAdmin.reveal validates its input without spawning anything.
-await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(''), /requires a path string/, 'reveal rejects empty path')
-await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(42), /requires a path string/, 'reveal rejects non-string')
+// fsAdmin.reveal validates its input before spawning anything — the path is
+// handed to the OS verbatim, so it goes through assertRevealablePath (see the
+// fuller gate contract further down).
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(''), /must be a non-empty string/, 'reveal rejects empty path')
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(42), /must be a non-empty string/, 'reveal rejects non-string')
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal('relative/path'), /must be an absolute path/, 'reveal rejects a relative path (it would resolve against the host cwd)')
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal('\\\\attacker.example\\share\\p'), /network share/, 'reveal rejects a UNC share (outbound SMB auth)')
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(join(here, '..', '.host-check-tmp', 'no-such-path')), /does not exist/, 'reveal rejects a nonexistent path')
 
 await fakeCtx.provided.sessionAdmin.deleteSession(TARGET)
 
@@ -570,6 +576,40 @@ assert.equal(pnpmEnv.NPM_TOKEN, 'keep-me', 'credential-shaped variables stay (re
 assert.equal('DSH_HOME' in pnpmEnv, false, 'DSH_* is dropped')
 assert.equal('DSH_SANDBOX_TOKEN' in pnpmEnv, false, 'every DSH_* variable is dropped')
 
+/* --------- fsAdmin/reveal: the one browser-supplied path with a gate ---------
+ * The path is handed to explorer.exe / open / xdg-open VERBATIM, so it is
+ * validated before the spawn rather than after. The checks are the shape ones
+ * that verbatim OS use needs, and each one closes a real exposure: a UNC share
+ * makes Windows authenticate OUTBOUND to a host of the caller's choosing, a
+ * relative path resolves against the host's cwd, a namespace prefix bypasses
+ * normal resolution, and a control character or quote can break out of the
+ * PowerShell foreground helper's argument boundary. Absolute + existing are
+ * also what makes the reveal meaningful at all.
+ */
+mkdirSync(join(here, '..', '.host-check-tmp', 'reveal-gate'), { recursive: true })
+const revealableFile = join(here, '..', '.host-check-tmp', 'reveal-gate', 'a file.txt')
+writeFileSync(revealableFile, 'x')
+assert.equal(assertRevealablePath(revealableFile, 'reveal'), realpathSync(revealableFile), 'an existing absolute file is accepted (canonicalised)')
+assert.equal(assertRevealablePath(join(here, '..'), 'reveal'), realpathSync(join(here, '..')), 'an existing directory is accepted')
+assert.throws(() => assertRevealablePath('relative/path', 'reveal'), /must be an absolute path/, 'a relative path is refused (it would resolve against the host cwd)')
+assert.throws(() => assertRevealablePath(join(here, '..', '.host-check-tmp', 'reveal-gate', 'nope'), 'reveal'), /does not exist/, 'a nonexistent path is refused')
+assert.throws(() => assertRevealablePath('   ', 'reveal'), /must be a non-empty string/, 'an empty path is refused')
+assert.throws(() => assertRevealablePath(42, 'reveal'), /must be a non-empty string/, 'a non-string is refused')
+assert.throws(() => assertRevealablePath('\\\\attacker.example\\share\\p', 'reveal'), /network share/, 'a UNC path is refused (outbound SMB auth)')
+assert.throws(() => assertRevealablePath('//attacker.example/share/p', 'reveal'), /network share/, 'the POSIX spelling of a UNC path is refused too')
+assert.throws(() => assertRevealablePath('\\\\?\\C:\\Windows', 'reveal'), /namespace prefix/, 'the Win32 file namespace is refused')
+assert.throws(() => assertRevealablePath('\\\\.\\PhysicalDrive0', 'reveal'), /namespace prefix/, 'the device namespace is refused')
+assert.throws(() => assertRevealablePath(revealableFile + '\u0001', 'reveal'), /control character/, 'a control character is refused (PowerShell argv breakout)')
+assert.throws(() => assertRevealablePath(revealableFile + '"', 'reveal'), /control character or a double quote/, 'a double quote is refused')
+// A path on ANOTHER DRIVE with no registry is still accepted: reveal is a
+// read-only UI affordance, and the base CLI bundle mounts no registry, so
+// workspace containment would refuse every legitimate reveal there.
+assert.equal(
+  typeof assertRevealablePath(process.cwd(), 'reveal'),
+  'string',
+  'a path outside every known workspace is still accepted — see the JSDoc for why containment is deliberately not applied here',
+)
+
 /* ------------ layout encoders mirror the JSONL backend ------------
  * sessionLogDirFor derives the physical session directory through the
  * projectKey/encodeSegment algorithms. The vectors below pin the exact
@@ -627,6 +667,52 @@ missingDirCtx.sessionPersistence.stat = async () => undefined
 await assert.doesNotReject(
   () => missingDirCtx.provided.sessionAdmin.deleteSession('session-unmaterialized'),
   'an unmaterialized session (no durable bytes) deletes cleanly',
+)
+
+/* -------- a THROWN stat is not a successful no-op --------
+ * Resolved-undefined ("the persistence backend holds no such session") and a
+ * thrown error ("the backend could not answer") are different facts, and only
+ * the first is a legitimate no-op. The removal used to swallow the throw, skip
+ * the whole log-removal step, and let the accounting detach / cache eviction /
+ * archived-set cleanup run anyway — so `deleteSession` returned `{deleted}` with
+ * the log still on disk and the registry entry already gone. A success reported
+ * for an operation that did not happen is the one shape this plugin has kept
+ * failing loud about everywhere else, so it refuses here too: nothing has been
+ * touched at that point, which means the user can simply retry.
+ */
+/** detachSession call log: proof the accounting cleanup did NOT partially run. */
+const detached = []
+const statThrowsCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: () => undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [{ id: 'w', title: 'w', path: 'E:/nowhere-c', sessionIds: ['session-stat-throws'], detachSession: async () => { detached.push('session-stat-throws') } }],
+    archivedSessionIds: [],
+    unarchiveSession: async () => {},
+  },
+  sessionPersistence: {
+    list: async () => [],
+    stat: async () => { throw new Error('log locked mid-flush') },
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+apply(statThrowsCtx)
+await assert.rejects(
+  () => statThrowsCtx.provided.sessionAdmin.deleteSession('session-stat-throws'),
+  /cannot verify session.*stat failed.*nothing was removed/,
+  'a thrown stat refuses the delete instead of reporting success with the log still on disk',
+)
+assert.deepEqual(detached, [], 'and no partial cleanup ran before the refusal')
+await assert.rejects(
+  () => statThrowsCtx.provided.sessionAdmin.closeSession('session-stat-throws'),
+  /cannot verify session/,
+  'the same refusal applies to closeSession',
 )
 
 /* -------- a link-shaped session directory is never recursively deleted --------
