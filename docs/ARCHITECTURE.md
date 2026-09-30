@@ -186,7 +186,7 @@ npm test   # 7 道静态闸门 + 36 个脚本（self-check / host-check / 35 个
 
 - `check:types`：`tsc --noEmit`（`checkJs`）覆盖 `lib/**` 与 `src/client/**`；`lib/client.js` 作为产物被排除。
 - `check:types-strict`：`tsconfig.strict.json` 的 `noImplicitAny` 覆盖一个**只增不减**的入口文件清单（**注意 `tsc` 会顺 import 往下走**，因此一个文件要等它整条传递闭包清零才能纳入）；当前覆盖 39 个宿主文件中的 21 个，其余需要真正的类型建模而非 `any` 注解，见 CONTRIBUTING 的 strict 轨道一节。清单覆盖全量后并入 `tsconfig.json` 并删掉该文件。
-- `check:types-strict-null`：第二条同类轨道（`tsconfig.strict-null.json`），在**自己那份只增不减的入口清单**上加 `strictNullChecks`；当前覆盖 1 个（从 `patch-utils.js` 起步）。**它 extends `tsconfig.json` 而不是另一条轨道**——实测 `noImplicitAny` 会**屏蔽** `strictNullChecks` 的发现（`let x = null` 在后者单独开启时被钉成字面量 `null`，叠加前者后推成联合类型、于是不再报错），叠加等于让这条轨道空转。因此**两条轨道的成员互不覆盖**：文件加入 any 轨道不代表它的空值处理被查过。全量开这个开关实测 139 条（`noImplicitAny` 约 1900 条），且能抓到后者看不见的缺陷（如"展开覆盖掉前面显式字段"），收益优先级在前——详见 CONTRIBUTING 的可行性评估一节。两条轨道最终一起折回 `tsconfig.json`。
+- `check:types-strict-null`：第二条同类轨道（`tsconfig.strict-null.json`），在**自己那份只增不减的入口清单**上加 `strictNullChecks`；当前覆盖 21 个（与 any 轨道同一批）。**它 extends `tsconfig.json` 而不是另一条轨道**——实测 `noImplicitAny` 会**屏蔽** `strictNullChecks` 的发现（`let x = null` 在后者单独开启时被钉成字面量 `null`，叠加前者后推成联合类型、于是不再报错），叠加等于让这条轨道空转。因此**两条轨道的成员互不覆盖**：文件加入 any 轨道不代表它的空值处理被查过。全量开这个开关实测 139 条（`noImplicitAny` 约 1900 条），且能抓到后者看不见的缺陷（如"展开覆盖掉前面显式字段"），收益优先级在前——详见 CONTRIBUTING 的可行性评估一节。两条轨道最终一起折回 `tsconfig.json`。
 - `check:lint`：oxlint（error 为闸门，warning 记录在案）。
 - `build:client --check`：`lib/client.js` 与 `src/client/**` 不一致即失败，防"改了源码忘重建"。
 - `verify-doc-claims`：**文档里可机械校验的声明必须与仓库一致**——步数 / 静态闸门数 / verify-* 脚本数、文档点名的脚本与模块路径是否存在、最新 CHANGELOG 各节的 `N → M checks` 是否自洽且不超出该套件声明的用例数、config 键数是否等于 `lib/index.js` 导出的两张表。它守的是整条链**自己的数字**，所以排在链首。

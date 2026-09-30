@@ -139,7 +139,7 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 **建议的推进方式**：不要一次性打开（139 条会淹掉 review），而是照 `noImplicitAny` 那套**只增不减的入口清单**再做一条 `strict-null` 轨道（同一份清单机制，换个 flag），从 `patch-utils` 这类已清的叶子起步。两条轨道最终一起折回 `tsconfig.json`。**收益优先级**：先 `strictNullChecks` 再 `noImplicitAny` 剩余部分——前者 139 条且能抓真缺陷，后者还有 1900 条且多为回调参数标注（体力活）。
 
-**这条轨道已经搭好了**：`tsconfig.strict-null.json` + `npm run check:types-strict-null`（run-gate 常驻静态步）。strict-null 轨道当前覆盖 **1 个**（`lib/patch-utils.js`）。`verify-strict-track.mjs` 同时守住两条轨道：各自的 flag 是否为真、**继承关系**、入口是否存在、**两条清单都只增不减**（地板值随新增上调）、以及**文档里的两个覆盖数**是否等于重算结果。
+**这条轨道已经搭好了**：`tsconfig.strict-null.json` + `npm run check:types-strict-null`（run-gate 常驻静态步）。strict-null 轨道当前覆盖 **21 个**（与 any 轨道同一批文件——那批文件的空值代价实测为 0 或个位数）。`verify-strict-track.mjs` 同时守住两条轨道：各自的 flag 是否为真、**继承关系**、入口是否存在、**两条清单都只增不减**（地板值随新增上调）、以及**文档里的两个覆盖数**是否等于重算结果。
 
 **关键：两条轨道必须彼此独立，各自 extends `tsconfig.json`——不能叠加。** 这条是实测出来的，也是搭这条轨道时最大的一个发现：**`noImplicitAny` 会屏蔽 `strictNullChecks` 的发现**。最小复现：
 
@@ -152,7 +152,9 @@ q = '"'      // strictNullChecks 单独开：error（q 被钉成字面量类型 
 
 **所以：一个文件加入 any 轨道，并不等于它的空值处理被检查过**；反之亦然。两条清单都得各自涨。前面那个"139 条"是**只开 `strictNullChecks`**、且**不叠加** `noImplicitAny` 时的数字，对已在 any 轨道上的文件并不适用（那些文件的真实空值问题被屏蔽着，只有最终把两个 flag 都折进 `tsconfig.json`、不再有 `any` 推断时才会全部现形）。`verify-strict-track.mjs` 里有一条断言专门防这个退化：null 轨道不得开启 `noImplicitAny`。
 
-**清单扩容的方式**与 any 轨道相同（先量传递 import 闭包，再逐个补注解）。优先顺序建议：先纳入 any 轨道**还没清**的文件（它的闭包代价同时只付一次），再回头收已清文件——已清文件在 null 轨道上通常只需几处 `let x = null` 的注解。
+**清单扩容的方式**与 any 轨道相同（先量传递 import 闭包，再逐个补注解）。优先顺序建议：先纳入 any 轨道**还没清**的文件（它的闭包代价同时只付一次），再回头收已清文件——实测已清文件在 null 轨道上多数是**零改动**纳入（那 21 个里有 14 个如此）。
+
+**补注解时的一个 JSDoc 陷阱（实测踩到）**：`let x = null` 在 `strictNullChecks` 下的类型是**字面量 `null`**，于是「在 Promise 执行器里赋值」报 `TS2322`，之后每次读取都收窄成 `never`：`error TS2349: Type 'never' has no call signatures`。**给这个 `let` 加 `@type {((r?: unknown) => void)|null}` 注解没有用**——实测带注解与不带注解都失败；用 `const` 别名转发同样失败。唯一有效的是把初始化写成 `/** @type {any} */ (null)`（或把可空值放在对象属性上）。看到「`never` 没有调用签名」基本就是这个成因。
 
 ## 环境
 

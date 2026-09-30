@@ -33,6 +33,26 @@
   },
   "include": [
     "types/**/*.d.ts",
-    "lib/patch-utils.js"
+    "lib/patch-utils.js",
+    "lib/health-report.js",
+    "lib/panel-ids.js",
+    "lib/peer-compat.js",
+    "lib/rpc-manifest.js",
+    "lib/run-command.js",
+    "lib/secret-fields.js",
+    "lib/session-export.js",
+    "lib/shell-policy.js",
+    "lib/skills-admin.js",
+    "lib/store-version.js",
+    "lib/tool-seed.js",
+    "lib/workflow-realm-shared.js",
+    "lib/workspace-admin.js",
+    "lib/audit-log.js",
+    "lib/rpc-schema.js",
+    "lib/overlay-admin.js",
+    "lib/usage-ledger.js",
+    "lib/workflow-command.js",
+    "lib/workflow-engine.js",
+    "lib/workflow-realm-worker.js"
   ]
 }
