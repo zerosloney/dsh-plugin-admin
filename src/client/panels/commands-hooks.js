@@ -30,13 +30,14 @@ import { unwrap } from './subagents.js'
 /** The events the stock Claude-Code bridge supports, with matcher notes. */
 export var CH_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop']
 
+/** @type {Record<string, boolean>} */
 export var CH_MATCHERLESS = { UserPromptSubmit: true, Stop: true }
 
 /**
  * Describe one hook reload outcome for the status banner. The host restarts
  * the mounted bridge through Fiber.update; "已生效" is only ever claimed when
  * the restart actually completed.
- * @param reload - the host's reload report.
+ * @param {Record<string, any>} reload - the host's reload report.
  * @returns display text, or null when there is nothing to say.
  */
 export function chReloadNote(reload) {
@@ -49,7 +50,7 @@ export function chReloadNote(reload) {
 /**
  * Notice tone for a status note: ✓ prefixes read as success (green), ⚠ as a
  * warning (amber), everything else stays informational (blue).
- * @param text - the note text.
+ * @param {string} text - the note text.
  * @returns the notice class name.
  */
 export function chNoticeClass(text) {
@@ -60,9 +61,9 @@ export function chNoticeClass(text) {
 
 /**
  * One labeled form field.
- * @param label - label text.
- * @param input - the input element.
- * @param hint - optional hint line under the control.
+ * @param {string} label - label text.
+ * @param {any} input - the input element (a createElement result — the React seam returns any).
+ * @param {string} [hint] - optional hint line under the control.
  * @returns the field element.
  */
 export function chField(label, input, hint) {
@@ -75,9 +76,9 @@ export function chField(label, input, hint) {
 
 /**
  * A small switch button with the toggle role.
- * @param checked - current state.
- * @param onChange - click handler.
- * @param label - accessible name.
+ * @param {boolean} checked - current state.
+ * @param {(() => void) | null} onChange - click handler.
+ * @param {string} label - accessible name.
  * @returns the button element.
  */
 export function chToggle(checked, onChange, label) {
@@ -94,7 +95,7 @@ export function chToggle(checked, onChange, label) {
 
 /**
  * One command list row: /name + description, live status, toggle, edit, delete.
- * @param props - { command, busy, onToggle, onEdit, onDelete, confirming, onConfirmDelete, onCancelDelete }.
+ * @param {Record<string, any>} props - { command, busy, onToggle, onEdit, onDelete, confirming, onConfirmDelete, onCancelDelete }.
  * @returns the row element.
  */
 export function ChCommandRow(props) {
@@ -130,7 +131,7 @@ export function ChCommandRow(props) {
 
 /**
  * The command create/edit form.
- * @param props - { initial, busy, error, onSave, onCancel }.
+ * @param {Record<string, any>} props - { initial, busy, error, onSave, onCancel }.
  * @returns the form element.
  */
 export function ChCommandForm(props) {
@@ -155,35 +156,35 @@ export function ChCommandForm(props) {
   var enabled = enabledHooks[0]
   var setEnabled = enabledHooks[1]
 
-  return createElement('form', { className: 'form', onSubmit: function (e) { e.preventDefault() } },
+  return createElement('form', { className: 'form', onSubmit: function (/** @type {{ preventDefault: () => void }} */ e) { e.preventDefault() } },
     createElement('div', { className: 'grid2' },
       chField(dshT('名称'), createElement(UiInput, {
         type: 'text',  value: name, placeholder: 'my-command',
-        onChange: function (e) { setName(e.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { setName(e.target.value) },
       }), dshT('小写字母开头，可含数字、-、_。会话中输入 /名称 调用。')),
       chField(dshT('参数提示（可选）'), createElement(UiInput, {
         type: 'text',  value: inputHint, placeholder: dshT('例如 <file-path>'),
-        onChange: function (e) { setInputHint(e.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { setInputHint(e.target.value) },
       })),
     ),
     chField(dshT('描述'), createElement(UiInput, {
       type: 'text',  value: description, placeholder: dshT('这个命令做什么'),
-      onChange: function (e) { setDescription(e.target.value) },
+      onChange: function (/** @type {{ target: { value: string } }} */ e) { setDescription(e.target.value) },
     })),
     chField(dshT('提示词'), createElement('textarea', {
       className: 'input', value: prompt, placeholder: dshT('# 角色\n\n你要…\n\n当前请求：$ARGUMENTS'),
-      onChange: function (e) { setPrompt(e.target.value) },
+      onChange: function (/** @type {{ target: { value: string } }} */ e) { setPrompt(e.target.value) },
     }), dshT('发送给模型的提示词。$ARGUMENTS 会替换为用户输入；未使用占位符时输入会追加在末尾。')),
     createElement('div', { className: 'checks' },
       createElement(UiCheckbox, {
         checked: enabled,
-        onChange: function (next) { setEnabled(next) },
+        onChange: function (/** @type {boolean} */ next) { setEnabled(next) },
         label: dshT('启用'),
         className: 'check',
       }),
       createElement(UiCheckbox, {
         checked: images,
-        onChange: function (next) { setImages(next) },
+        onChange: function (/** @type {boolean} */ next) { setImages(next) },
         label: dshT('接受图片附件'),
         className: 'check',
       }),
@@ -211,7 +212,7 @@ export function ChCommandForm(props) {
 
 /**
  * The 命令 tab: list + create/edit form + inline delete confirm.
- * @param props - { call }.
+ * @param {{ call: (method: string, args: Record<string, any>) => Promise<any> }} props - { call }.
  * @returns the tab content element.
  */
 export function ChCommandsTab(props) {
@@ -249,6 +250,11 @@ export function ChCommandsTab(props) {
   }
   useEffect(load, [])
 
+  /**
+   * Run one list mutation: unwrap the RPC result into the list, refresh busy/error.
+   * @param {Promise<any>} promise - the RPC promise.
+   * @param {(value: any) => void} [after] - optional hook run with the unwrapped value.
+   */
   function act(promise, after) {
     setBusy(true)
     setError('')
@@ -278,7 +284,7 @@ export function ChCommandsTab(props) {
 
   function exportCommands() {
     try {
-      var payload = commands.map(function (c) {
+      var payload = commands.map(function (/** @type {Record<string, any>} */ c) {
         return { name: c.name, description: c.description, inputHint: c.inputHint, prompt: c.prompt, enabled: c.enabled !== false }
       })
       downloadTextFile('dsh-commands-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify(payload, null, 2))
@@ -288,7 +294,7 @@ export function ChCommandsTab(props) {
     }
   }
 
-  function runImport(raw) {
+  function runImport(/** @type {string} */ raw) {
     var entries
     try {
       var parsed = JSON.parse(raw)
@@ -297,6 +303,7 @@ export function ChCommandsTab(props) {
       setNote(dshT('导入失败：JSON 解析错误 — ') + messageOf(e))
       return
     }
+    /** @type {Record<string, boolean>} */
     var byName = {}
     for (var i = 0; i < commands.length; i++) byName[commands[i].name] = true
     var saved = 0
@@ -362,7 +369,7 @@ export function ChCommandsTab(props) {
           className: 'input', rows: 8,
           placeholder: dshT('[{ "name": "review", "description": "代码审查", "prompt": "请审查 $ARGUMENTS" }]'),
           value: importing.text,
-          onChange: function (e) { setImporting({ text: e.target.value }) },
+          onChange: function (/** @type {{ target: { value: string } }} */ e) { setImporting({ text: e.target.value }) },
         }),
         createElement('div', { style: { display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' } },
           createElement(UiButton, {
@@ -379,7 +386,7 @@ export function ChCommandsTab(props) {
         busy: busy,
         error: '',
         onCancel: function () { setEditing(null) },
-        onSave: function (entry) {
+        onSave: function (/** @type {Record<string, any>} */ entry) {
           act(call('commandHookAdmin/saveCommand', { entry: entry }), function () {
             setEditing(null)
             setNote(dshT('命令 /') + entry.name + dshT(' 已保存并注册。'))
@@ -389,7 +396,7 @@ export function ChCommandsTab(props) {
       : null,
     commands.length === 0
       ? createElement('div', { className: 'empty' }, dshT('还没有命令。点击「＋新建命令」创建一个，会话里输入 /名称 即可把提示词发给模型。'))
-      : createElement('div', { className: 'list' }, commands.map(function (c) {
+      : createElement('div', { className: 'list' }, commands.map(function (/** @type {Record<string, any>} */ c) {
         return createElement(ChCommandRow, {
           key: c.name,
           command: c,
@@ -416,7 +423,7 @@ export function ChCommandsTab(props) {
 
 /**
  * One hook list row: event + matcher + command, toggle, edit, delete.
- * @param props - { hook, busy, onToggle, onEdit, onDelete, confirming, onConfirmDelete, onCancelDelete }.
+ * @param {Record<string, any>} props - { hook, busy, onToggle, onEdit, onDelete, confirming, onConfirmDelete, onCancelDelete }.
  * @returns the row element.
  */
 export function ChHookRow(props) {
@@ -448,7 +455,7 @@ export function ChHookRow(props) {
 
 /**
  * The hook create/edit form.
- * @param props - { initial, busy, error, onSave, onCancel }.
+ * @param {Record<string, any>} props - { initial, busy, error, onSave, onCancel }.
  * @returns the form element.
  */
 export function ChHookForm(props) {
@@ -470,32 +477,32 @@ export function ChHookForm(props) {
   var enabled = enabledHooks[0]
   var setEnabled = enabledHooks[1]
 
-  return createElement('form', { className: 'form', onSubmit: function (e) { e.preventDefault() } },
+  return createElement('form', { className: 'form', onSubmit: function (/** @type {{ preventDefault: () => void }} */ e) { e.preventDefault() } },
     createElement('div', { className: 'grid2' },
-      chField(dshT('事件'), createElement('select', { className: 'input', value: event, onChange: function (e) { setEvent(e.target.value) } },
+      chField(dshT('事件'), createElement('select', { className: 'input', value: event, onChange: function (/** @type {{ target: { value: string } }} */ e) { setEvent(e.target.value) } },
         CH_HOOK_EVENTS.map(function (name) {
           return createElement('option', { key: name, value: name }, name)
         }),
       )),
       chField(dshT('超时（秒）'), createElement(UiInput, {
         type: 'number', min: 1,  value: timeoutSec,
-        onChange: function (e) { setTimeoutSec(e.target.value) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { setTimeoutSec(e.target.value) },
       }), dshT('留空或 600 = 桥默认（10 分钟）。')),
     ),
     chField(dshT('匹配器'), createElement(UiInput, {
       type: 'text',  value: matcher, placeholder: CH_MATCHERLESS[event] ? dshT('（此事件忽略匹配器）') : dshT('write,edit 或正则；留空匹配全部'),
       disabled: CH_MATCHERLESS[event] === true,
-      onChange: function (e) { setMatcher(e.target.value) },
+      onChange: function (/** @type {{ target: { value: string } }} */ e) { setMatcher(e.target.value) },
     }), CH_MATCHERLESS[event]
       ? dshT('UserPromptSubmit / Stop 没有匹配对象，桥会丢弃匹配器。')
       : dshT('仅 PreToolUse / PostToolUse 有匹配对象（工具名，小写，如 write / edit，大小写敏感）。')),
     chField(dshT('命令'), createElement(UiInput, {
       type: 'text', className: 'mono', value: command, placeholder: 'node C:/path/to/hook.js',
-      onChange: function (e) { setCommand(e.target.value) },
+      onChange: function (/** @type {{ target: { value: string } }} */ e) { setCommand(e.target.value) },
     }), dshT('钩子载荷以 JSON 从 stdin 传入；退出码 2 或输出 deny 阻止动作。')),
     createElement(UiCheckbox, {
       checked: enabled,
-      onChange: function (next) { setEnabled(next) },
+      onChange: function (/** @type {boolean} */ next) { setEnabled(next) },
       label: dshT('启用'),
       className: 'check',
     }),
@@ -522,7 +529,7 @@ export function ChHookForm(props) {
 /**
  * The 钩子 tab: bridge status banner (with one-click bridge install/uninstall)
  * + list + create/edit form.
- * @param props - { call }.
+ * @param {{ call: (method: string, args: Record<string, any>) => Promise<any> }} props - { call }.
  * @returns the tab content element.
  */
 export function ChHooksTab(props) {
@@ -560,6 +567,11 @@ export function ChHooksTab(props) {
   }
   useEffect(load, [])
 
+  /**
+   * Run one administrative write and refresh, deriving the status note from the reload report.
+   * @param {Promise<any>} promise - the RPC promise.
+   * @param {(value: any) => string | void} [after] - optional hook run with the unwrapped value; a returned string overrides the default note.
+   */
   function act(promise, after) {
     setBusy(true)
     setError('')
@@ -643,7 +655,7 @@ export function ChHooksTab(props) {
  * The Codex verbs answer with a sparse payload (no `listHooks` spread), so
  * this path re-reads through load() instead of act(): setData() on the
  * sparse value would blank the hook list and both bridge banners.
- * @param verb - 'codexBridgeInstall' or 'codexBridgeRemove'.
+ * @param {string} verb - 'codexBridgeInstall' or 'codexBridgeRemove'.
  */
  function runCodexBridge(verb) {
  setBusy(true)
@@ -753,14 +765,14 @@ export function ChHooksTab(props) {
         busy: busy,
         error: '',
         onCancel: function () { setEditing(null) },
-        onSave: function (entry) {
+        onSave: function (/** @type {Record<string, any>} */ entry) {
           act(call('commandHookAdmin/saveHook', { entry: entry }), function () { setEditing(null) })
         },
       })
       : null,
     hooks.length === 0
       ? createElement('div', { className: 'empty' }, dshT('还没有钩子。钩子会在特定事件（工具调用前后、提交提示词、会话开始/结束等）自动执行命令。'))
-      : createElement('div', { className: 'list' }, hooks.map(function (h) {
+      : createElement('div', { className: 'list' }, hooks.map(function (/** @type {Record<string, any>} */ h) {
         return createElement(ChHookRow, {
           key: h.id,
           hook: h,
@@ -786,7 +798,7 @@ export function ChHooksTab(props) {
  * ChHooksTab — each now a plugins-page tab of its own, no segmented chrome of
  * its own. The 项目 `.agents` read-only view was retired with the split
  * (sessionAdmin/list drives the session picker it needed).
- * @param props - renderer-bound props; `call` arrives from the slot inject face.
+ * @param {{ call: (method: string, args: Record<string, any>) => Promise<any> }} props - renderer-bound props; `call` arrives from the slot inject face.
  * @returns the section element.
  */
 export function ChCommandsSection(props) {
@@ -795,7 +807,7 @@ export function ChCommandsSection(props) {
   )
 }
 
-export function ChHooksSection(props) {
+export function ChHooksSection(/** @type {{ call: (method: string, args: Record<string, any>) => Promise<any> }} */ props) {
   return createElement('div', { 'data-cha-section': '' },
     createElement(ChHooksTab, { call: props.call, key: 'hooks' })
   )

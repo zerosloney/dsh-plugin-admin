@@ -17,6 +17,7 @@ import { btnStyle, inputStyle, pillStyle, preStyle, safeStringify, tabKeyDown, t
  *
  * Degrades to a one-line hint when the host half reports the engine off
  * (ctx.subagents missing) — same posture as WorkspacesSection.
+ * @param {{ call: (method: string, args: Record<string, any>) => Promise<any> }} props - the renderer-bound props; `call` is the host RPC seam whose resolved payload is service-defined JSON (a duck-typed boundary, not modelled data).
  */
 export function WorkflowSection(props) {
   var call = props.call
@@ -57,9 +58,9 @@ export function WorkflowSection(props) {
   function loadParentSessions() {
     call('sessionAdmin/list', {}).then(function (res) {
       if (!alive.current || !res || !res.ok) return
-      var live = ((res.value && res.value.sessions) || []).filter(function (s) { return s && s.live && s.id })
+      var live = ((res.value && res.value.sessions) || []).filter(function (/** @type {Record<string, any>} */ s) { return s && s.live && s.id })
       var keep = parentSessionRef.current
-      parentSessionRef.current = live.some(function (s) { return s.id === keep })
+      parentSessionRef.current = live.some(function (/** @type {Record<string, any>} */ s) { return s.id === keep })
         ? keep
         : (live[0] ? live[0].id : '')
       patch({ liveSessions: live, parentSessionId: parentSessionRef.current })
@@ -101,7 +102,7 @@ export function WorkflowSection(props) {
   var pollFailures = 0
   function schedulePoll() {
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null }
-    var anyRunning = (runsRef.current || []).some(function (r) { return r.status === 'running' || r.status === 'pending' })
+    var anyRunning = (runsRef.current || []).some(function (/** @type {Record<string, any>} */ r) { return r.status === 'running' || r.status === 'pending' })
     if (!anyRunning) { pollFailures = 0; return }
     // 失败也要退避：原先成功与失败都按固定 2s 重排，于是"宿主半没有该接口 /
     // 传输一直失败"会变成每秒半次的永久重试，日志和控制台被刷满。
@@ -137,7 +138,7 @@ export function WorkflowSection(props) {
   // 中的错误运行。
   var detailSeq = useRef(0)
 
-  function openRun(runId) {
+  function openRun(/** @type {string} */ runId) {
     if (state.openRunId === runId) { patch({ openRunId: null, runDetail: null, answerText: '' }); return }
     var seq = ++detailSeq.current
     patch({ openRunId: runId, runDetail: null, answerText: '' })
@@ -162,6 +163,7 @@ export function WorkflowSection(props) {
       catch (e) { patch({ editorError: dshT('args 不是合法 JSON：') + messageOf(e) }); return }
     }
     patch({ editorBusy: true, editorError: '' })
+    /** @type {Record<string, any>} */
     var spec = { script: ed.script, label: ed.label || dshT('工作流'), args: args || {} }
     if (parentSessionRef.current) spec.parentSessionId = parentSessionRef.current
     call('workflowAdmin/startRun', { spec: spec }).then(function (res) {
@@ -173,7 +175,7 @@ export function WorkflowSection(props) {
         showToast('success', dshT('🚀 工作流已启动'))
         reload()
       } else {
-        var diags = ((r && r.diagnostics) || []).map(function (d) { return d.message }).join('\n')
+        var diags = ((r && r.diagnostics) || []).map(function (/** @type {Record<string, any>} */ d) { return d.message }).join('\n')
         patch({ editorBusy: false, editorError: diags || messageOf((res && res.error) || (r && r.error)) })
       }
     }, function (e) {
@@ -187,7 +189,7 @@ export function WorkflowSection(props) {
   // 分支都先放闸，再走 alive 守卫。
   var runActionBusy = useRef(false)
 
-  function stopRun(runId) {
+  function stopRun(/** @type {string} */ runId) {
     if (runActionBusy.current) return
     runActionBusy.current = true
     call('workflowAdmin/stopRun', { runId: runId, reason: 'panel' }).then(function (res) {
@@ -203,7 +205,7 @@ export function WorkflowSection(props) {
     })
   }
 
-  function amendRun(runId) {
+  function amendRun(/** @type {string} */ runId) {
     var rec = state.runDetail
     var script = rec && rec.script ? rec.script : ''
     patch({ editor: { runId: runId, script: script, label: rec && rec.label ? rec.label : '', argsText: '' }, editorError: '', tab: 'runs' })
@@ -221,7 +223,7 @@ export function WorkflowSection(props) {
         showToast('success', dshT('✏️ 已基于旧步骤缓存重建工作流'))
         reload()
       } else {
-        var diags = ((r && r.diagnostics) || []).map(function (d) { return d.message }).join('\n')
+        var diags = ((r && r.diagnostics) || []).map(function (/** @type {Record<string, any>} */ d) { return d.message }).join('\n')
         patch({ editorBusy: false, editorError: diags || messageOf((res && res.error) || (r && r.error)) })
       }
     }, function (e) {
@@ -252,7 +254,7 @@ export function WorkflowSection(props) {
     })
   }
 
-  function resumeRun(runId) {
+  function resumeRun(/** @type {string} */ runId) {
     if (runActionBusy.current) return
     runActionBusy.current = true
     call('workflowAdmin/resumeRun', { runId: runId }).then(function (res) {
@@ -267,9 +269,10 @@ export function WorkflowSection(props) {
     })
   }
 
-  function runSaved(name) {
+  function runSaved(/** @type {string} */ name) {
     if (runActionBusy.current) return
     runActionBusy.current = true
+    /** @type {Record<string, any>} */
     var payload = { spec: { name: name, args: {} } }
     if (parentSessionRef.current) payload.spec.parentSessionId = parentSessionRef.current
     call('workflowAdmin/runSaved', payload).then(function (res) {
@@ -298,7 +301,7 @@ export function WorkflowSection(props) {
     })
   }
 
-  function deleteSaved(name, scope) {
+  function deleteSaved(/** @type {string} */ name, /** @type {string} */ scope) {
     if (runActionBusy.current) return
     runActionBusy.current = true
     call('workflowAdmin/deleteSaved', { spec: { name: name, scope: scope } }).then(function (res) {
@@ -332,7 +335,7 @@ export function WorkflowSection(props) {
   // 所以这里不做 aria-controls/tabpanel 关联。
   var wfTabs = [{ id: 'runs' }, { id: 'saved' }]
   elements.push(h('div', { key: 'tabs', role: 'tablist', 'aria-label': dshT('工作流'),
-    onKeyDown: function (event) {
+    onKeyDown: function (/** @type {KeyboardEvent} */ event) {
       tabKeyDown(event, wfTabs, state.tab, function (next) { patch({ tab: next, editor: null, savedEditor: null }) })
     },
     style: { display: 'flex', gap: '8px', marginBottom: '12px' } }, [
@@ -354,7 +357,7 @@ export function WorkflowSection(props) {
 
   return h('div', { 'data-dsh-admin-section': '' }, elements)
 
-  function tabButton(key, label) {
+  function tabButton(/** @type {string} */ key, /** @type {string} */ label) {
     var active = state.tab === key
     return h('button', {
       key: 'tab-' + key,
@@ -384,7 +387,7 @@ export function WorkflowSection(props) {
           role: 'button',
           tabIndex: 0,
           onClick: openTpl,
-          onKeyDown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
+          onKeyDown: function (/** @type {KeyboardEvent} */ event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTpl() } },
           style: { flex: '1', minWidth: '170px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))', cursor: 'pointer' },
         }, [
           h('div', { key: 't', style: { fontWeight: '700' } }, tpl.title),
@@ -410,7 +413,7 @@ export function WorkflowSection(props) {
     return h('div', { key: 'runs-tab' }, children)
   }
 
-  function runCard(run) {
+  function runCard(/** @type {Record<string, any>} */ run) {
     var statusColor = run.status === 'completed' ? '#2e7d32'
       : run.status === 'errored' ? '#c00'
       : run.status === 'stopped' ? '#b26a00'
@@ -455,8 +458,8 @@ export function WorkflowSection(props) {
         h('div', { key: 'q-row', style: { display: 'flex', gap: '8px' } }, [
           h(UiInput, {
             key: 'q-input', className: 'wf-input', style: { flex: '1' }, placeholder: dshT('回答…'), value: state.answerText || '',
-            onChange: function (e) { patch({ answerText: e.target.value }) },
-            onKeyDown: function (e) { if (e.key === 'Enter') submitAnswer() },
+            onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ answerText: e.target.value }) },
+            onKeyDown: function (/** @type {{ key: string }} */ e) { if (e.key === 'Enter') submitAnswer() },
           }),
           h('button', {
             key: 'q-btn', onClick: submitAnswer, disabled: state.answerBusy,
@@ -491,7 +494,7 @@ export function WorkflowSection(props) {
         isAmend ? dshT('改建工作流（已完成步骤走缓存，不重花调用）') : dshT('新建工作流')),
       h(UiInput, {
         key: 'label', className: 'wf-input', placeholder: dshT('名称（可选）'), value: ed.label,
-        onChange: function (e) { ed.label = e.target.value; patch({ editor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.label = e.target.value; patch({ editor: ed }) },
         readOnly: isAmend,
       }),
       (!isAmend && state.liveSessions.length > 1)
@@ -499,9 +502,9 @@ export function WorkflowSection(props) {
           h('span', { key: 'parent-label', style: { flex: 'none', fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)' } }, dshT('父会话')),
           h('select', {
             key: 'parent', value: state.parentSessionId,
-            onChange: function (e) { parentSessionRef.current = e.target.value; patch({ parentSessionId: e.target.value }) },
+            onChange: function (/** @type {{ target: { value: string } }} */ e) { parentSessionRef.current = e.target.value; patch({ parentSessionId: e.target.value }) },
             style: inputStyle({ flex: '1' }),
-          }, state.liveSessions.map(function (s) {
+          }, state.liveSessions.map(function (/** @type {Record<string, any>} */ s) {
             return h('option', { key: s.id, value: s.id }, (s.title || s.id) + (s.cwd ? ' · ' + s.cwd : ''))
           })),
         ])
@@ -511,12 +514,12 @@ export function WorkflowSection(props) {
           : null,
       h('textarea', {
         key: 'script', placeholder: dshT('TypeScript / JavaScript，顶层 return 返回结果'), value: ed.script,
-        onChange: function (e) { ed.script = e.target.value; patch({ editor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.script = e.target.value; patch({ editor: ed }) },
         style: textareaStyle(),
       }),
       h('textarea', {
         key: 'args', placeholder: dshT('args（JSON 对象）'), value: ed.argsText,
-        onChange: function (e) { ed.argsText = e.target.value; patch({ editor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.argsText = e.target.value; patch({ editor: ed }) },
         style: textareaStyle({ height: '60px' }),
       }),
     ]
@@ -554,7 +557,7 @@ export function WorkflowSection(props) {
     return h('div', { key: 'saved-tab' }, children)
   }
 
-  function savedCard(rec) {
+  function savedCard(/** @type {Record<string, any>} */ rec) {
     var isConfirm = state.confirmDelete === rec.name + ':' + rec.scope
     var row = [
       h('span', { key: 'name', style: { fontWeight: '600' } }, rec.name),
@@ -581,11 +584,11 @@ export function WorkflowSection(props) {
       h('div', { key: 'head', style: { fontWeight: '700', marginBottom: '8px' } }, dshT('保存到工作库')),
       h(UiInput, {
         key: 'name', className: 'wf-input', placeholder: dshT('名称（字母数字 . _ -）'), value: ed.name,
-        onChange: function (e) { ed.name = e.target.value; patch({ savedEditor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.name = e.target.value; patch({ savedEditor: ed }) },
       }),
       h('select', {
         key: 'scope', value: ed.scope,
-        onChange: function (e) { ed.scope = e.target.value; patch({ savedEditor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.scope = e.target.value; patch({ savedEditor: ed }) },
         style: inputStyle(),
       }, [
         h('option', { key: 'g', value: 'global' }, dshT('全局')),
@@ -593,11 +596,11 @@ export function WorkflowSection(props) {
       ]),
       h(UiInput, {
         key: 'desc', className: 'wf-input', placeholder: dshT('一句话描述（可选）'), value: ed.description,
-        onChange: function (e) { ed.description = e.target.value; patch({ savedEditor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.description = e.target.value; patch({ savedEditor: ed }) },
       }),
       h('textarea', {
         key: 'script', placeholder: dshT('脚本'), value: ed.script,
-        onChange: function (e) { ed.script = e.target.value; patch({ savedEditor: ed }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.script = e.target.value; patch({ savedEditor: ed }) },
         style: textareaStyle(),
       }),
     ]
@@ -676,7 +679,7 @@ export function wfTemplates() {
 ]
 }
 
-export function statusText(s) {
+export function statusText(/** @type {string} */ s) {
   return s === 'running' ? dshT('运行中')
     : s === 'completed' ? dshT('已完成')
     : s === 'errored' ? dshT('失败')

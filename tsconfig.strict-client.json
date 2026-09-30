@@ -29,6 +29,10 @@
     "src/client/panels/todo.js",
     "src/client/panels/workspaces.js",
     "src/client/panels/shared.js",
-    "src/client/panels/subagents.js"
+    "src/client/panels/subagents.js",
+    "src/client/panels/workflow.js",
+    "src/client/panels/commands-hooks.js",
+    "src/client/panels/mcp.js",
+    "src/client/panels/sessions.js"
   ]
 }

@@ -3,6 +3,64 @@ import { UiButton, UiCheckbox, UiInput, createElement, dshT, messageOf, sectionS
 import { safeLocalStorage } from './shared.js'
 
 /**
+ * Types for this panel's helpers. `call` stays a duck-typed RPC boundary by
+ * design (the same seam skills.js / web-search.js declare): its result
+ * envelope is per-method, so the resolved value type is `any` — a boundary,
+ * not unmodelled data.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PanelSectionProps
+ */
+
+/**
+ * One MCP entry row as projected by the host's `mcpAdmin/list`. `config` is
+ * the parsed cordis.patch.yml block and is null / undefined when the row
+ * could not be parsed safely (such rows are read-only in this panel); the
+ * rest of the object is host-owned, so it stays `any`.
+ * @typedef {{ id: string, serverName?: string, config?: any }} McpListEntry
+ */
+
+/**
+ * One connectivity-probe record, held per entry id in `mcpTestState` and
+ * mirrored to localStorage (where only durable `ok` results are persisted).
+ * `result` is the host's `mcpAdmin/test` payload — duck-typed by design.
+ * @typedef {{ busy?: boolean, result?: any, error?: string | null, at?: number }} McpTestEntry
+ */
+
+/**
+ * The per-entry test-status map, keyed by MCP entry id.
+ * @typedef {Record<string, McpTestEntry>} McpTestState
+ */
+
+/**
+ * The one open tool-invocation bench: the picked tool, the raw JSON
+ * arguments box, the in-flight flag, and the normalized host result.
+ * @typedef {{ entryId: string, serverName: string, tools: Array<string>, toolRequired: Record<string, Array<string>>, tool: string, argsText: string, busy: boolean, result: any, error: string | null }} McpPlayground
+ */
+
+/**
+ * The change event this panel's own handlers read out of a text input /
+ * select / textarea (mirrors shared.js's InputChangeEvent, which is
+ * module-local there and therefore not importable).
+ * @typedef {{ target: { value: string } }} McpInputEvent
+ */
+
+/**
+ * The section state `renderMcpSection` reads. `mcpDraft` is the locally
+ * staged editor bag (host config values merged with the panel's own field
+ * strings), so it stays `any`; everything else is this panel's own shape.
+ * @typedef {{
+ * mcpEntries: Array<McpListEntry>,
+ * mcpBusy: boolean,
+ * mcpError: string,
+ * mcpNote: string,
+ * mcpEditorOpen: boolean,
+ * mcpDraft: any,
+ * mcpTestState: McpTestState,
+ * mcpPlayground: McpPlayground | null,
+ * mcpConfirmRemove: string | null,
+ * }} McpSectionState
+ */
+
+/**
  * MCP服务器 settings section (standalone settings-nav page).
  */
 
@@ -23,6 +81,11 @@ export function mcpTestStorage() {
   return safeLocalStorage()
 }
 
+/**
+ * Read the persisted MCP test-result cache. A missing, unparseable, or
+ * storage-unavailable backend yields an empty map.
+ * @returns {McpTestState} entryId -> cached probe record.
+ */
 export function loadMcpTestCache() {
   var store = mcpTestStorage()
   if (store === null) return {}
@@ -34,7 +97,7 @@ export function loadMcpTestCache() {
     // Purge failure records persisted by older builds: only a durable OK is
     // worth restoring on mount; a stale ❌ from a past outage must not
     // outlive the session it happened in.
-    var out = {}
+    var out = /** @type {McpTestState} */ ({})
     for (var id in parsed) {
       var entry = parsed[id]
       if (entry && entry.result && entry.result.ok === true) out[id] = entry
@@ -45,12 +108,13 @@ export function loadMcpTestCache() {
   }
 }
 
-/** Mirror settled, successful probes into localStorage (best-effort). */
+/** Mirror settled, successful probes into localStorage (best-effort).
+ * @param {McpTestState} state - entryId -> the current probe record. */
 export function saveMcpTestCache(state) {
   var store = mcpTestStorage()
   if (store === null) return
   try {
-    var out = {}
+    var out = /** @type {McpTestState} */ ({})
     for (var id in state) {
       var s = state[id]
       // Busy rows keep the previous cached result; failures stay ephemeral —
@@ -66,7 +130,8 @@ export function saveMcpTestCache(state) {
   }
 }
 
-/** Drop one entry's cached probe (config saved or entry removed). */
+/** Drop one entry's cached probe (config saved or entry removed).
+ * @param {string} id - the entry whose cached probe is dropped. */
 export function clearMcpTestCacheEntry(id) {
   var store = mcpTestStorage()
   if (store === null) return
@@ -78,11 +143,14 @@ export function clearMcpTestCacheEntry(id) {
   } catch (e) { /* ignore */ }
 }
 
-/** Drop test states whose entry no longer exists in the host list. */
+/** Drop test states whose entry no longer exists in the host list.
+ * @param {McpTestState} map - the current test-state map.
+ * @param {Array<McpListEntry>} entries - the live host entry list.
+ * @returns {McpTestState} the pruned map. */
 export function pruneMcpTestState(map, entries) {
-  var valid = {}
+  var valid = /** @type {Record<string, boolean>} */ ({})
   for (var i = 0; i < entries.length; i++) valid[entries[i].id] = true
-  var next = {}
+  var next = /** @type {McpTestState} */ ({})
   var changed = false
   for (var id in map) {
     if (valid[id]) next[id] = map[id]
@@ -92,11 +160,12 @@ export function pruneMcpTestState(map, entries) {
   return next
 }
 
-/** Compact timestamp for a cached probe ("14:32" today, "6-1 14:32" older). */
+/** Compact timestamp for a cached probe ("14:32" today, "6-1 14:32" older).
+ * @param {number} ms - epoch milliseconds. */
 export function formatTestTime(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
   var d = new Date(ms)
-  var pad = function (n) { return (n < 10 ? '0' : '') + String(n) }
+  var pad = function (/** @type {number} */ n) { return (n < 10 ? '0' : '') + String(n) }
   var hm = pad(d.getHours()) + ':' + pad(d.getMinutes())
   var now = new Date()
   if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) return hm
@@ -116,9 +185,12 @@ export function formatTestTime(ms) {
 
 export var UPDATE_REMINDER_KEY = 'dsh-plugin-admin/update-reminders'
 
-/** Shape-merge a reminder entry (keeps the original truthy fields). */
+/** Shape-merge a reminder entry (keeps the original truthy fields).
+ * @param {Record<string, any>} entry - the current reminder fields.
+ * @param {Record<string, any>} partial - the fields to overwrite.
+ * @returns {Record<string, any>} the merged copy. */
 export function mergeReminder(entry, partial) {
-  var next = {}
+  var next = /** @type {Record<string, any>} */ ({})
   for (var k in entry) next[k] = entry[k]
   for (var pk in partial) next[pk] = partial[pk]
   return next
@@ -136,7 +208,7 @@ export function loadUpdateReminders() {
     var raw = store.getItem(UPDATE_REMINDER_KEY)
     if (raw === null) return {}
     var parsed = JSON.parse(raw)
-    var out = {}
+    var out = /** @type {Record<string, any>} */ ({})
     if (parsed !== null && typeof parsed === 'object') {
       for (var name in parsed) {
         var r = parsed[name]
@@ -156,12 +228,13 @@ export function loadUpdateReminders() {
   }
 }
 
-/** Mirror the current reminder set into localStorage (best-effort). */
+/** Mirror the current reminder set into localStorage (best-effort).
+ * @param {Record<string, any>} map - name -> reminder entry. */
 export function saveUpdateReminders(map) {
   var store = safeLocalStorage()
   if (store === null) return
   try {
-    var out = {}
+    var out = /** @type {Record<string, any>} */ ({})
     for (var name in map) {
       var r = map[name]
       if (r && r.updateAvailable === true && typeof r.latest === 'string' && r.latest.length > 0) {
@@ -187,14 +260,14 @@ export function saveUpdateReminders(map) {
  *                         surface it — saveUpdateReminders skips those
  *   - entries absent from `list` are no longer live registry installs ->
  *     stale reminders dropped
- * @param curMap - the CURRENT updates state ({ name -> entry }).
- * @param list - per-plugin check results.
+ * @param {Record<string, any>} curMap - the CURRENT updates state ({ name -> entry }).
+ * @param {Array<Record<string, any>>} list - per-plugin check results.
  * @returns the complete next map.
  */
 export function mergeUpdateReminders(curMap, list) {
-  var liveNames = {}
+  var liveNames = /** @type {Record<string, boolean>} */ ({})
   for (var a = 0; a < list.length; a++) liveNames[list[a].name] = true
-  var map = {}
+  var map = /** @type {Record<string, any>} */ ({})
   for (var k in curMap) {
     if (curMap[k] && liveNames[k]) map[k] = curMap[k]
   }
@@ -216,7 +289,9 @@ export function mergeUpdateReminders(curMap, list) {
   return map
 }
 
-/** Aggregate summary line for a finished check (pure). */
+/** Aggregate summary line for a finished check (pure).
+ * @param {Record<string, any>} map - name -> reminder entry.
+ * @param {number} checkedCount - how many plugins were checked. */
 export function updateCheckNote(map, checkedCount) {
   var updateCount = 0
   var checkErrorCount = 0
@@ -236,6 +311,9 @@ export function updateCheckNote(map, checkedCount) {
  * The MCP tool playground: tool picker (from the last probe's list), a raw
  * JSON arguments box, an explicit it-really-runs warning, and the normalized
  * result. One bench per panel, opened from a card's 🧪 试调用 button.
+ * @param {McpPlayground} pg - the open bench: { entryId, serverName, tools, toolRequired, tool, argsText, busy, result, error }.
+ * @param {(partial: Record<string, any>) => void} patch - merge into the bench.
+ * @param {(method: string, args: Record<string, any>) => Promise<any>} callRemote - the RPC seam.
  */
 export function renderMcpPlayground(pg, patch, callRemote) {
   // Required params of the selected tool (from the probe's inputSchema
@@ -277,7 +355,7 @@ export function renderMcpPlayground(pg, patch, callRemote) {
         ? createElement('select', {
             className: 'input',
             value: pg.tool,
-            onChange: function (e) { patch({ tool: e.target.value }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patch({ tool: e.target.value }) },
           }, pg.tools.map(function (t) {
             return createElement('option', { key: t, value: t }, t)
           }))
@@ -287,7 +365,7 @@ export function renderMcpPlayground(pg, patch, callRemote) {
         rows: 5,
         placeholder: dshT('工具参数（JSON 对象，键名以该工具的 inputSchema 为准）'),
         value: pg.argsText,
-        onChange: function (e) { patch({ argsText: e.target.value }) },
+        onChange: function (/** @type {McpInputEvent} */ e) { patch({ argsText: e.target.value }) },
       }),
       requiredList.length > 0
         ? createElement('div', { className: 'mcp-test-warn' },
@@ -324,6 +402,13 @@ export function renderMcpPlayground(pg, patch, callRemote) {
     ))
 }
 
+/**
+ * MCP servers settings section: list / add / edit / remove the
+ * cordis.patch.yml MCP rows, run host connectivity probes (cached in
+ * localStorage so a restored status is never mistaken for a fresh one),
+ * and open one tool-invocation playground bench per panel.
+ * @param {PanelSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face.
+ */
 export function McpSection(props) {
   var kit = sectionState({
     mcpEntries: [],
@@ -355,15 +440,24 @@ export function McpSection(props) {
   // and leave its row stuck on 「检测中…」 forever.
   var testSeq = useRef({})
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patchMcp(partial) {
     kit.patch(partial)
   }
 
   // Merge a partial into the CURRENT mcpDraft via a functional update, so
   // rapid successive field edits (React batching) never lose earlier input.
+  /**
+   * Merge a partial into the CURRENT mcpDraft via a functional update, so
+   * rapid successive field edits (React batching) never lose earlier input.
+   * @param {Record<string, any>} partial - the draft keys to overwrite.
+   */
   function patchDraft(partial) {
-    setMView(function (cur) {
-      var next = {}
+    setMView(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.mcpDraft = mergeDraft(cur.mcpDraft, partial)
       return next
@@ -372,12 +466,17 @@ export function McpSection(props) {
 
   // Nested patch for the playground bench — patchMcp is a TOP-LEVEL merge and
   // would clobber the whole bench object with flat fields.
+  /**
+   * Nested patch for the playground bench — patchMcp is a TOP-LEVEL merge and
+   * would clobber the whole bench object with flat fields.
+   * @param {Record<string, any>} partial - the bench keys to overwrite.
+   */
   function patchPlayground(partial) {
-    setMView(function (cur) {
-      var next = {}
+    setMView(function (/** @type {Record<string, any>} */ cur) {
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       if (cur.mcpPlayground !== null) {
-        var pg = {}
+        var pg = /** @type {Record<string, any>} */ ({})
         for (var pk in cur.mcpPlayground) pg[pk] = cur.mcpPlayground[pk]
         for (var mk in partial) pg[mk] = partial[mk]
         next.mcpPlayground = pg
@@ -391,6 +490,11 @@ export function McpSection(props) {
   var callRemote = props.call
 
   // ---- MCP playground (tools/call bench) ----
+  /**
+   * Open the tool-invocation bench for one entry, seeded with the tool list
+   * (and per-tool required params) of that entry's last successful probe.
+   * @param {McpListEntry} entry - the row whose tools are called.
+   */
   function openMcpPlayground(entry) {
     var probe = mView.mcpTestState && mView.mcpTestState[entry.id]
     var tools = probe && probe.result && Array.isArray(probe.result.tools) ? probe.result.tools : []
@@ -416,14 +520,18 @@ export function McpSection(props) {
     })
   }
 
+  /**
+   * One list load: replaces the entry roster and prunes cached probes whose
+   * entry no longer exists on the host.
+   */
   function reloadMcp() {
     patchMcp({ mcpBusy: true, mcpError: '' })
     callRemote('mcpAdmin/list', {}).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
         var entries = (result.value && result.value.entries) || []
-        setMView(function (cur) {
-          var next = {}
+        setMView(function (/** @type {Record<string, any>} */ cur) {
+          var next = /** @type {Record<string, any>} */ ({})
           for (var k in cur) next[k] = cur[k]
           next.mcpBusy = false
           next.mcpEntries = entries
@@ -440,6 +548,10 @@ export function McpSection(props) {
     })
   }
 
+  /**
+   * Open the editor for one entry, or the add form when `entry` is null.
+   * @param {McpListEntry | null} entry - the row to edit, or null to add a server.
+   */
   function openMcpEditor(entry) {
     if (entry !== null && entry !== undefined && (entry.config === null || entry.config === undefined)) {
       patchMcp({ mcpError: dshT('该 MCP 配置无法安全解析，已禁止在此覆盖；请在 cordis.patch.yml 中手动编辑。') })
@@ -447,9 +559,9 @@ export function McpSection(props) {
     }
     var source = entry !== null && entry !== undefined ? entry.config : null
     var draft = source ? {
-      id: entry.id,
+      id: /** @type {McpListEntry} */ (entry).id,
       isNew: false,
-      serverName: source.serverName || entry.id,
+      serverName: source.serverName || /** @type {McpListEntry} */ (entry).id,
       transport: source.transport,
       command: source.command || '',
       url: source.url || '',
@@ -520,6 +632,7 @@ export function McpSection(props) {
     // Lines without a top-level `=` cannot become pairs; they are skipped (and
     // reported in the save note) instead of silently shaping the outcome.
     var skippedPairLines = 0
+    /** @type {Record<string, any>} */
     var config
     if (draft.transport === 'streamable-http') {
       config = { transport: 'streamable-http', serverName: draft.serverName, url: draft.url }
@@ -528,7 +641,7 @@ export function McpSection(props) {
       if (draft.headersChanged && draft.headers !== headersStr && draft.headers !== '') {
         // Newline-only split: header values legitimately contain ';'/','
         // (Cookie, Accept), which must never become pair separators.
-        var pairs = draft.headers.split('\n').map(function (s) { return s.trim() }).filter(Boolean)
+        var pairs = draft.headers.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
         for (var i = 0; i < pairs.length; i++) {
           var eq = pairs[i].indexOf('=')
           if (eq > 0) headers[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
@@ -551,7 +664,7 @@ export function McpSection(props) {
       if (draft.envChanged && draft.env !== envStr && draft.env !== '') {
         // Newline-only split: values like PATH=C:\a;C:\b would lose their
         // tail (and Windows paths carry ';' everywhere).
-        var pairs = draft.env.split('\n').map(function (s) { return s.trim() }).filter(Boolean)
+        var pairs = draft.env.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
         for (var i = 0; i < pairs.length; i++) {
           var eq = pairs[i].indexOf('=')
           if (eq > 0) env[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
@@ -600,6 +713,10 @@ export function McpSection(props) {
     })
   }
 
+  /**
+   * Remove one entry from cordis.patch.yml and drop its cached probe.
+   * @param {string} id - the entry id to remove.
+   */
   function removeMcpEntry(id) {
     patchMcp({ mcpBusy: true, mcpError: '' })
     callRemote('mcpAdmin/remove', { id: id }).then(function (result) {
@@ -621,19 +738,22 @@ export function McpSection(props) {
    * Set one entry's connectivity-test status against the CURRENT state.
    * Settled successful probes are mirrored into localStorage so the last
    * known status survives tab switches and reopening the settings dialog.
+   * @param {string} id - the entry whose status is set.
+   * @param {Record<string, any>} partial - the test-state keys to overwrite.
    */
   function patchMcpTest(id, partial) {
-    setMView(function (cur) {
+    setMView(function (/** @type {Record<string, any>} */ cur) {
       var nextTestState = mergeTestState(cur.mcpTestState, id, partial)
       saveMcpTestCache(nextTestState)
-      var next = {}
+      var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.mcpTestState = nextTestState
       return next
     })
   }
 
-  /** Run a host-side connectivity probe for one entry and stash the result. */
+  /** Run a host-side connectivity probe for one entry and stash the result.
+   * @param {string} id - the entry to probe. */
   function testMcpEntry(id) {
     var seq = testSeq.current[id] = (testSeq.current[id] || 0) + 1
     patchMcpTest(id, { busy: true, result: null, error: null })
@@ -657,6 +777,24 @@ export function McpSection(props) {
     renderMcpSection(mView, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote))
 }
 
+/**
+ * The whole MCP settings surface: the header actions, one card per entry
+ * with its connectivity status and 测试 / 试调用 / 编辑 / 移除 buttons (移除
+ * takes a second click in a confirm bar), the add / editor form, and the
+ * tool-invocation playground when one is open.
+ * @param {McpSectionState} view - the section state bag.
+ * @param {(partial: Record<string, any>) => void} patchMcp - merge into the section state.
+ * @param {(partial: Record<string, any>) => void} patchDraft - merge into the current draft.
+ * @param {(partial: Record<string, any>) => void} patchPlayground - merge into the open playground.
+ * @param {() => void} reloadMcp - re-read the entry list from the host.
+ * @param {(entry: McpListEntry | null) => void} openMcpEditor - open the editor for a row, or the add form for null.
+ * @param {() => void} closeMcpEditor - close the editor.
+ * @param {() => void} saveMcpDraft - persist the current draft.
+ * @param {(id: string) => void} removeMcpEntry - delete one entry.
+ * @param {(id: string) => void} testMcpEntry - run one connectivity probe.
+ * @param {(entry: McpListEntry) => void} openMcpPlayground - open the invocation bench for a row.
+ * @param {(method: string, args: Record<string, any>) => Promise<any>} callRemote - the RPC seam.
+ */
 export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote) {
   var children = []
   var header = createElement('div', { className: 'group-header', key: 'mcp-header', style: { marginTop: 0 } },
@@ -842,7 +980,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
           createElement(UiInput, {
             value: d.id,
             disabled: !d.isNew,
-            onChange: function (e) { patchDraft({ id: e.target.value }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ id: e.target.value }) },
           }),
           d.isNew ? createElement(UiButton, {
             type: 'button',
@@ -857,7 +995,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
         createElement('label', { style: labelStyle }, dshT('serverName（模型命名空间）')),
         createElement(UiInput, {
           value: d.serverName,
-          onChange: function (e) { patchDraft({ serverName: e.target.value }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ serverName: e.target.value }) },
         }),
       ),
       createElement('div', { style: fieldStyle, key: 'f-transport' },
@@ -865,7 +1003,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
         createElement('select', {
           className: 'input',
           value: d.transport,
-          onChange: function (e) { patchDraft({ transport: e.target.value }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ transport: e.target.value }) },
         },
           createElement('option', { value: 'stdio' }, dshT('stdio（子进程）')),
           createElement('option', { value: 'streamable-http' }, 'streamable-http（HTTP）'),
@@ -876,14 +1014,14 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
         createElement(UiInput, {
           value: d.command,
           placeholder: 'npx -y @modelcontextprotocol/server-github',
-          onChange: function (e) { patchDraft({ command: e.target.value }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ command: e.target.value }) },
         }),
       ) : createElement('div', { style: fieldStyle, key: 'f-url' },
         createElement('label', { style: labelStyle }, dshT('url（MCP 端点）')),
         createElement(UiInput, {
           value: d.url,
           placeholder: 'http://localhost:3000/mcp',
-          onChange: function (e) { patchDraft({ url: e.target.value }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ url: e.target.value }) },
         }),
       ),
       d.transport === 'streamable-http' ? createElement('div', { style: fieldStyle, key: 'f-headers' },
@@ -892,7 +1030,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
           className: 'input',
           style: { minHeight: '48px' },
           value: d.headers,
-          onChange: function (e) { patchDraft({ headers: e.target.value, headersChanged: true }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ headers: e.target.value, headersChanged: true }) },
         }),
         createElement('div', { style: secretHintStyle }, dshT('已存的 header 只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该键。')),
       ) : null,
@@ -900,7 +1038,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
         createElement('label', { style: labelStyle }, dshT('args（空格分隔，可选）')),
         createElement(UiInput, {
           value: d.args,
-          onChange: function (e) { patchDraft({ args: e.target.value, argsChanged: true }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ args: e.target.value, argsChanged: true }) },
         }),
       ) : null,
       d.transport === 'stdio' ? createElement('div', { style: fieldStyle, key: 'f-env' },
@@ -909,14 +1047,14 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
           className: 'input',
           style: { minHeight: '48px' },
           value: d.env,
-          onChange: function (e) { patchDraft({ env: e.target.value, envChanged: true }) },
+          onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ env: e.target.value, envChanged: true }) },
         }),
         createElement('div', { style: secretHintStyle }, dshT('已存的环境变量只回键名（值不回传浏览器）：留空即沿用已存的值，删掉整行才会移除该变量。')),
       ) : null,
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', marginBottom: '4px', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.3))', paddingTop: '8px' }, key: 'f-reconnect-header' },
         createElement(UiCheckbox, {
           checked: d.reconnectEnabled,
-          onChange: function (next) { patchDraft({ reconnectEnabled: next }) },
+          onChange: function (/** @type {boolean} */ next) { patchDraft({ reconnectEnabled: next }) },
           label: dshT('启用自动重连'),
         }),
       ),
@@ -927,7 +1065,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             type: 'number',
             min: 0,
             value: d.reconnectInitialDelayMs,
-            onChange: function (e) { patchDraft({ reconnectInitialDelayMs: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectInitialDelayMs: Number(e.target.value) }) },
           }),
         ),
         createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1 1 120px' }, key: 'f-reconnect-md' },
@@ -936,7 +1074,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             type: 'number',
             min: 0,
             value: d.reconnectMaxDelayMs,
-            onChange: function (e) { patchDraft({ reconnectMaxDelayMs: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxDelayMs: Number(e.target.value) }) },
           }),
         ),
         createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1 1 120px' }, key: 'f-reconnect-ma' },
@@ -945,7 +1083,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             type: 'number',
             min: 0,
             value: d.reconnectMaxAttempts,
-            onChange: function (e) { patchDraft({ reconnectMaxAttempts: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxAttempts: Number(e.target.value) }) },
           }),
         ),
       ) : null,
@@ -985,9 +1123,10 @@ export var MCP_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX
 /**
  * Generate a fresh MCP entry id that is not already used by any listed entry
  * (an id collision would silently overwrite the existing entry on upsert).
+ * @param {Array<McpListEntry>} entries - the currently listed entries.
  */
 export function generateMcpId(entries) {
-  var taken = {}
+  var taken = /** @type {Record<string, boolean>} */ ({})
   for (var i = 0; i < entries.length; i++) taken[entries[i].id] = true
   var candidate
   do {
@@ -999,16 +1138,27 @@ export function generateMcpId(entries) {
   return candidate
 }
 
+/**
+ * Shallow-merge a partial draft onto a copy of the current draft (partial
+ * wins); never mutates its arguments.
+ * @param {Record<string, any>} draft - the current draft values.
+ * @param {Record<string, any>} partial - the keys to overwrite.
+ * @returns {Record<string, any>} the merged copy.
+ */
 export function mergeDraft(draft, partial) {
-  var next = {}
+  var next = /** @type {Record<string, any>} */ ({})
   for (var k in draft) next[k] = draft[k]
   for (var pk in partial) next[pk] = partial[pk]
   return next
 }
 
-/** Set one entry's test status inside the shared mcpTestState map. */
+/** Set one entry's test status inside the shared mcpTestState map.
+ * @param {Record<string, any>} map - the current test-state map.
+ * @param {string} id - the entry id to patch.
+ * @param {Record<string, any>} partial - the test-state keys to overwrite.
+ * @returns {Record<string, any>} the next map. */
 export function mergeTestState(map, id, partial) {
-  var next = {}
+  var next = /** @type {Record<string, any>} */ ({})
   for (var k in map) next[k] = map[k]
   next[id] = {}
   var cur = map[id] || {}

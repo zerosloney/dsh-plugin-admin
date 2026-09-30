@@ -3,6 +3,15 @@ import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, d
 import { tabKeyDown } from './shared.js'
 import { WebSearchSection } from './web-search.js'
 
+/**
+ * The renderer-bound props the Web 与会话 entry receives: the RPC seam (its
+ * result envelope is duck-typed per method — `{ ok: true, value }` /
+ * `{ ok: false, error }` — so the resolved type stays `any` by design: a
+ * boundary, not unmodelled data), plus the sidebar nudge the entry threads
+ * down to 历史会话.
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any>, refreshSessions: (() => void) | null }} WebSessionsSectionProps
+ */
+
 // Error code dsh raises when full-text session search is not enabled; the
 // 历史会话 search box turns it into the one-click enable banner.
 export var SEARCH_DISABLED_MARKER = 'SESSION_QUERY_SEARCH_DISABLED'
@@ -19,6 +28,7 @@ export var SEARCH_DISABLED_MARKER = 'SESSION_QUERY_SEARCH_DISABLED'
  * `data-cha-section` chrome — the same recipe the 自动化 page uses.
  * `refreshSessions` flows through so a deleted session leaves the sidebar
  * list immediately.
+ * @param {WebSessionsSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face, `refreshSessions` is the sidebar nudge.
  */
 export function WebSessionsSection(props) {
   var tabHooks = useState('sessions')
@@ -36,7 +46,7 @@ export function WebSessionsSection(props) {
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
     createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('Web 与会话'),
-      onKeyDown: function (event) { tabKeyDown(event, tabs, selected.id, setTab) } },
+      onKeyDown: function (/** @type {KeyboardEvent} */ event) { tabKeyDown(event, tabs, selected.id, setTab) } },
       tabs.map(function (entry) {
         return createElement('button', {
           type: 'button', role: 'tab', key: entry.id,
@@ -57,6 +67,7 @@ export function WebSessionsSection(props) {
 
 /**
  * 历史会话 panel — the default tab of the Web 与会话 section.
+ * @param {WebSessionsSectionProps} props - the renderer-bound props; `call` arrives from the slot inject face, `refreshSessions` is the sidebar nudge.
  */
 export function SessionsSection(props) {
   var kit = sectionState({
@@ -93,14 +104,22 @@ export function SessionsSection(props) {
   var collapsedGroups = pairCollapsed[0]
   var setCollapsedGroups = pairCollapsed[1]
 
+  /**
+   * Toggle one directory group's folded state (persisted with the pins).
+   * @param {string} key - the group key ('ungrouped' or 'ws-<workspaceId>').
+   */
   function toggleGroupCollapsed(key) {
-    setCollapsedGroups(function (cur) {
-      var next = cur.indexOf(key) !== -1 ? cur.filter(function (k) { return k !== key }) : cur.concat([key])
+    setCollapsedGroups(function (/** @type {string[]} */ cur) {
+      var next = cur.indexOf(key) !== -1 ? cur.filter(function (/** @type {string} */ k) { return k !== key }) : cur.concat([key])
       saveCollapsedGroups(next)
       return next
     })
   }
 
+  /**
+   * Fold or unfold every directory group at once.
+   * @param {string[]} keys - the group keys to store (an empty list unfolds all).
+   */
   function collapseAllGroups(keys) {
     var next = Array.isArray(keys) ? keys.slice() : []
     setCollapsedGroups(next)
@@ -137,7 +156,11 @@ export function SessionsSection(props) {
     return { label: label, plan: plan }
   }
 
-  /** Raise the bulk-delete confirmation bar for one scope. */
+  /**
+   * Raise the bulk-delete confirmation bar for one scope.
+   * @param {string} scope - 'all' (current projection) or 'group'.
+   * @param {string|null} groupKey - the group key for scope 'group'.
+   */
   function requestBulkDelete(scope, groupKey) {
     if (sView.bulkBusy) return
     var target = bulkTargets(scope, groupKey)
@@ -191,9 +214,14 @@ export function SessionsSection(props) {
   // Usage dashboard (VibeUsage posture): lazily fetched aggregates over all
   // sessions — toggled from the toolbar, folded host-side from the same
   // revision-cached rows list() uses.
+
+  /**
+   * Toggle one session id in the persisted pin whitelist.
+   * @param {string} id - the session id to star/unstar.
+   */
   function togglePinned(id) {
-    setPinnedIds(function (cur) {
-      var next = cur.indexOf(id) !== -1 ? cur.filter(function (x) { return x !== id }) : cur.concat([id])
+    setPinnedIds(function (/** @type {string[]} */ cur) {
+      var next = cur.indexOf(id) !== -1 ? cur.filter(function (/** @type {string} */ x) { return x !== id }) : cur.concat([id])
       savePinnedIds(next)
       return next
     })
@@ -204,6 +232,10 @@ export function SessionsSection(props) {
   // one's hits when both are in flight.
   var searchSeq = useRef(0)
 
+  /**
+   * Merge a partial state patch into the section state.
+   * @param {Record<string, any>} partial - the keys to overwrite.
+   */
   function patchSession(partial) {
     kit.patch(partial)
   }
@@ -231,6 +263,11 @@ export function SessionsSection(props) {
     })
   }
 
+  /**
+   * Run one sessionAdmin mutation over a single session, then reload.
+   * @param {string} method - the RPC verb ('archive' / 'unarchive' / 'deleteSession' / 'closeSession').
+   * @param {string} sessionId - the session to act on.
+   */
   function actSession(method, sessionId) {
     patchSession({ busy: true, error: '', confirming: null })
     callRemote('sessionAdmin/' + method, { sessionId: sessionId }).then(function (result) {
@@ -252,6 +289,11 @@ export function SessionsSection(props) {
   // Markdown transcript download: renders from the session log host-side and
   // saves through the browser's ordinary download flow. A read-only gesture —
   // no list refresh, busy flag, or confirm needed.
+
+  /**
+   * Run (or re-run) the full-text search across every session.
+   * @param {string} [q] - the query; defaults to the search box's current text.
+   */
   function runFulltext(q) {
     var query = (q === undefined || q === null) ? sView.fullNeedle : q
     query = (query || '').trim()
@@ -303,8 +345,15 @@ export function SessionsSection(props) {
   // 体检 loads (different sessions clicked in quick succession) must each
   // land their entry instead of the later-resolving write clobbering the
   // other's with a stale snapshot.
+
+  /**
+   * Merge one session's health entry into the state, functionally.
+   * @param {string} sessionId - the session the entry belongs to.
+   * @param {Record<string, any>} entry - the health entry to merge.
+   */
   function patchHealth(sessionId, entry) {
-    setSView(function (cur) {
+    setSView(function (/** @type {Record<string, any>} */ cur) {
+      /** @type {Record<string, any>} */
       var next = {}
       for (var k in cur) next[k] = cur[k]
       next.healthBySession = Object.assign({}, cur.healthBySession, { [sessionId]: entry })
@@ -312,6 +361,10 @@ export function SessionsSection(props) {
     })
   }
 
+  /**
+   * Fetch one session's health report and merge it into the state.
+   * @param {string} sessionId - the session to inspect.
+   */
   function loadHealth(sessionId) {
     patchHealth(sessionId, { loading: true })
     callRemote('sessionAdmin/healthReport', { sessionId: sessionId }).then(function (result) {
@@ -328,6 +381,10 @@ export function SessionsSection(props) {
     })
   }
 
+  /**
+   * Export one session's transcript as a Markdown download.
+   * @param {Record<string, any>} session - the session row to export.
+   */
   function exportSession(session) {
     callRemote('sessionAdmin/exportSession', { sessionId: session.id }).then(function (result) {
       if (!alive.current) return
@@ -397,6 +454,8 @@ export var FULLTEXT_RENDER_CAP = 200
  * that is both live and in the archived set is shown as 会话在线); otherwise
  * archived wins over ended. Used by both the filter pills and the pill
  * counts so they can never disagree about membership.
+ * @param {Record<string, any>} s - the session row.
+ * @returns {'live'|'archived'|'ended'} the canonical status.
  */
 export function sessionStatus(s) {
   if (s.live) return 'live'
@@ -418,6 +477,10 @@ export function loadPinnedIds() {
   } catch (e) { return [] }
 }
 
+/**
+ * Persist the pin whitelist to localStorage (silently ignored in private mode).
+ * @param {Array<string>} ids - the complete next pinned id list.
+ */
 export function savePinnedIds(ids) {
  try { window.localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids)) } catch (e) { /* private mode */ }
 }
@@ -435,11 +498,19 @@ export function loadCollapsedGroups() {
  } catch (e) { return [] }
 }
 
+/**
+ * Persist the collapsed-group list to localStorage (silently ignored in private mode).
+ * @param {Array<string>} keys - the complete next collapsed group key list.
+ */
 export function saveCollapsedGroups(keys) {
  try { window.localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify(keys)) } catch (e) { /* private mode */ }
 }
 
-/** Compact token count: 940 / 12.3k / 4.5M. */
+/**
+ * Compact token count: 940 / 12.3k / 4.5M.
+ * @param {number} n - the token count.
+ * @returns {string} the compacted count ('' for a non-count).
+ */
 export function formatTokenCount(n) {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return ''
   if (n === 0) return '0'
@@ -449,7 +520,11 @@ export function formatTokenCount(n) {
   return (Math.round(n / 100000) / 10) + 'M'
 }
 
-/** One-card usage tag: "↑1.2k ↓340 · 缓存8.9k" — empty when no usage. */
+/**
+ * One-card usage tag: "↑1.2k ↓340 · 缓存8.9k" — empty when no usage.
+ * @param {{ input?: number, output?: number, cacheRead?: number }|null|undefined} tokens - the row's usage fold.
+ * @returns {string|null} the tag text, or null when there is no usage.
+ */
 export function formatUsageTag(tokens) {
   if (tokens === null || tokens === undefined || typeof tokens !== 'object') return null
   var input = typeof tokens.input === 'number' ? tokens.input : 0
@@ -461,7 +536,11 @@ export function formatUsageTag(tokens) {
   return text
 }
 
-/** Local YYYY-MM-DD key for a timestamp (viewer's calendar). */
+/**
+ * Local YYYY-MM-DD key for a timestamp (viewer's calendar).
+ * @param {number} ms - the epoch milliseconds.
+ * @returns {string} the local calendar day.
+ */
 export function usageDayKey(ms) {
   var d = new Date(ms)
   var m = String(d.getMonth() + 1); if (m.length < 2) m = '0' + m
@@ -469,6 +548,14 @@ export function usageDayKey(ms) {
   return d.getFullYear() + '-' + m + '-' + dd
 }
 
+/**
+ * Project the session rows through the active filter pill and search box.
+ * @param {Array<Record<string, any>>} sessions - every listed session row.
+ * @param {string} filter - the active filter pill ('all' / 'live' / 'archived' / 'ended' / 'pinned').
+ * @param {string} needle - the lowercase search text ('' shows all).
+ * @param {Array<string>} pinnedIds - the pinned id whitelist (the 'pinned' pill).
+ * @returns {Array<Record<string, any>>} the visible rows.
+ */
 export function filterSessions(sessions, filter, needle, pinnedIds) {
   var result = []
   for (var i = 0; i < sessions.length; i++) {
@@ -490,6 +577,9 @@ export function filterSessions(sessions, filter, needle, pinnedIds) {
  * Group sessions by their accounting workspace in registry order; sessions
  * without a workspace trail under an "未分组" bucket. Empty workspaces are
  * omitted so the user only sees groups that currently hold a session.
+ * @param {Array<Record<string, any>>} filtered - the projected (filtered) session rows.
+ * @param {Array<Record<string, any>>} workspaceOrder - the workspace rows in registry order.
+ * @returns {Array<Record<string, any>>} the group buckets, "未分组" last.
  */
 export function buildSessionGroups(filtered, workspaceOrder) {
   var byWs = new Map()
@@ -518,6 +608,14 @@ export function buildSessionGroups(filtered, workspaceOrder) {
 }
 
 /** Full-text search panel: query box + hit rows (session title, snippet). */
+/**
+ * Full-text search panel: query box + hit rows (session title, snippet).
+ * @param {Record<string, any>} view - the panel state.
+ * @param {(partial: Record<string, any>) => void} patch - the state patch merge.
+ * @param {(q?: string) => void} runFulltext - run (or re-run) the search.
+ * @param {() => void} enableSearch - one-click index enablement.
+ * @returns the full-text panel element.
+ */
 export function renderFulltextPanel(view, patch, runFulltext, enableSearch) {
   var h = createElement
   var children = []
@@ -539,8 +637,8 @@ export function renderFulltextPanel(view, patch, runFulltext, enableSearch) {
     h(UiInput, {
       key: 'in',  placeholder: dshT('检索所有会话的消息内容…（如「合并插件」或某个文件名）'),
       value: view.fullNeedle,
-      onKeyDown: function (e) { if (e.key === 'Enter') runFulltext(view.fullNeedle) },
-      onChange: function (e) { patch({ fullNeedle: e.target.value }) },
+      onKeyDown: function (/** @type {{ key: string }} */ e) { if (e.key === 'Enter') runFulltext(view.fullNeedle) },
+      onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ fullNeedle: e.target.value }) },
     }),
     h(UiButton, { key: 'go', variant: 'primary', disabled: view.fullBusy || view.fullNeedle.trim() === '', onClick: function () { runFulltext(view.fullNeedle) } },
       view.fullBusy ? h('span', { className: 'spinner' }) : dshT('搜索')),
@@ -595,7 +693,7 @@ export function buildGroupHeader(g, groupKey, collapsed, view, groupUi) {
     role: 'button',
     tabIndex: 0,
     onClick: function () { groupUi.toggleCollapse(groupKey) },
-    onKeyDown: function (event) {
+    onKeyDown: function (/** @type {{ key: string, preventDefault: () => void }} */ event) {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); groupUi.toggleCollapse(groupKey) }
     },
   },
@@ -616,11 +714,27 @@ export function buildGroupHeader(g, groupKey, collapsed, view, groupUi) {
       className: 'group-action danger',
       title: dshT('删除该目录下的全部 ') + String(g.sessions.length) + dshT(' 个会话（在线会话会先关停）'),
       disabled: view.bulkBusy,
-      onClick: function (e) { e.stopPropagation(); groupUi.requestBulk('group', groupKey) },
+      onClick: function (/** @type {{ stopPropagation: () => void }} */ e) { e.stopPropagation(); groupUi.requestBulk('group', groupKey) },
     }, dshT('🗑 整个目录'))
   )
 }
 
+/**
+ * Render the 历史会话 panel: toolbar, filter pills, directory groups and
+ * the footer in one framed card.
+ * @param {Record<string, any>} view - the panel state.
+ * @param {(partial: Record<string, any>) => void} patch - the state patch merge.
+ * @param {() => void} reload - re-fetch the session list.
+ * @param {(method: string, sessionId: string) => void} act - run one sessionAdmin mutation.
+ * @param {(session: Record<string, any>) => void} onExport - download one session's transcript.
+ * @param {Array<string>} pinnedIds - the pinned id whitelist.
+ * @param {(id: string) => void} togglePinned - star/unstar one session.
+ * @param {(q?: string) => void} runFulltext - run (or re-run) the full-text search.
+ * @param {(sessionId: string) => void} loadHealth - fetch one session's health report.
+ * @param {() => void} enableSearch - one-click full-text index enablement.
+ * @param {Record<string, any>} groupUi - the section's group/bulk controls.
+ * @returns the framed panel element.
+ */
 export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds, togglePinned, runFulltext, loadHealth, enableSearch, groupUi) {
   var elements = []
 
@@ -635,7 +749,7 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
         // 技能页的搜索框一直带 aria-label，这里补齐同一契约。
         'aria-label': dshT('搜索会话'),
         value: view.needle,
-        onChange: function (e) { patch({ needle: e.target.value }) },
+        onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ needle: e.target.value }) },
       }),
       view.needle !== '' ? createElement(UiButton, {
         key: 'btn-clear-search',
@@ -673,6 +787,7 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
   var needle = view.needle.trim().toLowerCase()
   var filtered = filterSessions(view.sessions, view.filter, needle, pinnedIds)
   var groups = buildSessionGroups(filtered, view.workspaces || [])
+  /** @type {string[]} */
   var groupKeys = []
   for (var gk = 0; gk < groups.length; gk++) {
     groupKeys.push(groups[gk].workspaceId === null ? 'ungrouped' : 'ws-' + groups[gk].workspaceId)
@@ -846,6 +961,12 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
 }
 
 /** Health-check report card shown inside a session row once 🩺 is clicked. */
+/**
+ * Health-check report card shown inside a session row once 🩺 is clicked.
+ * @param {string} sessionId - the session id (the element key prefix).
+ * @param {Record<string, any>} health - the merged health entry ({ loading?, report?, summary?, error? }).
+ * @returns the health card element.
+ */
 export function renderHealthReportCard(sessionId, health) {
   if (health.loading) {
     return createElement('div', { key: 'health-' + sessionId, className: 'card-sub', style: { marginTop: '4px' } },
@@ -863,7 +984,7 @@ export function renderHealthReportCard(sessionId, health) {
     for (var ti = 0; ti < r.tools.length; ti++) {
       (function (tool) {
         var code = tool.errorCodes && tool.errorCodes.length > 0
-          ? ' · ' + tool.errorCodes.map(function (ec) { return ec.code + '×' + ec.count }).join(' ')
+          ? ' · ' + tool.errorCodes.map(function (/** @type {{ code: string, count: number }} */ ec) { return ec.code + '×' + ec.count }).join(' ')
           : ''
         rows.push(createElement('div', { key: 't' + tool.name, className: 'card-sub-item', style: { marginRight: '10px' } },
           createElement('span', { style: { fontFamily: 'monospace' } }, tool.name),
@@ -885,11 +1006,24 @@ export function renderHealthReportCard(sessionId, health) {
     rows.length > 0 ? createElement('div', { key: 'tools', className: 'card-sub', style: { flexDirection: 'row', flexWrap: 'wrap' } }, rows) : null,
     (Array.isArray(r.topErrors) && r.topErrors.length > 0)
       ? createElement('div', { key: 'errs', className: 'card-sub-item', style: { fontSize: '11px', color: '#dc2626', marginTop: '2px' } },
-        dshT('主要错误：'), r.topErrors.map(function (e) { return e.name + ':' + e.code + '×' + e.count }).join('  '))
+        dshT('主要错误：'), r.topErrors.map(function (/** @type {{ name: string, code: string, count: number }} */ e) { return e.name + ':' + e.code + '×' + e.count }).join('  '))
       : null,
   )
 }
 
+/**
+ * One session card: title row, action buttons, summary, metadata, and the
+ * confirm / health sub-cards when active.
+ * @param {Record<string, any>} session - the session row.
+ * @param {Record<string, any>} view - the panel state.
+ * @param {(method: string, sessionId: string) => void} act - run one sessionAdmin mutation.
+ * @param {(partial: Record<string, any>) => void} patch - the state patch merge.
+ * @param {(session: Record<string, any>) => void} onExport - download one session's transcript.
+ * @param {Array<string>} pinnedIds - the pinned id whitelist.
+ * @param {(id: string) => void} togglePinned - star/unstar one session.
+ * @param {(sessionId: string) => void} loadHealth - fetch one session's health report.
+ * @returns the session card element.
+ */
 export function renderSessionCard(session, view, act, patch, onExport, pinnedIds, togglePinned, loadHealth) {
   var health = (view.healthBySession && view.healthBySession[session.id]) || null
   var isConfirming = view.confirming === session.id
