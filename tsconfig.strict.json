@@ -52,6 +52,7 @@
     "lib/workflow-admin.js",
     "lib/webhook-triggers.js",
     "lib/cron-admin.js",
-    "lib/mcp-probe.js"
+    "lib/mcp-probe.js",
+    "lib/plugin-admin.js"
   ]
 }
