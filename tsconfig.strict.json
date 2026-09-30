@@ -56,6 +56,8 @@
     "lib/plugin-admin.js",
     "lib/mcp-admin.js",
     "lib/web-search-admin.js",
-    "lib/session-admin.js"
+    "lib/session-admin.js",
+    "lib/subagent-admin.js",
+    "lib/index.js"
   ]
 }
