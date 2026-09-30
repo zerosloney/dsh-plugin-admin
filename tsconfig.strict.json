@@ -50,6 +50,7 @@
     "lib/workflow-tools.js",
     "lib/workflow-library.js",
     "lib/workflow-admin.js",
-    "lib/webhook-triggers.js"
+    "lib/webhook-triggers.js",
+    "lib/cron-admin.js"
   ]
 }
