@@ -43,6 +43,7 @@
     "lib/workflow-engine.js",
     "lib/command-hook-admin.js",
     "lib/project-agents.js",
-    "lib/workflow-runs.js"
+    "lib/workflow-runs.js",
+    "lib/project-hooks.js"
   ]
 }
