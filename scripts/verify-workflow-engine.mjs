@@ -24,6 +24,7 @@ import {
   evalSnippet,
   looksLikeTs,
 } from '../lib/workflow-engine.js'
+import { jsonSafeValue } from '../lib/workflow-realm-shared.js'
 
 let failures = 0
 function check(name, fn) {
@@ -35,8 +36,48 @@ async function checkAsync(name, fn) {
   catch (err) { failures += 1; console.error(`  FAIL ${name}: ${err.message}`) }
 }
 
-// ─── 1. 转译 ──────────────────────────────────────────────────────────────────
+// ─── 0. 跨 realm 值的安全化（jsonSafeValue）──────────────────────────────────
+//
+// 脚本产出的值要跨回宿主，`__proto__` 是唯一会让"赋值"变成别的事情的键：
+// Object.prototype 上它是访问器，于是 `out[key] = v` 设置的是**原型**而不是
+// 属性 —— 脚本写的键从结果里消失（静默丢数据），而宿主拿到的对象继承了脚本
+// 放进去的东西。JSON.parse 会把 `__proto__` 建成自有属性，所以返回解析结果的
+// 脚本能走到这里。
+console.log('jsonSafeValue:')
+check('a __proto__ key survives as ordinary data and injects no prototype', () => {
+  const out = jsonSafeValue(JSON.parse('{"__proto__":{"isAdmin":true},"keep":1}'))
+  assert.deepEqual(Object.keys(out).sort(), ['__proto__', 'keep'], 'the key is kept as data, not dropped')
+  assert.equal(Object.prototype.hasOwnProperty.call(out, '__proto__'), true, 'it is an OWN property')
+  assert.equal(Object.getPrototypeOf(out), Object.prototype, 'the result keeps its normal prototype')
+  assert.equal(out.isAdmin, undefined, 'nothing the script wrote became inherited')
+  assert.equal({}.isAdmin, undefined, 'Object.prototype is not polluted')
+  // Round-trip as data. The expectation is built with defineProperty rather
+  // than an object literal, because `{ __proto__: x }` in a literal sets the
+  // PROTOTYPE — the very trap this fix is about.
+  const expected = { keep: 1 }
+  Object.defineProperty(expected, '__proto__', { value: { isAdmin: true }, enumerable: true, writable: true, configurable: true })
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), expected, 'it round-trips as data')
+})
+check('a null-prototype source works the same way', () => {
+  const source = Object.create(null)
+  source.__proto__ = { nested: true }
+  source.plain = 2
+  const out = jsonSafeValue(source)
+  assert.deepEqual(Object.keys(out).sort(), ['__proto__', 'plain'], 'both keys preserved')
+  assert.equal(Object.getPrototypeOf(out), Object.prototype, 'result is a normal object')
+  assert.equal(out.nested, undefined, 'no inherited leak')
+})
+check('the surrounding safety contract still holds', () => {
+  assert.throws(() => jsonSafeValue({ a: 1n }), /BigInt|bigint|not JSON-serializable/, 'BigInt throws')
+  const cyclic = {}
+  cyclic.self = cyclic
+  assert.throws(() => jsonSafeValue(cyclic), /circular/, 'a cycle throws')
+  const shared = { x: 1 }
+  assert.deepEqual(jsonSafeValue({ a: shared, b: shared }), { a: { x: 1 }, b: { x: 1 } }, 'a shared non-cyclic ref is not mistaken for a cycle')
+  assert.equal(jsonSafeValue({ f: () => {}, u: undefined, n: 1 }).n, 1, 'functions/undefined are dropped, data kept')
+})
 
+// ─── 1. 转译 ──────────────────────────────────────────────────────────────────
 console.log('compileScript:')
 await checkAsync('strips TS types from valid script', async () => {
   const ts = `

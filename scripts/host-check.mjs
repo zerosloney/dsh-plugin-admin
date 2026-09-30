@@ -489,15 +489,27 @@ for (const good of ['dsh-plugin-admin', '@scope/pkg', '@scope/pkg@^1.2.3',
 }
 
 /* --------------- win32 caret escaping for the cmd.exe shell ---------------
- * pnpm runs through cmd.exe on Windows, which consumes `^` as its escape
- * character — an unescaped `name@^1.2.3` operand would silently arrive as
- * `name@1.2.3` (exact pin instead of a range). pnpmSpawnArgs doubles the
- * caret there and passes other platforms through untouched.
+ * pnpm runs through cmd.exe on Windows, which treats `^` as its escape
+ * character — an unescaped `name@^1.2.3` operand silently arrives as
+ * `name@1.2.3`, an exact pin where the caller asked for a range (silent and
+ * permanent: the profile records `1.2.3` and the package never upgrades).
+ *
+ * Doubling the caret does NOT fix it: cmd.exe accepts a caret only in groups
+ * of four, so `^^1.2.3` still lands as `1.2.3` — measured against the real
+ * pnpm shim, which is why this assertion now pins QUOTING instead. The
+ * end-to-end proof (the manifest actually records `^1.2.3`) runs in
+ * scripts/check-pnpm-caret.mjs, because it needs a real pnpm and a real install.
  */
-assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@^1.2.3'], 'win32'), ['add', 'pkg@^^1.2.3'], 'win32 doubles the caret')
+assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@^1.2.3'], 'win32'), ['add', '"pkg@^1.2.3"'], 'win32 quotes an operand carrying a caret')
 assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@~1.2.3'], 'win32'), ['add', 'pkg@~1.2.3'], 'tilde needs no escaping')
 assert.deepEqual(pnpmSpawnArgs(['remove', 'pkg@^1.2.3'], 'linux'), ['remove', 'pkg@^1.2.3'], 'posix passes through untouched')
 assert.deepEqual(pnpmSpawnArgs(['add', 'plain-pkg'], 'darwin'), ['add', 'plain-pkg'], 'plain specs pass through')
+assert.deepEqual(pnpmSpawnArgs(['add', '@scope/pkg@^1.2.3'], 'win32'), ['add', '"@scope/pkg@^1.2.3"'], 'scoped caret ranges are quoted too')
+assert.deepEqual(pnpmSpawnArgs(['add', 'pkg@*', 'pkg@latest'], 'win32'), ['add', 'pkg@*', 'pkg@latest'], 'no caret means no rewrite')
+// The quoting is safe because the allowlist already excluded every character
+// that could break out of it; assert that pairing rather than assuming it.
+assert.throws(() => assertPnpmOperand('t', 'pkg"@^1.2.3'), /shell metacharacters/, 'a quote can never reach the quoter')
+assert.throws(() => assertPnpmOperand('t', 'pkg ^& calc'), /shell metacharacters/, 'whitespace cannot reach the quoter')
 
 /* ------------------ localSpecPath classification ------------------
  * Remote git/tarball URLs must never surface as local installs (the old

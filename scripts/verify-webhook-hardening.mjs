@@ -142,6 +142,45 @@ await check('loopback is PARSED, not prefix-matched (hostname/port spoofing is n
   assert.equal(isLoopbackAddress('127.0.0.1'), true, 'the real literal still passes')
 })
 
+// A peer address is only meaningful if it was OBSERVED. The reader used to take
+// any duck-typed `remoteAddress`, so a caller-supplied object could forge
+// locality — the single gate on an unauthenticated steer. An accessor that
+// returns a perfectly valid `127.0.0.1` is the sharpest case: validating only
+// the VALUE cannot catch it, so provenance (an own data property) must be
+// checked too.
+await check('remoteAddressOf accepts only an own, data-property peer address', () => {
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '203.0.113.9' } }), '203.0.113.9', 'a plain socket reads normally')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '::1', remoteFamily: 'IPv6' } }), '::1', 'IPv6 with a matching family')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1', remoteFamily: 'IPv4' } }), '127.0.0.1', 'explicit IPv4 family')
+
+  // Provenance: computed and inherited values are refused even when valid.
+  const accessor = {}
+  Object.defineProperty(accessor, 'remoteAddress', { get: () => '127.0.0.1', enumerable: true })
+  assert.equal(remoteAddressOf({ socket: accessor }), null, 'an accessor is not an observed address (even returning a valid IP)')
+  assert.equal(remoteAddressOf({ socket: Object.create({ remoteAddress: '127.0.0.1' }) }), null, 'an inherited value is not an observed address')
+  assert.equal(remoteAddressOf(Object.create({ socket: { remoteAddress: '127.0.0.1' } })), null, 'an inherited socket is not an observed transport')
+
+  // Container shapes node never produces.
+  assert.equal(remoteAddressOf({ socket: Object.assign([], { remoteAddress: '127.0.0.1' }) }), null, 'an array socket is refused')
+  assert.equal(remoteAddressOf(Object.assign([], { socket: { remoteAddress: '127.0.0.1' } })), null, 'an array request is refused')
+
+  // Value shape: an address, not text that merely looks like one.
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: 'localhost' } }), null, 'a hostname is not an address')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1:8080' } }), null, 'an address with a port is not an address')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.evil.com' } }), null, 'arbitrary text is not an address')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '' } }), null, 'an empty string is no address')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: 42 } }), null, 'a non-string is not an address')
+
+  // Corroboration: a family that contradicts the literal means the object was
+  // assembled, since both come from one kernel call.
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1', remoteFamily: 'IPv6' } }), null, 'a contradicting family is refused')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '::1', remoteFamily: 'IPv4' } }), null, 'the mismatch is checked both ways')
+
+  // Still fail-closed on a hidden peer.
+  assert.equal(remoteAddressOf({}), null, 'no socket reports null')
+  assert.equal(remoteAddressOf({ socket: {} }), null, 'an addressless socket reports null')
+})
+
 await check('the secret comparison is timing-safe and length-agnostic', () => {
   assert.equal(secretMatches(SECRET, SECRET), true)
   assert.equal(secretMatches(SECRET, SECRET.slice(0, -1)), false)
