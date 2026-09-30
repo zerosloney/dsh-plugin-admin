@@ -1050,6 +1050,115 @@ await assert.rejects(
 assert.ok(existsSync(becomingLiveDir), 'live session log directory remains intact')
 rmSync(becomingLiveDir, { recursive: true, force: true })
 
+/* -------- liveness is decided by BOTH registries, not just `sessions` --------
+ * dsh's own drain wait consults `agents` AND `sessions`
+ * (agent-loop: `agents.get(id) === undefined && sessions.get(id) === undefined`).
+ * Checking `sessions` alone is not a liveness test: `resume()` takes the write
+ * lease and the in-directory `session.lock` BEFORE `setupAndPublish` inserts
+ * into the session store, so a session can hold a live writer while
+ * `sessions.get(id)` is still undefined. Deleting in that window destroys a
+ * live writer's log (and its lease file, forfeiting POSIX exclusion).
+ */
+const agentsOnlyHeader = { id: 'session-agents-only', cwd: 'E:/nowhere', createdAt: 1 }
+const agentsOnlyDir = sessionLogDirFor(agentsOnlyHeader)
+rmSync(agentsOnlyDir, { recursive: true, force: true })
+mkdirSync(agentsOnlyDir, { recursive: true })
+writeFileSync(join(agentsOnlyDir, 'session.jsonl.zstd'), '{}\n')
+const agentsOnlyCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  // The session is live in `agents` ONLY — the exact window this guards.
+  get: (name) => name === 'agents'
+    ? { get: (id) => (id === 'session-agents-only' ? { session: { id } } : undefined) }
+    : name === 'sessions' ? { get: () => undefined } : undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+  sessionPersistence: {
+    list: async () => [],
+    stat: async () => ({ header: agentsOnlyHeader, revision: 'r', sizeBytes: 3 }),
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+apply(agentsOnlyCtx)
+await assert.rejects(
+  () => agentsOnlyCtx.provided.sessionAdmin.deleteSession('session-agents-only'),
+  /is live — close it before deleting/,
+  'a session live only in the agents registry is refused (both registries consulted)',
+)
+assert.ok(existsSync(agentsOnlyDir), 'the agents-live session log directory remains intact')
+rmSync(agentsOnlyDir, { recursive: true, force: true })
+
+/* -------- deleteSession is idempotent, and serializes against itself --------
+ * A double-clicked row (or a panel retry) issues two deletes for one id. Both
+ * must settle — the second observes the desired end state (no directory), NOT
+ * the layout-drift failure that the same reading produces for a session whose
+ * bytes live somewhere the derived path never named.
+ */
+const idempotentHeader = { id: 'session-idempotent', cwd: 'E:/nowhere', createdAt: 1 }
+const idempotentDir = sessionLogDirFor(idempotentHeader)
+rmSync(idempotentDir, { recursive: true, force: true })
+mkdirSync(idempotentDir, { recursive: true })
+writeFileSync(join(idempotentDir, 'session.jsonl.zstd'), '{}\n')
+const idempotentCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: (name) => name === 'sessions' ? { get: () => undefined } : undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+  sessionPersistence: {
+    list: async () => [],
+    stat: async () => ({ header: idempotentHeader, revision: 'r', sizeBytes: 3 }),
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+apply(idempotentCtx)
+const idempotentAdmin = idempotentCtx.provided.sessionAdmin
+const concurrentDeletes = await Promise.allSettled([
+  idempotentAdmin.deleteSession('session-idempotent'),
+  idempotentAdmin.deleteSession('session-idempotent'),
+])
+assert.deepEqual(
+  concurrentDeletes.map((r) => r.status),
+  ['fulfilled', 'fulfilled'],
+  'two concurrent deletes of one id both settle (serialized, idempotent)',
+)
+assert.ok(!existsSync(idempotentDir), 'the log directory is removed exactly once and stays gone')
+const repeatDelete = await idempotentAdmin.deleteSession('session-idempotent')
+assert.deepEqual(repeatDelete, { deleted: 'session-idempotent' }, 'a later repeat delete still reports success')
+// The layout-drift case must STILL fail loud — idempotence must not swallow it.
+const driftHeader = { id: 'session-drift-bytes', cwd: 'E:/nowhere', createdAt: 1 }
+const driftCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: (name) => name === 'sessions' ? { get: () => undefined } : undefined,
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+  sessionPersistence: {
+    list: async () => [],
+    stat: async () => ({ header: driftHeader, revision: 'r', sizeBytes: 4096 }),
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+rmSync(sessionLogDirFor(driftHeader), { recursive: true, force: true })
+apply(driftCtx)
+await assert.rejects(
+  () => driftCtx.provided.sessionAdmin.deleteSession('session-drift-bytes'),
+  /durable bytes but no log directory exists at the standard layout/,
+  'a never-materialized session still fails loud (idempotence does not mask layout drift)',
+)
+
 /* ------------------- mcpAdmin manages cordis.patch.yml -------------------
  * list/upsert/remove must round-trip real YAML entries against a temp
  * profile: upsert adds a stdio + http entry, list reads them back, remove

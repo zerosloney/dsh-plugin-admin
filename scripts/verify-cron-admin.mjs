@@ -227,10 +227,22 @@ try {
   }
 
   const teardownDisposers = []
+  // A create-mode task's workspacePath goes through the shared trust gate, so
+  // the fixture needs a REAL directory the registry knows (see the webhook
+  // suite's equivalent). Without it the task would be refused before the check
+  // under test could observe the missing-runtime failure.
+  const cronWorkspace = join(tmpdir(), 'repos', 'standup')
+  mkdirSync(cronWorkspace, { recursive: true })
+  const fakeWorkspaceRegistry = {
+    list: () => [{ path: cronWorkspace, sessionIds: [], archivedSessionIds: [] }],
+    archivedSessionIds: [],
+  }
   const ctx = {
     baseUrl: 'http://127.0.0.1:1',
     logger: { info: () => {}, warn: () => {}, error: () => {} },
-    get: (key) => (key === 'agents' ? fakeAgents : undefined),
+    get: (key) => (key === 'agents'
+      ? fakeAgents
+      : key === 'workspaceRegistry' ? fakeWorkspaceRegistry : undefined),
     effect: (fn) => { const d = fn(); if (typeof d === 'function') teardownDisposers.push(d); return d },
     inject: undefined,   // no webhookRuntime: steer path + clear create-mode failure
     provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
@@ -306,7 +318,7 @@ try {
     await service.upsert({
       id: 'daily-standup',
       cron: '0 10 * * 1-5',
-      action: { mode: 'create', workspacePath: join(tmpdir(), 'repos', 'standup'), agentPreset: 'default', permissionPreset: 'workspace-write' },
+      action: { mode: 'create', workspacePath: cronWorkspace, agentPreset: 'default', permissionPreset: 'workspace-write' },
       promptTemplate: '站会开始',
     })
     const res = await service.runNow('daily-standup')

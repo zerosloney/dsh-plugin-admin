@@ -29,6 +29,8 @@ npm run build:client --check  # 校验产物与源码一致（npm test 会跑这
 
 所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒即 fail-open 继续写——「拒绝写入比丢更新更糟」的既定取舍；只有多实例并发写同一 profile 时才会出现这短暂停顿，单实例部署无争用。
 
+一个刻意的例外：**会话删除/关停不在这条队列上，而是走一把模块内互斥锁**（`lib/session-admin.js` 的 `makeOperationMutex`）。它们**不能**入共享队列——删除序列里的用量台账写入（`usageLedger.upsert`）本身就入该队列，从队列槽位内部再入队会永久等待（已实测：嵌套 `serial()` 按构造即死锁）。互斥锁提供真正需要的那条性质（同一 id 的并发删除、删除与关停之间串行，活跃/包含性校验紧邻 `rm`），台账写入仍留在共享队列上。
+
 依赖的 dsh 服务缺失时**逐面板降级**提示，绝不整插件不加载。改动 profile 配置的操作（插件安装/卸载/启停、MCP 新增/删除、Web 搜索、Webhook 运行时、overlay 启用）需重启 dsh 生效；例外是 MCP 已挂载条目的**编辑**（见 §3）。
 
 ## 3. 面板机制细节
@@ -76,7 +78,7 @@ TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工
 调度细节：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像）；每任务一个 timer，触发前重读**内存镜像**并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer；**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。「▶ 立即触发」走与定时触发完全相同的路径。create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时（先在 Webhook 页签安装并挂载 → 重启）。
 
 ### 🪝 Webhook（自动化 · 第二页签）
-规则 = id + secret（新建自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑留空 = 保持已存值）+ 可选事件名 + 动作（steer：选目标在线会话；create：workspacePath + agentPreset + permissionPreset + 可选 model）。
+规则 = id + secret（新建自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑留空 = 保持已存值）+ 可选事件名 + 动作（steer：选目标在线会话；create：workspacePath + agentPreset + permissionPreset + 可选 model）。**create 的 `workspacePath` 必须落在本实例已知的工作区内**（`assertTrustedWorkspacePath`，与工作流保存库、CLI 后端同一道闸门）——它会被持久化进规则、每次投递都按它新建会话，而本端点刻意绕过浏览器认证，secret 是唯一防线，所以"绝对路径"远远不够。
 
 触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（远程需显式开启 `webhookAllowRemote`）；401/429 与封锁**每来源每窗口**至多各留一条日志与一条交付历史（拒绝历史另有全局 10 条/窗口的预算，防刷屏）。限速按来源地址分桶（报不出对端地址的传输层按连接分桶）+ 无地址调用方的认证失败共享桶（防「每次猜测换连接」绕过刹车）；封锁期内出示正确 secret 仍放行并解除封锁。交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合分落**两个文件**：历史在 `$DSH_HOME/webhook-history.json`，去重集在派生路径 `webhook-history.seen.json`（`seenPathFor()`，非新 config 键），两者都原子写，**重启后历史保留、重发的同 delivery id 依旧去重**。
 
@@ -160,9 +162,11 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 - **原子写 + 权限收紧**：`package.json` / `cordis.patch.yml` / 全部 JSON 状态走 temp + rename，被替换的 patch 版本留滚动 `.bak`；凡是可能装着凭据的存储（patch 及其备份、hooks、MCP/子代理行、审计、webhook 规则、工作流脚本）创建即 `0600`，已存在的宽权限文件在下一次写入时收紧。
 - **进程树超时击杀**（`taskkill /T /F`）覆盖包与 MCP 探测操作，且异步 spawn——卡死的进程树不会冻结宿主事件循环。
 - **webhook 入站**：常量时间 secret 比较（两侧 SHA-256）、空 secret 拒绝一切、secret 在读 body 之前校验、1MiB 载荷上限、统一 401（不可枚举规则）。**本机来源判定是解析而非前缀匹配**——严格 dotted-quad（四位 0–255）、`::1` 与 `::ffff:` 映射分别处理，主机名（含 `localhost`）与带端口文本一律不算本机。限速按来源地址（报不出地址的传输层按连接分桶；**无地址调用方**的认证失败走一个共享刹车，正确投递可解除封锁；`webhookAllowRemote` 下每个远端地址各有独立预算，不存在全局刹车），封锁期内正确 secret 仍放行。**重放去重是"动作前占位 + 失败后释放"**：占位先于动作使崩溃中途的重投不会重复执行；而动作**上报失败**（如目标会话离线）会经 `release()` 交还 delivery id 并落盘，故发送方的重试能真正重跑，不会拿到 `202 {duplicate:true}` 后被永久吞掉。
-- **provider 密钥只写不回显**——MCP `env`/`headers`、CLI 后端 `env`、web-search `apiKey`、webhook `secret` 全部只投影键名 + 空值；保存时空值 = 沿用已存值。
-- **通用 CLI 后端的绝对路径受工作区栅门**（`assertTrustedCliPaths`）：裸命令名走 PATH 解析、不受限；绝对 `command`（决定跑哪个可执行文件）与绝对 `cwd` 必须落在本实例已知的工作区内。**可判定才拦截**——宿主没有 `workspaceRegistry`（纯 CLI / headless profile）时闸门让位，不改这些部署的既有行为。不变量：同源脚本无法把一个任意绝对路径的可执行文件持久化成子代理后端。
-- **危险删除双重确认**；同名会话删除按设计拒绝；会话日志目录绝不穿过符号链接/junction、也绝不从 sessions 根之外递归删除（删除路径先 `lstat` + realpath 包含性校验，推导出的删除路径先验身再动手）。
+- **provider 密钥只写不回显**——MCP `env`/`headers`、CLI 后端 `env`、web-search `apiKey`、webhook `secret` 全部只投影键名 + 空值；保存时空值 = 沿用已存值。**掩码只是读投影**：MCP 的「测试连接」/试调用读取未掩码的存储配置（探测必须等价于真实挂载），探测结果本身不含秘密。
+- **特权动作留痕且按值脱敏**（`$DSH_HOME/admin-audit.jsonl`）：安装/卸载/启停、MCP 增删改、删除会话、webhook 规则变更等写路径各记一行。脱敏是**双通道**——按**键名**丢弃（`secret` / `token` / `api[-_]?key` / `password` / `authorization` …）**并且**对每个剩余字符串按**密钥形态**替换（`sk-…`、`ghp_…`、`AKIA…`、JWT、`Bearer …`、URL userinfo），所以同一把密钥被粘进 `command` / `promptTemplate` / `args` 也活不下来。
+- **危险路径的绝对路径统一受工作区栅门**（`lib/workspace-path.js`）：`assertTrustedWorkspacePath` 要求显式传入的绝对路径落在**调用会话自己的树**或本实例**已知的工作区**内，并经 `realpath` 规范化（符号链接/junction 无法借字符串比较蒙混）。适用于：通用 CLI 后端的绝对 `command` / `cwd`（`assertTrustedCliPaths`）、工作流保存库的 `spec.workspacePath`、**以及 webhook / cron 的 `create` 模式动作**——后者把路径**持久化**成规则的一部分，每次投递都按它新建会话，因此"绝对"远远不够。**可判定才拦截**——宿主没有 `workspaceRegistry`（纯 CLI / headless profile）时闸门按"无已知工作区"处理，即拒绝显式路径而不是放行。
+- **危险删除双重确认**；同名会话删除按设计拒绝；会话日志目录绝不穿过符号链接/junction、也绝不从 sessions 根之外递归删除——删除前先 `lstat` 叶子、再逐级 `lstat` **根到叶子之间的每一个路径分量**（project-key 目录是 junction 时叶子 realpath 仍可能落在根内、却指向另一个会话的目录），且包含性校验与 `rm` 之间**没有 await**，检查到的状态就是删除作用的状态。
+- **会话删除的活跃判据查两个注册表**：`sessionIsLive` 同时问 `agents` 与 `sessions`（dsh 自己的 drain 等待就是 `agents.get(id) === undefined && sessions.get(id) === undefined`）。只查 `sessions` 不是活跃判据——`resume()` 先取写租约与目录内的 `session.lock`，之后才 `setupAndPublish` 插入会话表，中间那段窗口里活跃写入者尚不可见；此时删除会毁掉它的日志目录（连带租约文件，POSIX 上 flock 按 inode 绑定 → 排他性失效，且租约的 `mkdir` 会把空目录重新建出来）。该判据在 `rm` 前**重新取值**，`deleteSession`/`closeSession` 由一把模块内互斥锁串行（**刻意不用共享补丁队列**：删除内部的台账写入本身就入该队列，重入会死锁），重复删除幂等——第二次看到"目录已不在"是实现目标而非失败，真实的布局漂移（SQLite 后端/自定义根）仍 fail-loud。
 - **工作流 `shell()` 与项目 `.agents` hooks 执行命令时，都按调用会话解析出的沙箱策略围栏**（`ctx.sandboxPolicy.resolve({ session })`，与同会话的 bash 工具同一套解析），因此会话被切到 `read-only` / `workspace-write` 时这两条路径同样受约束；`danger-full-access` 下与宿主一致不受围栏。宿主没有挂 `ctx.sandboxPolicy` 而执行器又是围栏型时，两条路径都**拒绝执行**而不是无围栏跑（项目 hooks 记一条告警后跳过，工作流 `shell()` 抛给脚本）。
 - **审批（`ctx.approval`）刻意不在这两条路径上**：dsh 只在调用方要**放宽**既定策略时才问审批（bash 工具的 `sandbox_permissions` 升级通道），普通受限命令不问；而审批服务的 `never` 策略——`danger-full-access` 部署下的默认值——会确定性地答 `rejected`，逐次询审批只会让恰好授权了全权的部署反而跑不动。本插件没有"放宽沙箱"的通道，所以也没有审批入口。workflow 的 `node:vm` realm 不是安全边界（脚本体与宿主同进程同信任级）。
 

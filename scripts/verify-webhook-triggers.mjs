@@ -24,7 +24,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -35,7 +35,22 @@ const here = dirname(fileURLToPath(import.meta.url))
 // A workspace path that is absolute ON THE RUNNING PLATFORM: validateRuleEntry
 // enforces isAbsolute(workspacePath), and a Windows-style 'E:/...' literal
 // fails that check on POSIX runners.
+//
+// It must also EXIST and be a directory: a create rule's workspacePath goes
+// through the shared trust gate (lib/workspace-path.js), which refuses a path
+// it cannot realpath and one outside every known workspace. Created here so
+// both the pure-validator checks and the mounted service can use it; the fake
+// registry below is what makes it TRUSTED.
 const WORKSPACE = join(tmpdir(), 'repos', 'app')
+mkdirSync(WORKSPACE, { recursive: true })
+
+// The create-rule workspace gate validates `workspacePath` against the
+// deployment's workspace registry. This fake is what makes WORKSPACE trusted:
+// an existing directory outside every known workspace is refused on purpose.
+const fakeWorkspaceRegistry = {
+  list: () => [{ path: WORKSPACE, sessionIds: [], archivedSessionIds: [] }],
+  archivedSessionIds: [],
+}
 
 const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, seenPathFor, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
 
@@ -128,7 +143,7 @@ check('validateRuleEntry accepts well-formed steer and create rules', () => {
   const create = validateRuleEntry({
     id: 'nightly', secret: '', event: '',
     action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write', model: { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 } },
-  }, [])
+  }, [], { registry: fakeWorkspaceRegistry })
   assert.equal(create.action.mode, 'create')
   assert.deepEqual(create.action.model, { provider: 'cliproxy', model: 'gemini', maxTokens: 1024 })
   assert.equal(create.action.model.maxTokens, 1024)
@@ -136,13 +151,17 @@ check('validateRuleEntry accepts well-formed steer and create rules', () => {
 
 check('validateRuleEntry rejects malformed entries', () => {
   const bad = (entry, existing = []) => () => validateRuleEntry(entry, existing)
+  // Create-mode entries carry the trust context, so these still probe the
+  // FIELD checks rather than stopping at the workspace gate.
+  const badCreate = (action) => () => validateRuleEntry({ id: 'okc', secret: '', event: '', action }, [], { registry: fakeWorkspaceRegistry })
   assert.throws(bad({ id: 'Bad ID', action: { mode: 'steer', sessionId: 's' } }), /无效/, 'uppercase/space id rejected')
   assert.throws(bad({ id: 'dup', action: { mode: 'steer', sessionId: 's' } }, ['dup']), /已被其他规则占用/, 'duplicate id rejected')
   assert.throws(bad({ id: 'ok1' }), /action\.mode/, 'missing action rejected')
   assert.throws(bad({ id: 'ok2', action: { mode: 'nope' } }), /必须是 "steer" 或 "create"/, 'unknown mode rejected')
   assert.throws(bad({ id: 'ok3', action: { mode: 'steer' } }), /steer 模式需要 sessionId/, 'steer needs session')
-  assert.throws(bad({ id: 'ok4', action: { mode: 'create', workspacePath: 'relative/path', agentPreset: 'p', permissionPreset: 'w' } }), /绝对路径/, 'create needs absolute path')
-  assert.throws(bad({ id: 'ok5', action: { mode: 'create', workspacePath: WORKSPACE } }), /create 模式需要 agentPreset/, 'create needs preset')
+  assert.throws(badCreate({ mode: 'create', workspacePath: 'relative/path', agentPreset: 'p', permissionPreset: 'w' }), /绝对路径/, 'create needs absolute path')
+  assert.throws(badCreate({ mode: 'create', workspacePath: WORKSPACE }), /create 模式需要 agentPreset/, 'create needs preset')
+  assert.throws(badCreate({ mode: 'create', workspacePath: WORKSPACE, agentPreset: 'p' }), /create 模式需要 permissionPreset/, 'create needs permission preset')
   assert.throws(bad({ id: 'ok6', secret: 'x'.repeat(257), action: { mode: 'steer', sessionId: 's' } }), /secret 长度/, 'secret bound enforced')
   assert.throws(bad({ id: 'a'.repeat(65), action: { mode: 'steer', sessionId: 's' } }), /无效/, 'id over 64 chars rejected')
   assert.equal(validateRuleEntry({ id: 'a'.repeat(64), action: { mode: 'steer', sessionId: 's' } }, []).id, 'a'.repeat(64), 'id at the 64-char bound passes')
@@ -180,6 +199,9 @@ const fakeAgents = {
 const registeredRoutes = []
 const fakeWebServer = { register: (entry) => { registeredRoutes.push(entry); return () => {} } }
 
+// The create-rule workspace gate needs a REAL directory that the deployment's
+// workspace registry knows (WORKSPACE + fakeWorkspaceRegistry, both defined
+// with the fixtures above).
 const teardownDisposers = []
 const ctx = {
   baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
@@ -187,6 +209,7 @@ const ctx = {
   get: (key) => {
     if (key === 'agents') return fakeAgents
     if (key === 'webServer') return fakeWebServer
+    if (key === 'workspaceRegistry') return fakeWorkspaceRegistry
     return undefined
   },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') teardownDisposers.push(d); return d },
@@ -209,6 +232,39 @@ check('service provided with typertRemote binding and descriptors', () => {
     assert.ok(ids.includes(`dsh-plugin-admin/${tail}`), `descriptor ${tail} present`)
   }
   assert.ok(registeredRoutes.length === 1 && registeredRoutes[0].path === '/webhook-triggers', 'prefix route registered on the fake webServer')
+})
+
+check('validateRuleEntry gates a create rule workspacePath on TRUST, not mere absoluteness', () => {
+// A create rule PERSISTS workspacePath and every delivery roots a session
+// there, so an absolute path is not enough — the path must resolve inside a
+// workspace this instance knows (the same gate workflowAdmin and the CLI
+// backend paths already use). Regression: absoluteness used to be the only
+// requirement, so a rule could root sessions at a filesystem root, reachable
+// from the network because this endpoint bypasses browser auth.
+const create = (workspacePath) => () => validateRuleEntry({
+id: 'gated', secret: '', event: '',
+action: { mode: 'create', workspacePath, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+}, [], { registry: fakeWorkspaceRegistry })
+const root = process.platform === 'win32' ? 'C:\\' : '/'
+assert.throws(create(root), /filesystem root/, 'a filesystem root is refused')
+assert.throws(create(join(tmpdir(), 'definitely-not-here-webhook-gate')), /does not exist/, 'a non-existent path is refused')
+assert.throws(create(webhookHome), /outside the calling session|outside every workspace/, 'an existing but unknown directory is refused')
+// Omitting the trust context refuses every explicit path (the safe direction).
+assert.throws(() => validateRuleEntry({
+id: 'no-trust', secret: '', event: '',
+action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+}, []), /outside the calling session|outside every workspace/, 'no trust context refuses an explicit path')
+// The trusted direction still works: the known workspace, and a subdirectory of it.
+const sub = join(WORKSPACE, 'packages')
+mkdirSync(sub, { recursive: true })
+assert.equal(validateRuleEntry({
+id: 'gated-ok', secret: '', event: '',
+action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+}, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, realpathSync.native(WORKSPACE), 'a known workspace is accepted (canonicalized)')
+assert.equal(validateRuleEntry({
+id: 'gated-sub', secret: '', event: '',
+action: { mode: 'create', workspacePath: sub, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
+}, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, realpathSync.native(sub), 'a subdirectory of a known workspace is accepted')
 })
 
 const storagePath = join(webhookHome, 'webhook-triggers.json')
@@ -576,6 +632,7 @@ await checkAsync('runtime path: bad preset name lands in history as ok:false; va
     get: (key) => {
       if (key === 'agents') return fakeAgents
       if (key === 'webServer') return fakeWebServer
+      if (key === 'workspaceRegistry') return fakeWorkspaceRegistry
       if (key === 'webhookRuntime') return fakeRuntime
       if (key === 'permissionPresets') return {
         resolve: (name) => { if (name === 'workspace-write') return {}; throw new Error(`permission: unknown preset "${name}"`) },
