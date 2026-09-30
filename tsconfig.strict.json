@@ -46,6 +46,7 @@
     "lib/workflow-runs.js",
     "lib/project-hooks.js",
     "lib/workspace-path.js",
-    "lib/fs-admin.js"
+    "lib/fs-admin.js",
+    "lib/workflow-tools.js"
   ]
 }
