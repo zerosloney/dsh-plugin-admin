@@ -42,7 +42,7 @@ function check(name, fn) {
 /** The tracks: one config, one flag, one entry list each. Both are checked. */
 const TRACKS = [
   { key: 'strict', config: 'tsconfig.strict.json', flag: 'noImplicitAny', floor: 21 },
-  { key: 'strict-null', config: 'tsconfig.strict-null.json', flag: 'strictNullChecks', floor: 24 },
+  { key: 'strict-null', config: 'tsconfig.strict-null.json', flag: 'strictNullChecks', floor: 29 },
 ]
 
 const strict = readJsonc(join(ROOT, 'tsconfig.strict.json'))

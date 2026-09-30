@@ -56,6 +56,11 @@
     "lib/workflow-realm-worker.js",
     "lib/command-hook-admin.js",
     "lib/project-agents.js",
-    "lib/project-hooks.js"
+    "lib/project-hooks.js",
+    "lib/workspace-path.js",
+    "lib/webhook-triggers.js",
+    "lib/fs-admin.js",
+    "lib/workflow-library.js",
+    "lib/workflow-tools.js"
   ]
 }

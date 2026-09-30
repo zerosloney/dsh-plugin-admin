@@ -139,7 +139,7 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 **建议的推进方式**：不要一次性打开（139 条会淹掉 review），而是照 `noImplicitAny` 那套**只增不减的入口清单**再做一条 `strict-null` 轨道（同一份清单机制，换个 flag），从 `patch-utils` 这类已清的叶子起步。两条轨道最终一起折回 `tsconfig.json`。**收益优先级**：先 `strictNullChecks` 再 `noImplicitAny` 剩余部分——前者 139 条且能抓真缺陷，后者还有 1900 条且多为回调参数标注（体力活）。
 
-**这条轨道已经搭好了**：`tsconfig.strict-null.json` + `npm run check:types-strict-null`（run-gate 常驻静态步）。strict-null 轨道当前覆盖 **24 个**（已超过 any 轨道：它先清完，因为剩余总量小得多）。`verify-strict-track.mjs` 同时守住两条轨道：各自的 flag 是否为真、**继承关系**、入口是否存在、**两条清单都只增不减**（地板值随新增上调）、以及**文档里的两个覆盖数**是否等于重算结果。
+**这条轨道已经搭好了**：`tsconfig.strict-null.json` + `npm run check:types-strict-null`（run-gate 常驻静态步）。strict-null 轨道当前覆盖 **29 个**（已远超 any 轨道的 21 个：它先清完，因为剩余总量小得多）。`verify-strict-track.mjs` 同时守住两条轨道：各自的 flag 是否为真、**继承关系**、入口是否存在、**两条清单都只增不减**（地板值随新增上调）、以及**文档里的两个覆盖数**是否等于重算结果。
 
 **关键：两条轨道必须彼此独立，各自 extends `tsconfig.json`——不能叠加。** 这条是实测出来的，也是搭这条轨道时最大的一个发现：**`noImplicitAny` 会屏蔽 `strictNullChecks` 的发现**。最小复现：
 
