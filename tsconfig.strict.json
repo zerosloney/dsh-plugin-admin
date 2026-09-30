@@ -31,6 +31,12 @@
     "lib/rpc-manifest.js",
     "lib/audit-log.js",
     "lib/session-export.js",
-    "lib/peer-compat.js"
+    "lib/peer-compat.js",
+    "lib/run-command.js",
+    "lib/shell-policy.js",
+    "lib/store-version.js",
+    "lib/tool-seed.js",
+    "lib/overlay-admin.js",
+    "lib/skills-admin.js"
   ]
 }
