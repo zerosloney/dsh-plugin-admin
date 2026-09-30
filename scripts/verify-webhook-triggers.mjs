@@ -414,6 +414,33 @@ await checkAsync('HTTP handler: 401 body is identical for unknown rule and wrong
   assert.equal(unknownRes.body, disabledRes.body, 'disabled rule is indistinguishable too')
 })
 
+await checkAsync('HTTP handler: a path with extra segments is 404 for EVERY rule (no enumeration)', async () => {
+  // The handler used to take the first path component and silently discard the
+  // rest, so `/webhook-triggers/<id>/anything` was answered like the bare path.
+  // That reopened enumeration the uniform 401 exists to close: a caller with a
+  // correct secret for SOME rule compared the two answers and learned whether
+  // <id> exists (past-auth vs 401). Both shapes must now be refused before any
+  // rule is read, so the answer carries no information about the rule set.
+  const withExisting = mockRes()
+  await handler(jsonRequest({ url: '/webhook-triggers/ci-fail/anything' }), withExisting)
+  const withUnknown = mockRes()
+  await handler(jsonRequest({ url: '/webhook-triggers/nope/anything' }), withUnknown)
+  assert.equal(withExisting.statusCode, 404, 'an existing rule with a trailing segment is refused')
+  assert.equal(withUnknown.statusCode, 404, 'an unknown rule with a trailing segment is refused too')
+  assert.notEqual(withExisting.statusCode, 401, 'the past-auth answer is not reachable through a longer path')
+  assert.notEqual(withUnknown.statusCode, 401, 'and the two are not distinguishable by status')
+  // Deeper paths and a trailing slash behave the same.
+  for (const path of ['/webhook-triggers/ci-fail/a/b/c', '/webhook-triggers/ci-fail/', '/webhook-triggers/nope/a/b']) {
+    const res = mockRes()
+    await handler(jsonRequest({ url: path }), res)
+    assert.equal(res.statusCode, 404, `${path} is refused`)
+  }
+  // The bare path still works, so the fix did not break the real route.
+  const bare = mockRes()
+  await handler(jsonRequest({ url: '/webhook-triggers/ci-fail', delivery: 'after-segment-fix' }), bare)
+  assert.equal(bare.statusCode, 202, 'the bare path still delivers')
+})
+
 await checkAsync('HTTP handler: redelivered x-webhook-delivery id is deduped (acknowledged, not re-executed)', async () => {
   const before = steered.length
   const first = mockRes()

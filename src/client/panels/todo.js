@@ -385,6 +385,13 @@ export function TodoAdminDock(props) {
         showToast('error', dshT('❌ 获取 diff 失败'))
         return
       }
+      // A git failure is NOT a clean tree. Reporting "工作区干净" here copied an
+      // empty string and told the user the opposite of what was true, which is
+      // what a timeout on a large repo used to look like.
+      if (typeof value.error === 'string' && value.error !== '') {
+        showToast('error', '❌ ' + value.error)
+        return
+      }
       if (value.diff === '') {
         showToast('success', dshT('工作区干净，没有未提交的改动'))
         return
@@ -489,6 +496,13 @@ export function TodoAdminDock(props) {
       call('sessionAdmin/fileStats', { sessionId: sessionId }).then(function (res) {
         var value = res && res.ok && res.value && typeof res.value === 'object' ? res.value : null
         if (disposed || value === null) return
+        // git could not be read (failed or timed out): hide the segment by
+        // clearing the stats rather than rendering all-zeroes, which would
+        // assert "no changes" from a reading that never happened.
+        if (typeof value.error === 'string' && value.error !== '') {
+          setStats(function (prev) { return prev === null ? prev : null })
+          return
+        }
         setStats(function (prev) {
           if (prev && prev.files === value.files && prev.added === value.added && prev.removed === value.removed
             && prev.branch === (typeof value.branch === 'string' ? value.branch : null)) return prev

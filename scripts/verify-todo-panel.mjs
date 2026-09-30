@@ -22,8 +22,9 @@
  * Run: node scripts/verify-todo-panel.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -141,7 +142,9 @@ check('gitFileStats attaches reveal anchors and branch when asked', () => {
 
 /* ---- sessionAdmin.fileStats against a real temp git repo ---- */
 
-const repoDir = join(here, '../.host-check-tmp/todo-verify-repo')
+/** Parent of the git fixtures, so later cases can add their own trees. */
+const gitFixtureRoot = join(here, '../.host-check-tmp')
+const repoDir = join(gitFixtureRoot, 'todo-verify-repo')
 mkdirSync(repoDir, { recursive: true })
 const git = (args) => execSync('git ' + args, { cwd: repoDir, stdio: 'ignore' })
 if (!existsSync(join(repoDir, '.git'))) {
@@ -203,6 +206,49 @@ const fileCtx = {
 await apply(fileCtx)
 const sessionAdmin = fileCtx.provided.sessionAdmin
 
+/**
+ * Mount sessionAdmin over one cwd, for the git-outcome checks below. Each case
+ * needs its own mount because the stats cache is per mount, and the checks care
+ * about what a FRESH read of a specific tree reports.
+ * @param {string} cwd - the session's workspace.
+ * @returns {Promise<{ service: any }>}
+ */
+async function makeGitCtxFor(cwd) {
+  const ctx = {
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
+    get: () => undefined,
+    on: () => () => {},
+    logger: { info: () => {}, warn: () => {} },
+    commands: { register: () => () => {} },
+    typert: { register: () => () => {} },
+    sessionPersistence: {
+      list: async () => [],
+      stat: async (id) => ({ header: { id, cwd, createdAt: 1 }, revision: 'r', sizeBytes: null }),
+      open: async () => ({ read: async () => [], close: async () => {} }),
+    },
+  }
+  await apply(ctx)
+  return { service: ctx.provided.sessionAdmin }
+}
+
+/**
+ * A mount whose git invocations CANNOT succeed: the workspace exists (so the
+ * cwd guard passes) but no repository encloses it, which is the cheapest
+ * faithful stand-in for "git failed" — the same code path a timeout or a
+ * missing binary takes, since all three surface as a non-zero exit.
+ *
+ * It must live OUTSIDE the fixture repo's tree: git walks UP to find a
+ * repository, so a directory merely lacking its own `.git` still succeeds when
+ * an ancestor has one (which is how this fixture first reported 6 files).
+ * @returns {Promise<{ service: any }>}
+ */
+async function makeFailingGitCtx() {
+  const notRepo = mkdtempSync(join(tmpdir(), 'dsh-no-git-'))
+  return makeGitCtxFor(notRepo)
+}
+
 await checkAsync('fileStats folds the real git working tree into per-file stats', async () => {
   const stats = await sessionAdmin.fileStats('git-session')
   assert.equal(stats.files, 3)
@@ -236,7 +282,49 @@ await checkAsync('fileStats caches per session within the TTL window', async () 
 
 await checkAsync('fileStats returns zeroes for sessions without a git workspace', async () => {
   const none = await sessionAdmin.fileStats('nope')
-  assert.deepEqual(none, { files: 0, added: 0, removed: 0, branch: null, changed: [] })
+  assert.deepEqual(none, { files: 0, added: 0, removed: 0, branch: null, changed: [], error: null })
+  // A workspace with no cwd is "nothing to examine", NOT a failure: error must
+  // stay null so the dock can tell the two apart.
+  assert.equal(none.error, null, 'no workspace is not an error')
+})
+
+// A git that cannot run must not be reported as "nothing changed". The fold
+// used to return all-zeroes for a timeout or a missing git binary, which the
+// dock rendered as a clean tree — and the copy-diff button copied an empty
+// string with a "工作区干净" toast. `error` is what separates the two.
+await checkAsync('fileStats reports a git failure instead of zeroes-as-clean', async () => {
+  const failing = await makeFailingGitCtx()
+  const stats = await failing.service.fileStats('broken')
+  assert.equal(stats.files, 0)
+  assert.ok(typeof stats.error === 'string' && stats.error !== '', 'a failed git carries an error')
+  assert.match(stats.error, /git status/, 'the error names the command that failed')
+  const diff = await failing.service.gitDiff('broken')
+  assert.equal(diff.diff, '', 'no diff text is invented')
+  assert.ok(typeof diff.error === 'string' && diff.error !== '', 'gitDiff carries an error too')
+  assert.match(diff.error, /git diff 失败|git diff 超时/, 'the message distinguishes failure from timeout')
+  assert.equal(diff.truncated, false)
+  // The success path keeps error null, so one field is enough to branch on.
+  const clean = await sessionAdmin.fileStats('plain-session')
+  assert.equal(clean.error, null, 'a readable workspace reports no error')
+})
+
+await checkAsync('gitDiff reports a clean tree as an empty diff WITH error: null', async () => {
+  // A fresh temp dir per run: reusing one under .host-check-tmp made the fixture
+  // depend on what a previous run left behind (a second `commit` finds nothing
+  // to commit and exits non-zero).
+  const cleanRepo = mkdtempSync(join(tmpdir(), 'dsh-clean-repo-'))
+  execSync('git init -q', { cwd: cleanRepo })
+  execSync('git config user.email t@t', { cwd: cleanRepo })
+  execSync('git config user.name t', { cwd: cleanRepo })
+  execSync('git config core.autocrlf false', { cwd: cleanRepo })
+  writeFileSync(join(cleanRepo, 'x.txt'), 'x\n')
+  execSync('git add .', { cwd: cleanRepo })
+  execSync('git commit -qm init', { cwd: cleanRepo })
+  const ctx = await makeGitCtxFor(cleanRepo)
+  const result = await ctx.service.gitDiff('clean')
+  assert.equal(result.diff, '', 'a clean tree has an empty diff')
+  assert.equal(result.error, null, 'and it is NOT an error — this is the distinction the UI branches on')
+  assert.equal(result.truncated, false)
 })
 
 await checkAsync('fileStats rejects non-string session ids', async () => {
@@ -343,7 +431,8 @@ await checkAsync('gitDiff returns the workspace diff and flags nothing when smal
   assert.ok(out.diff.includes('TWO'), 'diff carries the change body')
   assert.equal(out.truncated, false)
   const none = await exportAdmin.gitDiff('ghost')
-  assert.deepEqual(none, { diff: '', truncated: false }, 'unknown session → empty, not error')
+  assert.deepEqual(none, { diff: '', truncated: false, error: null }, 'unknown session → empty, not error')
+  assert.equal(out.error, null, 'a readable repo reports no error')
 })
 
 /* searchSessions host half: stubs shaped per the CORE contract (session-query
