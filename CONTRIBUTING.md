@@ -111,6 +111,10 @@ Hooks 纪律靠人工：客户端源码是手写 `createElement` 的纯 `.js`，
 
 `npm run check:types-strict`（run-gate 的常驻静态步）跑 `tsconfig.strict.json`：在主配置之上开 `noImplicitAny`，`include` 是一个**只增不减**的文件清单，从并发正确性核心（patch-utils / usage-ledger）开始。把新文件纳入的方式：先在本地把它的隐式 any 清零（给缺类型的参数补 `@param {T}`），再把文件加进 include——纳入即受闸门保护，回退 = 从清单删除。
 
+**`include` 列的是入口文件，但 `tsc` 会顺着 import 往下走**：一个文件只有在**它和它整条传递 import 闭包**都清零之后才能纳入，否则清单里加一行就带进来别人的一堆错误。所以优先纳入**独立叶子**（无 import，如 `panel-ids.js`）与小而自洽的模块；`patch-utils.js` 之所以能作为第一个入口，正是因为它的闭包只有它自己。想知道某个入口会带进哪些文件、以及还差多少，先量一遍再动手——写一行小脚本走一遍 `from './x.js'` 构图即可，比试错快得多。
+
+当前覆盖 **39 个宿主文件中的 9 个**（8 个入口 + 它们的闭包）。剩下的不是被政策排除，而是**需要真正的类型建模**：全量开 `noImplicitAny` 目前约 2000 条，其中 ~72% 是 `TS7006`（回调参数缺类型），其余多是把 `{}` 字面量逐步加属性（`TS2339`）、用 `string` 索引一个无索引签名的对象（`TS7053`）。这些要补的是接口/typedef，**不是** `@param {any}`——补 `any` 只是把错误挪走，同时废掉这个开关的意义。典型先例：给 `health-report.js` 补 `HealthReport`/`ToolHealth` typedef 时，开关当场抓出**文档注释本身写错的** `errorCodes` 形状（实际是 `{code,count}[]` 而非 `string[]`）——这正是它值得开的原因。
+
 ## 环境
 
 Node ≥ 22.19（或 ≥ 24）；`npm ci` 后即可跑全部门禁（`smoke:real-host` 例外，另需 dsh CLI + pnpm）。

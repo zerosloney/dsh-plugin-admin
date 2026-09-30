@@ -1,10 +1,17 @@
 {
   // The strict track (Wave 5 of the improvement plan): a second tsconfig that
   // turns on the flags the main config does not, over a GROWING list of files.
-  // Start with noImplicitAny over the concurrency-critical core (patch-utils,
-  // usage-ledger); each new file joins by fixing its implicit-any leaks first,
-  // and the include list only ever grows. When it covers everything, fold the
-  // flags back into tsconfig.json and delete this file.
+  // Each new file joins by fixing its implicit-any leaks first, and the include
+  // list only ever grows. When it covers everything, fold the flags back into
+  // tsconfig.json and delete this file.
+  //
+  // The list is by ENTRY FILE, but `tsc` follows imports: a file can only join
+  // once its whole transitive import closure is clean, which is why the entries
+  // here are standalone leaves and small self-contained modules. The remaining
+  // host files are not excluded by policy — they carry the ~1900 implicit-any
+  // findings that need real type models (untyped local object literals, untyped
+  // callback parameters) rather than annotations that would just say `any` and
+  // defeat the flag. Each joins as it is modelled.
   //
   // Run: npm run check:types-strict   (a permanent run-gate step)
   "extends": "./tsconfig.json",
@@ -14,6 +21,12 @@
   "include": [
     "types/**/*.d.ts",
     "lib/patch-utils.js",
-    "lib/usage-ledger.js"
+    "lib/usage-ledger.js",
+    "lib/health-report.js",
+    "lib/panel-ids.js",
+    "lib/rpc-schema.js",
+    "lib/secret-fields.js",
+    "lib/workflow-realm-shared.js",
+    "lib/workflow-realm-worker.js"
   ]
 }

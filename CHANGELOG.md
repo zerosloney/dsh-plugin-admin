@@ -37,6 +37,7 @@
 
 ### Changed
 
+- **strict 轨道扩容：`noImplicitAny` 覆盖从 3 个宿主文件扩到 9 个**（`tsconfig.strict.json` + 6 个模块的类型化）：新增纳入 `health-report.js` / `panel-ids.js` / `rpc-schema.js` / `secret-fields.js` / `workflow-realm-shared.js` / `workflow-realm-worker.js`，清掉 17 处隐式 any。**清的是类型而不是注解**：`health-report.js` 补 `HealthReport`/`ToolHealth`/`ErrorCodeCount` typedef（顺带抓出原文档注释写错的 `errorCodes` 形状——实际是 `{code,count}[]` 而非 `string[]`，这正是开关值得开的地方）、`secret-fields.js`/`panel-ids.js`/`rpc-schema.js`/`workflow-realm-shared.js` 把「用 string 索引一个已收窄为 `object` 的值」改为显式命名其 `Record<string, unknown>` 视图、`workflow-realm-worker.js` 给桥与 `runTimed` 补参类型。**没有一处用 `@param {any}` 糊过去**——那只是把错误挪走、同时废掉开关本身。同时发现并记入 CONTRIBUTING 的一条机制：`include` 列的是入口文件，但 `tsc` 会顺 import 往下走，所以一个文件只有在**它整条传递 import 闭包**都清零后才能纳入（`patch-utils.js` 能当第一个入口，正因为它的闭包只有它自己）——不了解这点会在"清单只加一行"时带进别人的几百条错误。全量开 `noImplicitAny` 目前约 2000 条（~72% 是 `TS7006` 回调参数缺类型），属需要逐文件建模的长线工作，不属缺陷。负样本实测：往已纳入的 `health-report.js` 注入一个隐式 any 参数，`check:types-strict` 即以 `TS7006` 报错（证明清单是真的在保护，不是装饰）。
 - **`host-check` 的 pluginAdmin 挂载改用一次性 profile 目录**（`scripts/host-check.mjs`）：`applyXxx` 的 `install()` 从 `ctx.baseUrl` 推导 profile 目录，而这道夹具原本锚在**仓库根**——任何"通过了校验"的 `install()` 都会往仓库的 `package.json` 写入依赖，并在目录里丢下 `pnpm-lock.yaml` / `pnpm-workspace.yaml`。本轮开发中确实发生过一次（一条本地路径规格的真实安装）。夹具现在指向 `.host-check-tmp/` 下的临时目录，使这种污染在结构上不可能发生。
 - **pnpm 副产物进 `.gitignore`**：本包走 npm 发布、刻意不提交 pnpm 锁文件，但任何一次从仓库目录发起的 pnpm 调用都会留下这两个文件；它们是 untracked，距离一次 `git add -A` 只差一步，因此显式忽略。
 
