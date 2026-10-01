@@ -437,6 +437,37 @@ await check('a truncated final JSONL line keeps every complete step before it', 
   assert.ok(rec.steps.length > 0, 'and the earlier steps are intact')
 })
 
+await check('a journal write failure never becomes an unhandled rejection (the host fail-louds on those)', async () => {
+  const bundle = makeCtx({ slow: true })
+  const home = join(tmpBase, 'persist-fail')
+  const r = makeRegistry(bundle.ctx, home, { stopSettleTimeoutMs: 2000 })
+  const { id } = await r.start({ script: `return await agent('x')`, parent: { id: 'sess-persist-fail' } })
+  // 活跃期抓内存记录（get() 返回的 log 数组与 record.log 同引用，落定后的
+  // 日志追加仍可见），再把 runs 目录换成同名**文件**——此后 settle 的 journal
+  // 写盘以 ENOENT 失败。修复前：persist 的火忘调用把队列拒绝漏成
+  // unhandledRejection，而宿主对未处理拒绝是 fail-loud 退出（app-boot 的
+  // installFailLoud exit(1)）——一次普通的磁盘写失败会杀掉整个 dsh 进程。
+  // 修复后：persist 吞掉、记一次日志、磁盘状态停在最近一次成功写入（读路径
+  // 与崩溃同语义），运行照常落定。
+  const live = r.get(id)
+  assert.ok(live, 'the live record is observable while the run is active')
+  rmSync(join(home, 'workflows', 'runs'), { recursive: true, force: true })
+  writeFileSync(join(home, 'workflows', 'runs'), 'not a directory')
+  const rejections = []
+  const onRejection = (/** @type {unknown} */ reason) => { rejections.push(reason) }
+  process.on('unhandledRejection', onRejection)
+  try {
+    const outcome = await bundle.jobsHooks()[0].done
+    assert.equal(outcome.status, 'completed', 'the run still settles completed')
+    await r.join(id)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(live.log.some((l) => l.kind === 'journal-persist-failed'), 'the failure is logged into the run log (once)')
+    assert.equal(rejections.length, 0, `no unhandled rejection may escape (got ${rejections.length})`)
+  } finally {
+    process.off('unhandledRejection', onRejection)
+  }
+})
+
 await check('a legacy journal with inline steps still loads (no migration on read)', async () => {
   // Runs written by an older build keep steps INLINE in the journal and have no
   // JSONL. They must keep working, and reading must not rewrite anything.

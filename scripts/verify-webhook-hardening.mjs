@@ -142,43 +142,94 @@ await check('loopback is PARSED, not prefix-matched (hostname/port spoofing is n
   assert.equal(isLoopbackAddress('127.0.0.1'), true, 'the real literal still passes')
 })
 
-// A peer address is only meaningful if it was OBSERVED. The reader used to take
-// any duck-typed `remoteAddress`, so a caller-supplied object could forge
-// locality — the single gate on an unauthenticated steer. An accessor that
-// returns a perfectly valid `127.0.0.1` is the sharpest case: validating only
-// the VALUE cannot catch it, so provenance (an own data property) must be
-// checked too.
-await check('remoteAddressOf accepts only an own, data-property peer address', () => {
+// A peer address is only meaningful if it was OBSERVED. The pre-F4 reader took
+// any duck-typed `remoteAddress` string, so `'127.evil.com'` / `'127.0.0.1:8080'`
+// / a hostname all parsed as this machine. The provenance that replaced it is
+// the VALUE SHAPE (a net.isIP literal) plus family corroboration — the middle
+// cut's "own data property" requirement rejected every REAL socket, because
+// node defines remoteAddress as a Socket.prototype accessor (see the real-HTTP
+// check below), which 403'd all loopback deliveries by default.
+await check('remoteAddressOf accepts only an IP literal, with a corroborating family', () => {
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '203.0.113.9' } }), '203.0.113.9', 'a plain socket reads normally')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '::1', remoteFamily: 'IPv6' } }), '::1', 'IPv6 with a matching family')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1', remoteFamily: 'IPv4' } }), '127.0.0.1', 'explicit IPv4 family')
-
-  // Provenance: computed and inherited values are refused even when valid.
-  const accessor = {}
-  Object.defineProperty(accessor, 'remoteAddress', { get: () => '127.0.0.1', enumerable: true })
-  assert.equal(remoteAddressOf({ socket: accessor }), null, 'an accessor is not an observed address (even returning a valid IP)')
-  assert.equal(remoteAddressOf({ socket: Object.create({ remoteAddress: '127.0.0.1' }) }), null, 'an inherited value is not an observed address')
-  assert.equal(remoteAddressOf(Object.create({ socket: { remoteAddress: '127.0.0.1' } })), null, 'an inherited socket is not an observed transport')
+  // Transports have been seen reporting EITHER family for an IPv4-mapped peer
+  // (`IPv6` on win32/Node 24, `IPv4` in older releases); both spellings are
+  // coherent for a mapped literal, and only for a mapped literal.
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '::ffff:127.0.0.1', remoteFamily: 'IPv6' } }), '::ffff:127.0.0.1', 'a mapped literal with the IPv6 family')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '::ffff:127.0.0.1', remoteFamily: 'IPv4' } }), '::ffff:127.0.0.1', 'a mapped literal with the logical IPv4 family')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '::1', remoteFamily: 'IPv4' } }), null, 'the mapped allowance does not extend to a non-mapped literal')
 
   // Container shapes node never produces.
   assert.equal(remoteAddressOf({ socket: Object.assign([], { remoteAddress: '127.0.0.1' }) }), null, 'an array socket is refused')
   assert.equal(remoteAddressOf(Object.assign([], { socket: { remoteAddress: '127.0.0.1' } })), null, 'an array request is refused')
 
-  // Value shape: an address, not text that merely looks like one.
+  // Value shape: an address, not text that merely looks like one. This is where
+  // '127.evil.com' and friends die — before the loopback predicate ever runs.
   assert.equal(remoteAddressOf({ socket: { remoteAddress: 'localhost' } }), null, 'a hostname is not an address')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1:8080' } }), null, 'an address with a port is not an address')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.evil.com' } }), null, 'arbitrary text is not an address')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '' } }), null, 'an empty string is no address')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: 42 } }), null, 'a non-string is not an address')
+  assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1\n203.0.113.9' } }), null, 'embedded whitespace is not an address')
 
-  // Corroboration: a family that contradicts the literal means the object was
-  // assembled, since both come from one kernel call.
+  // Corroboration: a family that contradicts the (non-mapped) literal is still
+  // refused — both come from one kernel call, so a mismatch means assembled.
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '127.0.0.1', remoteFamily: 'IPv6' } }), null, 'a contradicting family is refused')
   assert.equal(remoteAddressOf({ socket: { remoteAddress: '::1', remoteFamily: 'IPv4' } }), null, 'the mismatch is checked both ways')
 
   // Still fail-closed on a hidden peer.
   assert.equal(remoteAddressOf({}), null, 'no socket reports null')
   assert.equal(remoteAddressOf({ socket: {} }), null, 'an addressless socket reports null')
+})
+
+// The regression that matters: the own-data-property cut returned null for
+// EVERY real request — node's socket carries remoteAddress as a PROTOTYPE
+// accessor — so the default-config endpoint 403'd the loopback callers it
+// exists for. Only a live http round trip can catch that class of bug; mock
+// sockets with own-data properties (every check above) cannot.
+await check('a REAL http request passes the locality gate and a real delivery is admitted', async () => {
+  const { createServer } = await import('node:http')
+  const local = mount({ webhookTriggersPath: join(dir, 'k-rules.json'), webhookHistoryPath: join(dir, 'k-history.json') })
+  await local.service.saveRule(RULE)
+  let seen = 'no-request'
+  const probeServer = createServer((req, res) => {
+    seen = remoteAddressOf(req)
+    res.end('ok')
+  })
+  await new Promise((resolve) => probeServer.listen(0, '127.0.0.1', resolve))
+  try {
+    const probe = await fetch(`http://127.0.0.1:${probeServer.address().port}/probe`)
+    await probe.text()
+  } finally {
+    probeServer.close()
+  }
+  assert.notEqual(seen, 'no-request', 'the probe arrived')
+  assert.ok(seen !== null, `remoteAddressOf reads a REAL socket (prototype accessor), got ${seen}`)
+  assert.equal(isLoopbackAddress(seen), true, `the real address parses as loopback (got ${seen})`)
+
+  const deliveryServer = createServer((req, res) => {
+    void local.handler(req, res).catch(() => {
+      try { res.writeHead(500) } catch { /* already sent */ }
+      res.end()
+    })
+  })
+  await new Promise((resolve) => deliveryServer.listen(0, '127.0.0.1', resolve))
+  let status = 0
+  let body = ''
+  try {
+    const delivered = await fetch(`http://127.0.0.1:${deliveryServer.address().port}/webhook-triggers/rule-a`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+      body: '{"hello":"world"}',
+    })
+    status = delivered.status
+    body = await delivered.text()
+  } finally {
+    deliveryServer.close()
+  }
+  assert.equal(status, 202, `a real loopback delivery is admitted, not the own-data cut's 403 (got ${status}: ${body})`)
+  local.dispose()
 })
 
 await check('the secret comparison is timing-safe and length-agnostic', () => {

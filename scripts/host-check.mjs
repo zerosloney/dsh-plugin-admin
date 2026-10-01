@@ -640,7 +640,7 @@ assert.equal(shouldIgnoreScripts('E:/work/pkg', 'deny'), true, 'deny beats local
  * reference, and the refusal has to happen BEFORE pnpm runs (refusing afterwards
  * would already have cloned and built the repository).
  */
-for (const registrySpec of ['some-plugin', '@scope/pkg', 'some-plugin@^1.2.3', '@scope/pkg@~2.0', 'is-number@7']) {
+for (const registrySpec of ['some-plugin', '@scope/pkg', 'some-plugin@^1.2.3', '@scope/pkg@~2.0', 'is-number@7', 'pkg@1.2.3-beta.1', 'pkg@next']) {
   assert.equal(isRegistryInstallSpec(registrySpec), true, `${registrySpec} is a registry package`)
   assert.doesNotThrow(() => assertInstallSpecAllowed(registrySpec, 'registry-only'), `${registrySpec} is permitted under registry-only`)
 }
@@ -648,7 +648,12 @@ for (const localSpec of ['E:/work/my-plugin', '/opt/plugins/x', './pkg', '../pkg
   assert.equal(isRegistryInstallSpec(localSpec), false, `${localSpec} is not a registry package`)
   assert.doesNotThrow(() => assertInstallSpecAllowed(localSpec, 'registry-only'), `the operator's own path ${localSpec} is still permitted`)
 }
-for (const remoteSpec of ['git+https://host/repo.git', 'git+https://host/repo.git#semver:^1.0.0', 'github:user/repo', 'user/repo', 'https://host/pkg.tgz', 'git+ssh://git@host/repo.git']) {
+// The alias forms smuggle the remote reference into the RANGE position, behind
+// the leading-scheme check: measured pre-fix, `foo@git+https://…` classified as
+// a registry package, so `registry-only` cloned the repository and ran its
+// prepare. A semver range/dist-tag never contains `:` or `/`; every remote
+// reference does.
+for (const remoteSpec of ['git+https://host/repo.git', 'git+https://host/repo.git#semver:^1.0.0', 'github:user/repo', 'user/repo', 'https://host/pkg.tgz', 'git+ssh://git@host/repo.git', 'foo@git+https://github.com/evil/repo.git', 'foo@github:user/repo', 'foo@user/repo', 'foo@https://host/pkg.tgz', 'git@github.com:evil/repo.git']) {
   assert.equal(isRegistryInstallSpec(remoteSpec), false, `${remoteSpec} is not a registry package`)
   assert.throws(
     () => assertInstallSpecAllowed(remoteSpec, 'registry-only'),
@@ -724,6 +729,49 @@ assert.throws(() => assertRevealablePath('\\\\?\\C:\\Windows', 'reveal'), /names
 assert.throws(() => assertRevealablePath('\\\\.\\PhysicalDrive0', 'reveal'), /namespace prefix/, 'the device namespace is refused')
 assert.throws(() => assertRevealablePath(revealableFile + '\u0001', 'reveal'), /control character/, 'a control character is refused (PowerShell argv breakout)')
 assert.throws(() => assertRevealablePath(revealableFile + '"', 'reveal'), /control character or a double quote/, 'a double quote is refused')
+// The input checks see the CALLER'S spelling, but explorer gets realpathSync's
+// OUTPUT. A junction (mklink /j needs no privilege, and a cloned repo can ship
+// one) can resolve a clean drive-letter path INTO a UNC share — the one shape
+// this gate exists to refuse. Measured pre-fix: such a junction was accepted
+// and the resolved UNC handed to explorer verbatim.
+if (process.platform === 'win32') {
+  const localJunction = join(here, '..', '.host-check-tmp', 'reveal-gate-junction')
+  rmSync(localJunction, { force: true })
+  symlinkSync(join(here, '..', '.host-check-tmp', 'reveal-gate'), localJunction, 'junction')
+  try {
+    assert.equal(
+      assertRevealablePath(localJunction, 'reveal'),
+      realpathSync(localJunction),
+      'a junction to a local directory still reveals (resolved form, not refused)',
+    )
+  } finally {
+    rmSync(localJunction, { force: true })
+  }
+  // The refusal itself needs a junction that RESOLVES to a UNC spelling here —
+  // an admin share may be visible yet not resolvable in this context (null
+  // session, hardened loopback). Probe honestly; skip when unexercisable.
+  const uncJunction = join(here, '..', '.host-check-tmp', 'reveal-gate-unc-junction')
+  rmSync(uncJunction, { force: true })
+  symlinkSync('\\\\127.0.0.1\\C$\\Windows', uncJunction, 'junction')
+  let resolvedUnc = null
+  try {
+    const resolved = realpathSync(uncJunction)
+    if (resolved.startsWith('\\\\') || resolved.startsWith('//')) resolvedUnc = resolved
+  } catch { /* not resolvable in this context */ }
+  try {
+    if (resolvedUnc !== null) {
+      assert.throws(
+        () => assertRevealablePath(uncJunction, 'reveal'),
+        /network share/,
+        'a junction resolving to a UNC share is refused although its spelling is a local drive path',
+      )
+    } else {
+      console.log('  (skip: the local admin share does not resolve to a UNC path here — the junction→UNC reveal case cannot be exercised)')
+    }
+  } finally {
+    rmSync(uncJunction, { force: true })
+  }
+}
 // A path on ANOTHER DRIVE with no registry is still accepted: reveal is a
 // read-only UI affordance, and the base CLI bundle mounts no registry, so
 // workspace containment would refuse every legitimate reveal there.
@@ -2320,7 +2368,7 @@ assert.ok(deadRegistry.error, 'dead registry surfaces an error, not a throw')
 // the length cap is what keeps a misbehaving server from ballooning host
 // memory — over-cap reads cancel the stream and fail loud; under-cap reads
 // decode multi-chunk bodies intact.
-const { readBoundedText } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
+const { readBoundedText, probeMcpServer } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
 {
   const fakeResponse = (chunks) => ({
     body: {
@@ -2342,6 +2390,21 @@ const { readBoundedText } = await import(new URL('../lib/mcp-probe.js', import.m
   )
   assert.equal(await readBoundedText(fakeResponse(['hello ', 'world']), 256 * 1024), 'hello world',
     'an under-cap multi-chunk body reads whole')
+}
+
+// A `.cmd` shim must take the cmd.exe-wrapped spawn branch: node ≥18.20
+// (CVE-2024-27980) refuses shell-less .cmd spawns with EINVAL, and cross-spawn
+// (what the real mcp-client transport uses) wraps exactly those. Measured
+// pre-fix: the exclusion set held .bat/.cmd, so every `.cmd` server dsh can
+// actually run failed its probe with EINVAL while dsh itself ran it fine.
+// The shim below spawns, closes stdout, and exits — the probe must fail with
+// a handshake/EOF-shaped error, never the spawn EINVAL.
+if (process.platform === 'win32') {
+  const cmdShim = join(here, '..', '.host-check-tmp', 'probe-shim.cmd')
+  writeFileSync(cmdShim, '@echo off\r\nexit /b 0\r\n')
+  const probed = await probeMcpServer({ transport: 'stdio', serverName: 'shim', command: cmdShim, args: [] })
+  assert.equal(probed.ok, false, 'a shim with no MCP answers does not complete a handshake')
+  assert.doesNotMatch(String(probed.error), /EINVAL/, `the shim spawns through cmd.exe (got: ${probed.error})`)
 }
 
 // Cache-hit regression: the 5-minute in-memory cache used to store only

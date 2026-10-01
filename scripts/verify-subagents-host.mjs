@@ -745,7 +745,10 @@ await check('probePathCommand: presence/version separation on bare names and abs
 /* 16 ── the 2026-09-20 review fixes: providerName guards, queue coverage,
  * modelSelectionSettings capability gate. */
 await check('validateEntryInput: modelSelectionSettings without the Host service fails loud', () => {
-  const entry = entryOf('ms-1', { provider: 'spawn', toolName: 'custom_tool_x', modelSelectionSettings: true })
+  // toolName must NOT be in KNOWN: the fixture seeds `custom_tool_x` into the
+  // known-tool set, and the occupation gate (a name the runtime/seed already
+  // holds would fail the NEXT boot's global-layer registration) now refuses it.
+  const entry = entryOf('ms-1', { provider: 'spawn', toolName: 'ms_own_tool', modelSelectionSettings: true })
   assert.throws(
     () => validateEntryInput(entry, envFor()),
     /model-selection-settings/,
@@ -753,6 +756,39 @@ await check('validateEntryInput: modelSelectionSettings without the Host service
   )
   const ok = validateEntryInput(entry, { ...envFor(), modelSelectionAvailable: true })
   assert.ok(ok !== undefined, 'the capability flag lets the switch through')
+})
+
+/* 16b ── the 2026-10 review fixes: toolName occupation gate, disabled passthrough. */
+await check('toolName colliding with a known tool is refused; the row keeps its own former name', () => {
+  // 'bash' is in RUNTIME: saving a row named after a live tool passed the old
+  // checks, landed in the patch, and failed the NEXT boot's global-layer
+  // registration (the workflow_admin rename exists for exactly this rule).
+  const occupied = entryOf('occ-1', { provider: 'spawn', toolName: 'bash' })
+  assert.throws(() => validateEntryInput(occupied, envFor()), /已被当前部署的工具占用/, 'a runtime-tool name is refused')
+  const seeded = entryOf('occ-2', { provider: 'spawn', toolName: 'todo_write' })
+  assert.throws(() => validateEntryInput(seeded, envFor()), /已被当前部署的工具占用/, 'a seed-tool name is refused too')
+  // Editing a mounted row must keep its OWN name: the previous toolName is in
+  // the runtime set because THIS row registered it.
+  const own = entryOf('occ-1', { provider: 'spawn', toolName: 'bash' })
+  const existing = new Map([['occ-1', { toolName: 'bash' }]])
+  assert.doesNotThrow(() => validateEntryInput(own, envFor(existing)), 'the row itself keeps its former name')
+})
+
+await check('upsert preserves a hand-written disabled flag on the replaced row', () => {
+  const base = [MANAGED_BLOCK_MARKER, '- insert:', ...serializeEntryLines(entryOf('da-1', { provider: 'spawn', toolName: 'da_tool_one' }))]
+  // Hand-disable the row the way an operator would: own-key indent, after name.
+  const disabled = [...base.slice(0, 2), ...base.slice(2, 3), '      disabled: true', ...base.slice(3)]
+  const next = upsertIntoLines(disabled, entryOf('da-1', { provider: 'spawn', toolName: 'da_tool_one' }))
+  const reparsed = parseManagedEntries(next.join('\n'))
+  assert.equal(reparsed.length, 1, 'the row is still there')
+  assert.match(next.join('\n'), /^ {6}disabled: true$/m, 'the hand-written disabled flag survived the whole-row replacement')
+  // And an explicitly-written false survives too — it is the operator's信息.
+  const explicitFalse = [...base.slice(0, 2), ...base.slice(2, 3), '      disabled: false', ...base.slice(3)]
+  const nextFalse = upsertIntoLines(explicitFalse, entryOf('da-1', { provider: 'spawn', toolName: 'da_tool_one' }))
+  assert.match(nextFalse.join('\n'), /^ {6}disabled: false$/m, 'an explicit disabled: false survives as well')
+  // A row that never carried the flag gains none.
+  const plain = upsertIntoLines(base, entryOf('da-1', { provider: 'spawn', toolName: 'da_tool_one' }))
+  assert.doesNotMatch(plain.join('\n'), /disabled/, 'no disabled key appears for a row that never had one')
 })
 
 await check('apply(): builtin rows refuse a providerName another backend or a base provider owns', async () => {
