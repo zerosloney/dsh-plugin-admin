@@ -52,7 +52,7 @@ const fakeWorkspaceRegistry = {
   archivedSessionIds: [],
 }
 
-const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, seenPathFor, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
+const { applyWebhookAdmin, webhookInvocations, secretMatches, renderPromptTemplate, validateRuleEntry, seenPathFor, unionSeenKeys, mergeHistoryRows, WEBHOOK_RUNTIME_PACKAGE, DISPATCH_KIND } = await import(new URL('../lib/webhook-triggers.js', import.meta.url).href)
 
 const results = []
 const check = (name, fn) => {
@@ -93,6 +93,41 @@ check('seenPathFor derives the dedup sidecar beside the history file', () => {
     assert.notEqual(seenPathFor(path), path, path + ' is not its own dedup path')
     assert.ok(seenPathFor(path).endsWith('.seen.json'), path + ' gets a .seen.json sibling')
   }
+})
+
+check('unionSeenKeys / mergeHistoryRows merge a sibling instance\u2019s sidecar rows', () => {
+  // The flushes take the sibling file lock and merge what is on disk, because
+  // another dsh instance on this DSH_HOME may have flushed its own deliveries
+  // between our reads. A whole-file overwrite used to drop them — and a lost
+  // claim re-executes a replayed delivery after a restart.
+  assert.deepEqual(
+    unionSeenKeys(['old\0a', 'old\0b'], ['new\0x']),
+    ['old\0a', 'old\0b', 'new\0x'],
+    'disk keys and memory keys union, order preserved',
+  )
+  assert.deepEqual(
+    unionSeenKeys(['k1', 'k2', 'k3'], []).slice(-2),
+    ['k2', 'k3'],
+    'the union is tail-capped: newest keys survive, oldest fall off',
+  )
+  const diskRows = [
+    { deliveryId: 'd-1', ruleId: 'r', ok: true },
+    { deliveryId: 'd-2', ruleId: 'r', ok: false, error: 'offline' },
+    { at: '2026-01-01', ruleId: 'r' }, // no deliveryId: passes through
+  ]
+  const memoryRows = [
+    { deliveryId: 'd-3', ruleId: 'r', ok: true },
+    // The same delivery re-read by this process: the newer row WINS the value.
+    { deliveryId: 'd-2', ruleId: 'r', ok: false, error: 'offline (retried)' },
+  ]
+  const merged = mergeHistoryRows(diskRows, memoryRows)
+  assert.equal(merged.length, 4, 'three distinct ids plus the id-less row')
+  assert.deepEqual(
+    merged.find((row) => row.deliveryId === 'd-2'),
+    { deliveryId: 'd-2', ruleId: 'r', ok: false, error: 'offline (retried)' },
+    'the later (memory) duplicate replaces the disk row',
+  )
+  assert.deepEqual(mergeHistoryRows(null, null), [], 'junk input folds to empty, never throws')
 })
 
 check('secretMatches compares equal secrets and rejects others', () => {
@@ -377,6 +412,29 @@ await checkAsync('HTTP handler: happy-path steer delivery returns 202 and steers
   assert.ok(res.body.includes('steer'), 'response names the steer mode')
   assert.equal(steered.length, 1, 'message steered into the live session')
   assert.ok(steered[0].msg.content[0].text.includes('CI 失败'), 'prompt template applied to delivery payload')
+})
+
+await checkAsync('sidecar flushes keep a sibling instance\u2019s rows (lock + merge, not overwrite)', async () => {
+  // Simulate a sibling dsh instance on this DSH_HOME that flushed its own
+  // delivery right before ours lands. The behavioral half of
+  // unionSeenKeys/mergeHistoryRows: after OUR flush, its history row and its
+  // claimed delivery id must still be on disk — a lost claim re-executes a
+  // replayed delivery after a restart.
+  const historyPath = join(webhookHome, 'history-main.json')
+  const dedupPath = seenPathFor(historyPath)
+  writeFileSync(historyPath, JSON.stringify({
+    history: [{ at: '2026-01-01 00:00:00.000', ruleId: 'sibling', deliveryId: 'sibling-d1', event: 'push', ok: true }],
+  }), 'utf8')
+  writeFileSync(dedupPath, JSON.stringify({ seen: ['sibling\0sibling-d1'] }), 'utf8')
+  const res = mockRes()
+  await handler(jsonRequest({ delivery: 'merge-check-1' }), res)
+  assert.equal(res.statusCode, 202, 'our delivery executed')
+  const history = JSON.parse(readFileSync(historyPath, 'utf8'))
+  assert.ok(history.history.some((row) => row.deliveryId === 'sibling-d1'), 'the sibling history row survived our flush')
+  assert.ok(history.history.some((row) => row.deliveryId === 'merge-check-1'), 'and our own row landed beside it')
+  const seen = JSON.parse(readFileSync(dedupPath, 'utf8'))
+  assert.ok(seen.seen.includes('sibling\0sibling-d1'), 'the sibling claim survived our flush')
+  assert.ok(seen.seen.includes('ci-fail\0merge-check-1'), 'and our own claim is there')
 })
 
 await checkAsync('HTTP handler: 405 wrong method, 415 wrong content-type', async () => {

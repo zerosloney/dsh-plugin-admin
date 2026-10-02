@@ -8,6 +8,12 @@
  * never refuses the write (fail-open — the atomic rename still protects the
  * file), and the critical section's return value survives.
  *
+ * Two boundaries are pinned deliberately, because both used to fail SILENTLY:
+ * an owner that exists but refuses to be signalled (EPERM) must never have its
+ * lock stolen, and re-entering the lock from inside its own section must neither
+ * stall the wait budget nor release the lock the outer section still holds. See
+ * withFileLock's doc comment.
+ *
  * Zero dependencies; part of npm test.
  */
 import assert from 'node:assert/strict'
@@ -15,7 +21,10 @@ import { spawn } from 'node:child_process'
 import { existsSync, chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, mutatePatch, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+// `mutatePatch` is deliberately NOT imported here: the cross-process check below
+// spawns a worker that imports it by URL, and an unused local import of it was
+// just lint noise (oxlint no-unused-vars).
+import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, ownerProbeProvesDeath, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -66,6 +75,41 @@ await check('a dead owner\'s lock is reclaimed, a live foreign one is not stolen
   assert.ok(!existsSync(lockPath), 'and it is cleaned up')
 })
 
+await check('a live owner we may not signal (EPERM) is alive, not dead — its lock is never stolen', () => {
+  // Measured on this platform, not assumed: a dead pid reports ESRCH, a process
+  // owned by another user or by SYSTEM reports EPERM (`System` pid 4, csrss,
+  // wininit, services all do). Reading EPERM as death — the bare catch this
+  // pins — steals a lock from a LIVE writer, which is reachable whenever two dsh
+  // instances share one profile and one of them runs elevated.
+  assert.equal(ownerProbeProvesDeath(Object.assign(new Error('kill EPERM'), { code: 'EPERM' })), false,
+    'EPERM means the process exists and we may not signal it')
+  assert.equal(ownerProbeProvesDeath(Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' })), true,
+    'ESRCH is the only positively identified death')
+  for (const odd of [new Error('no code'), null, undefined, 'EPERM', 42]) {
+    assert.equal(ownerProbeProvesDeath(odd), false, 'an unidentifiable failure is never proof of death')
+  }
+
+  // Behavioural half, when this host has a pid we cannot signal. The observable
+  // difference is whether the foreign lock FILE survives the wait: a stolen lock
+  // gets unlinked, a respected one is still there after the fail-open write.
+  const foreign = [1, 4, 900, 1092, 1100, 1172].find((pid) => {
+    if (pid === process.pid) return false
+    try { process.kill(pid, 0); return false } catch (error) { return /** @type {any} */ (error).code === 'EPERM' }
+  })
+  if (foreign === undefined) {
+    // Nothing to probe here (e.g. a container running as root, where every pid is
+    // signallable). The mapping above still pins the decision; say so out loud
+    // rather than letting the weaker coverage pass unnoticed.
+    console.log('   (no EPERM pid on this host — behavioural half skipped)')
+    return
+  }
+  writeFileSync(lockPath, JSON.stringify({ pid: foreign, at: Date.now() }), 'utf8')
+  const value = withFileLock(target, () => 'wrote-anyway')
+  assert.equal(value, 'wrote-anyway', 'EPERM is not a refusal: fail-open still writes')
+  assert.ok(existsSync(lockPath), "the live owner's lock file was NOT unlinked (pid " + foreign + ')')
+  rmSync(lockPath, { force: true })
+})
+
 await check('a live foreign lock delays the write but never refuses it (fail-open)', async () => {
   // The parent process is definitively alive and is not us: a lock that must
   // be waited on (unlike a dead pid, which the previous check reclaims).
@@ -76,6 +120,81 @@ await check('a live foreign lock delays the write but never refuses it (fail-ope
   assert.equal(value, 'wrote-anyway', 'the write happens even while a lock is held')
   assert.ok(waited >= 2500, 'it waited for the lock window first (waited ' + waited + 'ms)')
   rmSync(lockPath, { force: true })
+})
+
+await check('the lock is REENTRANT: a nested call neither stalls nor releases early', () => {
+  // Pinned because the previous behaviour was silent and wrong: a nested call
+  // could not take the lock, reclaimStaleLock refuses to steal from our own
+  // pid, so it burned the whole LOCK_WAIT_MS and then failed open — running
+  // CONCURRENTLY with the very section that owned the lock. No error, no
+  // diagnostic, only a 3s stall. Now an enclosing section of ours grants the
+  // nested one directly, and the nested one must not release the lock file the
+  // outer section still needs.
+  const target = join(dir, 'reentrant.patch.yml')
+  writeFileSync(target, '# seed\n', 'utf8')
+  const lockPath = target + '.dsh-admin.lock'
+  const other = join(dir, 'reentrant-other.patch.yml')
+  const otherLock = other + '.dsh-admin.lock'
+  const seen = []
+  const started = Date.now()
+  const value = withFileLock(target, () => {
+    assert.ok(existsSync(lockPath), 'the outer section holds the lock')
+    seen.push('outer-entered')
+    const inner = withFileLock(target, () => {
+      seen.push('inner-entered-while-outer-held')
+      assert.ok(existsSync(lockPath), "the outer's lock file is still on disk inside the nested section")
+      assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).pid, process.pid, 'and still names one owner')
+      // A DIFFERENT file is ordinary contention, not reentrancy: it takes the
+      // normal path and gets its own lock immediately (nothing holds it).
+      const cross = withFileLock(other, () => {
+        seen.push('other-file-entered')
+        assert.ok(existsSync(otherLock), 'a different file still acquires its own lock')
+        assert.ok(existsSync(lockPath), "without disturbing the first file's lock")
+        return 'cross'
+      })
+      assert.ok(!existsSync(otherLock), 'and releases it on the way out')
+      return 'inner:' + cross
+    })
+    // The heart of the pin: the nested section is done, but the OUTER one is
+    // not, so the lock must still be there. Releasing here is the bug.
+    assert.ok(existsSync(lockPath), 'the nested section did NOT release the lock the outer section still holds')
+    seen.push('outer-still-entered')
+    return inner
+  })
+  const elapsed = Date.now() - started
+  assert.equal(value, 'inner:cross', 'return values propagate through the nested call')
+  assert.deepEqual(
+    seen,
+    ['outer-entered', 'inner-entered-while-outer-held', 'other-file-entered', 'outer-still-entered'],
+    'the nested section ran inside the outer one, and a different file took the normal path',
+  )
+  assert.ok(elapsed < 1000, 'no wait budget was spent (took ' + elapsed + 'ms; the budget is 3000ms)')
+  assert.ok(!existsSync(lockPath), 'the outer section still releases the lock on its way out')
+})
+
+await check('a throwing section releases the lock AND clears its reentrancy grant', () => {
+  // A leaked registration would silently disable locking for the rest of the
+  // process — every later call would early-return and never take a lock at all.
+  const target = join(dir, 'reentrant-throw.patch.yml')
+  writeFileSync(target, '# seed\n', 'utf8')
+  const lockPath = target + '.dsh-admin.lock'
+  const attempt = (fn) => {
+    try { withFileLock(target, fn); return null } catch (error) { return error }
+  }
+  // The inner throws; the outer must still unwind cleanly and clean up.
+  const inner = attempt(() => {
+    attempt(() => { throw new Error('inner boom') })
+    throw new Error('outer boom')
+  })
+  assert.match(String(inner && inner.message), /outer boom/, 'the outer section\'s own error propagates')
+  assert.ok(!existsSync(lockPath), 'a throwing section still releases the lock')
+
+  // And the grant is gone: this call must ACQUIRE (lock file appears) rather
+  // than early-return on a stale registration.
+  let sawLockDuringSection = false
+  withFileLock(target, () => { sawLockDuringSection = existsSync(lockPath) })
+  assert.equal(sawLockDuringSection, true, 'the next call really takes the lock (no leaked reentrancy grant)')
+  assert.ok(!existsSync(lockPath), 'and releases it again')
 })
 
 await check('two processes mutating one patch lose no update (the F1 acceptance case)', async () => {
@@ -226,4 +345,4 @@ await check('the hot-apply helper restarts with noSave and never throws', async 
 
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, cross-process, temp hygiene, rename, hot-apply)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply)')

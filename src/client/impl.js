@@ -648,6 +648,15 @@ var panelsLoad = null
 /** Load failure, surfaced inside the placeholder instead of a blank panel. */
 /** @type {string|null} */
 var panelsError = null
+/** Mounted LazyPanel instances waiting on the shared chunk. The chunk loads
+ * single-flight, so a success anywhere must reach every instance still showing
+ * the failure placeholder, not only the one whose retry won the race.
+ * @type {Set<() => void>} */
+var panelsWatchers = new Set()
+/** Resolve every mounted LazyPanel that is waiting on the chunk. */
+function notifyPanelsLoaded() {
+  panelsWatchers.forEach(function (/** @type {() => void} */ watcher) { watcher() })
+}
 /**
  * Panel-level switch resolver (set by apply() once the policy pipeline exists;
  * null before that and in standalone test mounts). Shared-slot panels (the
@@ -719,9 +728,18 @@ function lazyPanel(exportName) {
     var setAttempt = attemptPair[1]
     useEffect(function () {
       var alive = true
+      var onLoaded = function () {
+        if (alive) setModule(panelsModule)
+      }
       if (loaded === null) {
         loadPanels().then(function () {
           if (alive) setModule(panelsModule)
+          // The chunk loads single-flight: a success won by ANY instance (this
+          // one's own mount, or another panel's retry) must reach every mounted
+          // LazyPanel still showing the failure placeholder — without this,
+          // only the retrying panel recovers and the others stay stuck on
+          // 「面板加载失败」 until each is clicked individually.
+          notifyPanelsLoaded()
         }).catch(function (error) {
           // The failure is STATE, not a module variable: the placeholder used to
           // read `panelsError` directly, but nothing re-rendered when it was set,
@@ -731,7 +749,11 @@ function lazyPanel(exportName) {
           if (alive) setFailure(messageOf(error) || dshT('未知错误'))
         })
       }
-      return function () { alive = false }
+      panelsWatchers.add(onLoaded)
+      return function () {
+        alive = false
+        panelsWatchers.delete(onLoaded)
+      }
     }, [attempt, loaded])
     var Component = loaded === null ? null : loaded[exportName]
     if (Component === undefined || Component === null) {

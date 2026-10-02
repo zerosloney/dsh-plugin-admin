@@ -13,9 +13,9 @@
  *   npm test -- --filter cron      # static gates + every step matching `cron`
  *   node scripts/run-gate.mjs --list
  *
- * The three static gates always run first, even under --filter — they cost
+ * The five static gates always run first, even under --filter — they cost
  * ~2s together and see the cross-cutting breakage (type drift, artifact out
- * of sync with its sources) that a single verify script cannot. Steps run
+ * of sync with its sources, doc drift) that a single verify script cannot. Steps run
  * strictly one at a time: several verify scripts wait on real minute
  * boundaries and process races, and interleaved output would make a red step
  * much harder to read.
@@ -63,7 +63,7 @@ const STEPS = [
   { name: 'verify-web-search-admin', desc: 'web-search provider switch + settings.mutate path (keys never echoed)', cmd: [node, 'scripts/verify-web-search-admin.mjs'] },
   { name: 'verify-i18n', desc: 'dshT call sites ↔ dictionaries, both ways; en values hold no CJK', cmd: [node, 'scripts/verify-i18n.mjs'] },
   { name: 'verify-audit-log', desc: 'audit log: key-name + shape redaction, cap compaction, method pins', cmd: [node, 'scripts/verify-audit-log.mjs'] },
-  { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-open, 0600, Windows EPERM races', cmd: [node, 'scripts/verify-file-lock.mjs'] },
+  { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-open, 0600, Windows EPERM races + owner probe, reentrancy', cmd: [node, 'scripts/verify-file-lock.mjs'] },
   { name: 'verify-rpc-schema', desc: 'wire schemas vs manifest: strict-mode coverage, optional wires', cmd: [node, 'scripts/verify-rpc-schema.mjs'] },
   { name: 'verify-service-injects', desc: 'every ctx.<service> read in lib/** is declared in inject', cmd: [node, 'scripts/verify-service-injects.mjs'] },
   { name: 'verify-store-version', desc: 'store files: version read contract, migration chain, refuse-newer', cmd: [node, 'scripts/verify-store-version.mjs'] },
@@ -103,7 +103,7 @@ function runStep(step) {
   // `npm` needs a shell wrapper on Windows (npm.cmd), and spawning with an
   // args ARRAY + shell is deprecated (DEP0190) — so the npm steps pass one
   // command string. Static literals from the table: nothing to escape.
-  // Plain node scripts are spawned directly, so 36 of 38 steps pay no extra
+  // Plain node scripts are spawned directly, so 38 of 40 steps pay no extra
   // process hop.
   const options = { cwd: root, stdio: 'inherit', env: process.env }
   if (step.cmd[0] === 'npm') return spawnSync(step.cmd.join(' '), { ...options, shell: true })

@@ -27,7 +27,9 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
-const PACKAGE_ID = 'dsh-plugin-admin'/**
+const PACKAGE_ID = 'dsh-plugin-admin'
+
+/**
  * The shell's frozen module table (PLATFORM_MODULES in dsh-client-web). Every
  * dynamic bundle resolves these against the seed table, so they must stay
  * external in both artifacts — bundling a second copy would break the shared

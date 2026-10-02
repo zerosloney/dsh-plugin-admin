@@ -247,20 +247,53 @@ await checkAsync('failed agent degrades to null, run continues', async () => {
   assert.ok(logs.some((l) => l.kind === 'agent-incomplete' || l.kind === 'step-error'))
 })
 
-await checkAsync('parallel fan-out respects semaphore', async () => {
+await checkAsync('parallel itself does NOT gate; the leaf agent() calls do (global bound, no self-wait deadlock)', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
-  const sem = createSemaphore(3)
-  let active = 0; let peak = 0
+  const sem = createSemaphore(2)
+  // 1. Plain thunks run UNGATED in parallel: parallel() holding permits while
+  //    its own leaves wait for them would be a self-deadlock, so the engine
+  //    facade delegates all gating to the agent()/shell() leaves.
+  let plainActive = 0; let plainPeak = 0
   const { facade } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: sem })
   const results = await facade.parallel(Array.from({ length: 5 }, (_, i) => async () => {
-    active += 1; peak = Math.max(peak, active)
+    plainActive += 1; plainPeak = Math.max(plainPeak, plainActive)
     await new Promise((r) => setTimeout(r, 10))
-    active -= 1
+    plainActive -= 1
     return i
   }))
   assert.deepEqual(results, [0, 1, 2, 3, 4])
-  assert.equal(peak, 3, `peak should be 3, got ${peak}`)
+  assert.equal(plainPeak, 5, `parallel must not acquire the semaphore itself (peak 5, got ${plainPeak})`)
+  // 2. The cross-run bound lives at the leaf: N concurrent agent() calls —
+  //    here fanned out through parallel(), as a realm script would — cap at
+  //    the shared semaphore. This is what makes max_concurrency real across
+  //    runs (realm-side parallel has only its own per-run limiter).
+  let agentActive = 0; let agentPeak = 0
+  const probe = () => {
+    agentActive += 1; agentPeak = Math.max(agentPeak, agentActive)
+    return new Promise((r) => setTimeout(r, 10)).then(() => {
+      agentActive -= 1
+      return 'ok'
+    })
+  }
+  const { facade: gatedFacade } = createRunner({
+    ctx: (() => {
+      const mock = mockCtx()
+      // Wrap the stub's start so each in-flight agent call overlaps visibly.
+      const originalGet = mock.ctx.get
+      const subagents = originalGet.call(mock.ctx, 'subagents')
+      mock.ctx.get = (key) => key === 'subagents'
+        ? { start: async (...args) => { await probe(); return subagents.start(...args) } }
+        : originalGet(key)
+      return mock.ctx
+    })(),
+    parent: {},
+    signal: controller.signal,
+    semaphore: sem,
+  })
+  const agentResults = await gatedFacade.parallel(Array.from({ length: 5 }, () => async () => gatedFacade.agent('x')))
+  assert.ok(agentResults.every((value) => typeof value === 'string' && value.startsWith('agent#')), 'every leaf call completed with its agent text')
+  assert.equal(agentPeak, 2, `leaf calls must respect the shared semaphore (peak 2, got ${agentPeak})`)
 })
 
 await checkAsync('pipeline stages chain and null short-circuits', async () => {

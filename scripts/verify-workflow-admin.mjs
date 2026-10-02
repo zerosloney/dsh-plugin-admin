@@ -100,7 +100,8 @@ await check('delete removes the right scope', async () => {
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
   await lib.saveSaved({ name: 'gone', scope: 'global', script: 'x' })
   await lib.saveSaved({ name: 'gone', scope: 'project', script: 'y', workspacePath: ws })
-  assert.ok(lib.deleteSaved('gone', 'project', ws))
+  // deleteSaved is queued like saveSaved: await the slot before asserting.
+  assert.ok(await lib.deleteSaved('gone', 'project', ws))
   assert.ok(!existsSync(join(ws, '.dsh', 'workflows', 'gone.json')), 'project file deleted')
   assert.ok(existsSync(join(home, 'workflows', 'saved', 'gone.json')), 'global file intact')
   assert.equal(lib.getSaved('gone', ws).scope, 'global')
@@ -129,7 +130,7 @@ await check('invalid name rejected', async () => {
 await check('delete missing returns false', async () => {
   const home = join(tmpBase, 'g')
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })
-  assert.equal(lib.deleteSaved('nope', 'global'), false)
+  assert.equal(await lib.deleteSaved('nope', 'global'), false)
 })
 
 console.log('applyWorkflowAdmin:')
@@ -517,7 +518,7 @@ await check('RPC refuses a forged project root that is not a registered workspac
   assert.equal(existsSync(join(outside, '.dsh')), false, 'no tree was created at the forged path')
   assert.match(admin.listSaved({ workspacePath: outside }).error, /outside the calling session/, 'listSaved refuses too')
   assert.equal(admin.getSaved({ name: 'x', workspacePath: outside }).error !== undefined, true, 'getSaved refuses too')
-  const forgedDelete = admin.deleteSaved({ name: 'x', scope: 'project', workspacePath: outside })
+  const forgedDelete = await admin.deleteSaved({ name: 'x', scope: 'project', workspacePath: outside })
   assert.equal(forgedDelete.ok, false, 'deleteSaved refuses too')
   assert.match(forgedDelete.error, /outside the calling session/)
   const forgedRun = await admin.runSaved({ name: 'x', workspacePath: outside })

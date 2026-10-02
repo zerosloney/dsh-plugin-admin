@@ -119,12 +119,15 @@ await check('simple run completes with results', async () => {
   assert.equal(rec.status, 'completed')
   assert.equal(rec.result, 'result:task one|result:task two')
   assert.equal(ctxBundle.agentCalls(), 2)
-  // ctx.jobs 桥接的 done 必须是 JobOutcome（status/output），宿主任务通知靠它渲染。
+  // ctx.jobs 桥接的 done 必须是宿主 JobOutcome（status/detail?/result?）——
+  // 完成文本走 `result`；旧实现写 `output`，宿主 settle 只读 detail/result，
+  // 文本会被静默丢弃（该字段名错位已由本断言钉死在正确的一边）。
   const hooks = ctxBundle.jobsHooks()[0]
   assert.ok(hooks, 'job bridged to ctx.jobs')
   const outcome = await hooks.done
   assert.equal(outcome.status, 'completed')
-  assert.match(outcome.output, /completed in 2 steps/)
+  assert.match(outcome.result, /completed in 2 steps/)
+  assert.equal(outcome.output, undefined, 'no stray legacy field: the host contract has no output key')
   // dsh 0.1.7 起 owner 是 SessionId（字符串），不再是 Agent 实例。
   const jobSpec = ctxBundle.jobSpecs()[0]
   assert.equal(jobSpec.owner, 'sess-parent', 'owner passes the session id, not the Agent object')
@@ -407,9 +410,11 @@ await check('loadRecord reassembles steps so get()/amend see the same shape as b
   const viaGet = r2.get(id)
   assert.ok(Array.isArray(viaGet.steps), 'get() returns a steps array')
   assert.ok(viaGet.steps.length >= 2, `get() sees the reassembled steps (got ${viaGet.steps.length})`)
-  // And stepCount, which the panel shows, agrees with the array length.
+  // And stepCount, which the panel shows, agrees with the real step count:
+  // entries are before+after pairs, and the displayed count is after-phase only
+  // (counting raw entries showed the panel 2× the actual steps).
   const listed = r2.list().find((x) => x.id === id)
-  assert.equal(listed.stepCount, viaGet.steps.length, 'list().stepCount matches the reassembled array')
+  assert.equal(listed.stepCount, viaGet.steps.filter((s) => s.phase === 'after').length, 'list().stepCount counts real steps (after-phase entries)')
   // amend must be able to use those steps as a cache source.
   const amended = await r2.amend(id, `const a = await agent('x')\nreturn a`, { parent: { id: 'sess-asm' } })
   await r2.join(amended.id)
@@ -491,7 +496,7 @@ await check('a legacy journal with inline steps still loads (no migration on rea
   // The read path must NOT have created a JSONL (list()/get() are read paths).
   assert.equal(existsSync(join(dir, id + '.steps.jsonl')), false, 'reading a legacy run does not migrate it')
   const listed = r2.list().find((x) => x.id === id)
-  assert.equal(listed.stepCount, steps.length, 'list() counts the inline steps of a legacy run')
+  assert.equal(listed.stepCount, steps.filter((s) => s.phase === 'after').length, 'list() counts the after-phase entries of a legacy run (real steps, not before+after pairs)')
 })
 
 await check('resume continues a stopped run from cache', async () => {
@@ -734,6 +739,32 @@ await check('stop while asking rejects the question and settles as stopped', asy
   assert.equal(rec.status, 'stopped')
   assert.equal(rec.stopReason, 'cancelled')
   assert.notEqual(rec.result, 'unreachable')
+})
+
+await check('concurrent asks queue FIFO: the first one answered first, then the next surfaces', async () => {
+  const home = join(tmpBase, 'n2')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  const { id } = await r.start({
+    script: `
+      const first = await ask('first question')
+      const second = await ask('second question')
+      return first + '|' + second
+    `,
+    parent: { id: 'sess-ask-fifo' },
+  })
+  // 两个挂起问题并存：摘要展示最老的那个，两个 ask 都必须可答——单槽句柄
+  // 的旧实现会丢弃第一个 ask 的句柄，它永远无人可答直到 stop。
+  await waitForQuestion(id, r)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const rec = r.get(id)
+  assert.match(rec.pendingQuestion.text, /first question/, 'the OLDER question is surfaced')
+  assert.deepEqual(r.answer(id, 'A1'), { answered: true }, 'first answer lands')
+  await waitForQuestion(id, r)
+  assert.match(r.get(id).pendingQuestion.text, /second question/, 'the queued question surfaces after the first is answered')
+  assert.deepEqual(r.answer(id, 'A2'), { answered: true }, 'second answer lands')
+  const outcome = await runToDone({ id }, r)
+  assert.equal(outcome.status, 'completed')
+  assert.equal(outcome.result, 'A1|A2', 'answers are woven in FIFO order')
 })
 
 // ─── 清理 ─────────────────────────────────────────────────────────────────────

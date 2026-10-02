@@ -4,7 +4,7 @@
 
 ## 1. 总体形态
 
-插件分两半，**零 dsh 导入**是一切的前提：宿主半与浏览器半都不 `import` 任何 `@deepseek-ai/dsh-*` 包，全部骑运行时的 Cordis Context（按服务键取服务 + 纯数据 typert 注册），这样插件才能跨 dsh 版本可活——缺的服务逐面板降级，绝不让整个插件挂掉。
+插件分两半，**零 dsh 导入**是一切的前提：宿主半与浏览器半都不 `import` 任何 `@deepseek-ai/dsh-*` 包，全部骑运行时的 Cordis Context（按服务键取服务 + 纯数据 typert 注册），这样插件才能跨 dsh 版本可活。降级是**分层**的：六个硬依赖服务（`typert` / `sessionPersistence` / `tools` / `subagents` / `commands` / `shell`，经 `inject` 声明）任一缺失时**整个插件不加载**（cordis 的 inject 等待语义，与 COMPAT.md「版本策略」的口径一致——不存在半可用状态）；在此之上，经 `ctx.get` 动态取的**可选**服务（`workspaceRegistry` / `webServer` / `jobs` / `webhookRuntime` / `sandboxPolicy` / agents 捕获等）才逐面板降级。
 
 - **宿主半** `lib/*.js`：直接入库、无构建步骤。14 个管理 RPC 命名空间在 `lib/index.js` 底部的单次 `ctx.typert.register()` 发布，描述符由 `lib/rpc-manifest.js` 单一真相表生成（见 §6）。
 - **浏览器半** `src/client/` → 构建产物 `lib/client.js`（Phase B1 起）+ 懒加载面板 chunk `lib/client.panels.js`（Phase B2 起）：
@@ -21,13 +21,13 @@
 改完源码必须重建产物：
 
 ```sh
-npm run build:client          # 写入 lib/client.js
-npm run build:client --check  # 校验产物与源码一致（npm test 会跑这一档）
+npm run build:client            # 写入 lib/client.js
+npm run build:client -- --check # 校验产物与源码一致（npm test 会跑这一档）
 ```
 
 ## 2. 写回、并发与降级
 
-所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒即 fail-open 继续写——「拒绝写入比丢更新更糟」的既定取舍；只有多实例并发写同一 profile 时才会出现这短暂停顿，单实例部署无争用。
+所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒即 fail-open 继续写——「拒绝写入比丢更新更糟」的既定取舍；只有多实例并发写同一 profile 时才会出现这短暂停顿，单实例部署无争用。该锁在**本进程内可重入**：同文件嵌套调用直接执行，既不烧这 3 秒预算、也不提前释放外层仍需持有的锁——与「跨进程争用」是两条互不重叠的路径（前者是"我们已经持有"，后者是"别人持有"）。过期回收只认 ESRCH 这一种**确凿**的死亡证据：Windows 上 `process.kill(pid, 0)` 探 `System` / `csrss` / `wininit` / `services` 一律抛 EPERM（进程活着、只是无权发信号），把它读成死亡等于偷掉活锁。
 
 一个刻意的例外：**会话删除/关停不在这条队列上，而是走一把模块内互斥锁**（`lib/session-admin.js` 的 `makeOperationMutex`）。它们**不能**入共享队列——删除序列里的用量台账写入（`usageLedger.upsert`）本身就入该队列，从队列槽位内部再入队会永久等待（已实测：嵌套 `serial()` 按构造即死锁）。互斥锁提供真正需要的那条性质（同一 id 的并发删除、删除与关停之间串行，活跃/包含性校验紧邻 `rm`），台账写入仍留在共享队列上。
 
@@ -80,7 +80,7 @@ TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工
 ### 🪝 Webhook（自动化 · 第二页签）
 规则 = id + secret（新建自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑留空 = 保持已存值）+ 可选事件名 + 动作（steer：选目标在线会话；create：workspacePath + agentPreset + permissionPreset + 可选 model）。**create 的 `workspacePath` 必须落在本实例已知的工作区内**（`assertTrustedWorkspacePath`，与工作流保存库、CLI 后端同一道闸门）——它会被持久化进规则、每次投递都按它新建会话，而本端点刻意绕过浏览器认证，secret 是唯一防线，所以"绝对路径"远远不够。
 
-触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（远程需显式开启 `webhookAllowRemote`）；401/429 与封锁**每来源每窗口**至多各留一条日志与一条交付历史（拒绝历史另有全局 10 条/窗口的预算，防刷屏）。限速按来源地址分桶（报不出对端地址的传输层按连接分桶）+ 无地址调用方的认证失败共享桶（防「每次猜测换连接」绕过刹车）；两张限速表各有 **512 个来源的硬上界**，滚动换址撑不大（排空的桶回收；无一排空时按最后触达逐出最冷端）。封锁期内出示正确 secret 仍放行并解除封锁。交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合分落**两个文件**：历史在 `$DSH_HOME/webhook-history.json`，去重集在派生路径 `webhook-history.seen.json`（`seenPathFor()`，非新 config 键），两者都原子写，**重启后历史保留、重发的同 delivery id 依旧去重**。
+触发：`POST /webhook-triggers/<规则ID>`，头 `x-webhook-secret`（必填），可选 `x-webhook-event` / `x-webhook-delivery`（幂等去重）。**默认只接受本机投递**：非 loopback 来源，以及传输层报告不出对端地址的请求，一律 403（远程需显式开启 `webhookAllowRemote`）；401/429 与封锁**每来源每窗口**至多各留一条日志与一条交付历史（拒绝历史另有全局 10 条/窗口的预算，防刷屏）。限速按来源地址分桶（报不出对端地址的传输层按连接分桶）+ 无地址调用方的认证失败共享桶（防「每次猜测换连接」绕过刹车）；两张限速表各有 **512 个来源的硬上界**，滚动换址撑不大（排空的桶回收；无一排空时按最后触达逐出最冷端）。封锁期内出示正确 secret 仍放行并解除封锁。交付历史（默认 200 条）与 `x-webhook-delivery` 去重集合分落**两个文件**：历史在 `$DSH_HOME/webhook-history.json`，去重集在派生路径 `webhook-history.seen.json`（`seenPathFor()`，非新 config 键），两者都原子写——且写入持相邻文件锁并**先与盘上内容并集**（双实例共享一个 `$DSH_HOME` 时，另一实例刚 flush 的行不会被本实例的整文件覆盖；release 的 id 随 flush 在并集后显式扣除，交还的重试 id 不会被自己的旧 claim 复活），**重启后历史保留、重发的同 delivery id 依旧去重**。
 
 注意：端点与 Web UI 同端口、绕过浏览器认证，secret 是唯一防线；默认 127.0.0.1 绑定时外部 SaaS 需隧道。
 
