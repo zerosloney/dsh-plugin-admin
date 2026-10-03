@@ -44,7 +44,7 @@ pnpm 编排安装 / 卸载 / 更新 + bundles 清单同步。安装/更新完成
 批量删除的语义：在线会话自动先关停（closeSession）再删日志，其余直接删除（deleteSession）；单个失败不阻塞其余，结束汇总失败数。删除路径在物理删除前做 `lstat` 与 realpath 包含性校验（见 §5）。
 
 ### 📚 技能
-只读全量清单，三层作用域合并——**全局层**、**每个 Agent 预设的 standing 作用域**、**每个已知会话的 (cwd, 预设) 作用域**。Web 部署（`dsh-web-app`）会把宿主层 `skill-filesystem` 行禁用、改由预设挂载本地发现，所以那里全局层为 0 属正常，用户目录（`~/.agents/skills`、`~/.dsh/skills`）由预设作用域列出。读取预设作用域会经 `agentPresets.acquireScope`（dsh 0.1.7 租约式，读毕即释放；旧宿主回退 `standingKeyFor`）确保该预设的 standing 挂载（只组合插件，不启动 agent / 会话 / 轮次），这是宿主侧读取预设层的唯一入口。严格只读：只调 `snapshot()` / `list()` 摘要，正文 loader `get()` 从不调用，不写任何东西；覆盖面 / 失败 / `complete` 旗标随行返回，残缺清单永远不会读成完整清单。
+只读全量清单，三层作用域合并——**全局层**、**每个 Agent 预设的 standing 作用域**、**每个已知会话的 (cwd, 预设) 作用域**。Web 部署（`dsh-web-app`）会把宿主层 `skill-filesystem` 行禁用、改由预设挂载本地发现，所以那里全局层为 0 属正常，用户目录（`~/.agents/skills`、`~/.dsh/skills`）由预设作用域列出。读取预设作用域会经 `agentPresets.acquireScope`（租约式，读毕即释放）确保该预设的 standing 挂载（代码里还防御性探测 `standingKeyFor`，但没有任何已发布宿主暴露该成员——缺 `acquireScope` 的宿主按作用域读取失败如实上报 `complete:false`，不会静默丢层）（只组合插件，不启动 agent / 会话 / 轮次），这是宿主侧读取预设层的唯一入口。严格只读：只调 `snapshot()` / `list()` 摘要，正文 loader `get()` 从不调用，不写任何东西；覆盖面 / 失败 / `complete` 旗标随行返回，残缺清单永远不会读成完整清单。
 
 ### 🔌 MCP 服务器
 行级 CRUD + 真实握手探测（initialize → tools/list）+ 工具试调用台（tools/call，60s 预算、16KB 截断）。「测试连接」与试调用读取**未掩码的存储配置**——探测必须等价于真实挂载，凭据型 server 才测得通；掩码只是读路径的投影，探测结果（不含秘密）回浏览器。**已挂载条目的配置修改热应用至运行中的 server（无需重启）**：保存即通过 loader 同款 `fiber.update` 通道热重启对应 server（按 serverName 匹配，改名也生效；noSave 保证 patch 文件不被宿主改写）；**新增条目**与**删除**仍需重启（新 fiber 挂载是 loader 启动期职责）。热应用失败时面板显示具体原因并回退到重启提示。
@@ -75,7 +75,7 @@ TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工
 ### 🤖 定时任务（自动化 · 第一页签）
 **宿主级**语义：dsh 进程存活期间到点即触发，与任何会话无关（区别于 `dsh-schedule` 的会话级 every 语义；其 every 下限随 dsh 版本为 300s——旧版——或 60s——`MIN_EVERY_INTERVAL_SECONDS` 已下调的新版）。结构化频率编辑器（每小时 / 每天 / 每周 / 自定义）实时回显合成表达式；五字段语法支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`。
 
-调度细节：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像）；每任务一个 timer，触发前重读**内存镜像**并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer；**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻。「▶ 立即触发」走与定时触发完全相同的路径。create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时（先在 Webhook 页签安装并挂载 → 重启）。
+调度细节：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像）；每任务一个 timer，触发前重读**内存镜像**并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer；**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻（按本地墙钟推进：秋令时回拨日重复的墙钟分钟只投一次，与 POSIX cron 的投两次行为不同，属接受的偏差）。「▶ 立即触发」走与定时触发完全相同的路径。create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时（先在 Webhook 页签安装并挂载 → 重启）。
 
 ### 🪝 Webhook（自动化 · 第二页签）
 规则 = id + secret（新建自动生成 16 位随机密钥，「🎲 换一个」可重摇；编辑留空 = 保持已存值）+ 可选事件名 + 动作（steer：选目标在线会话；create：workspacePath + agentPreset + permissionPreset + 可选 model）。**create 的 `workspacePath` 必须落在本实例已知的工作区内**（`assertTrustedWorkspacePath`，与工作流保存库、CLI 后端同一道闸门）——它会被持久化进规则、每次投递都按它新建会话，而本端点刻意绕过浏览器认证，secret 是唯一防线，所以"绝对路径"远远不够。

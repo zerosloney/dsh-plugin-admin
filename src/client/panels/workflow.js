@@ -575,7 +575,9 @@ export function WorkflowSection(props) {
         : null,
     ])
     row.push(actions)
-    return h('div', { key: 'saved-' + rec.name, className: 'card', style: { padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '8px' } }, row)
+    // key 必须含 scope：项目/全局两个作用域允许同名，纯 name 的 key 会让
+    // React 在两卡片间错误复用节点。
+    return h('div', { key: 'saved-' + rec.name + ':' + rec.scope, className: 'card', style: { padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '8px' } }, row)
   }
 
   function renderSavedEditor() {

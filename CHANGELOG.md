@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+## [1.27.3] - 2026-10-03
+
+### Fixed
+
+- **`ensureProfileDependency` 的 peer 循环绕过 pnpm 操作数白名单**（`lib/patch-utils.js`）：`add()` 内部用已安装包 manifest 的 peerDependencies 键与 `version` 字段拼 `${peer}@${peerVersion}` 送 `runPnpm`（win32 走 `shell:true`）——这两处字符串在包被投毒时是攻击者形状，而白名单断言只存在于 RPC 调用点，本内部路径完全不经闸；`installScripts:'deny'` 只挡生命周期脚本，挡不住插件自己拼的这条命令行，构成对最严策略档的二阶绕过。修复：白名单与其断言**下沉到 patch-utils.js**（`plugin-admin.js` 原地再导出，`lib/index.js` 的导出面不变），`ensureProfileDependency` 的 `add()` 作为统一闸口断言每个操作数；peer 名或 host-link 规格不满足白名单时整支跳过（不写 override、不执行 add），正常 registry 版本路径行为不变。回归进 `host-check`：投毒 manifest（`version: "1.0.0 & calc"`）到达不了任何 pnpm 命令行；干净版本对照用例证明是闸不是墙。
+- **mcpAdmin.upsert 对不可解析的存量条目照常重写，掩码空值抹掉已存密钥**（`lib/mcp-admin.js`）：`configFromBlock` 只认去缩进后 4 空格的规范形状，手写深嵌套/折叠标量条目返回 null → `inheritStoredSecretValues(cfg, null)` 原样放行 → 浏览器掩码发出的空 `env`/`headers` 被写成空串，存储凭据被静默清除且保存报成功。修复：目标条目存在但配置不可解析时**拒绝本次保存**（指明需手工规范化该行），宁拒写不毁密钥。
+- **MCP 编辑器删不掉最后一个 env/header 键**（`src/client/panels/mcp.js` + `src/client/i18n.js`）：清空编辑框与「整框非法行」走同一条 unchanged 回退，空框实际语义是"全部保留"，与代码注释声称的"清空即全删"相反；宿主掩码契约（键缺席 = 删除）下面板没有任何路径能移除最后一个键。修复：改动后的**空框 = 显式删除全部键**（config 省略该字段，宿主按契约删除），非空但全非法仍回退"未变更"；保存注释新增"已清空全部 env/header 键——存储的旧值已删除"提示（i18n 表同步登记）。
+- **subagentAdmin 与宿主 tool-subagent 键集的三处错位**（`lib/subagent-admin.js`）：① `collectProviders` 归一化 capabilities 时丢了 `agentOptions`，两道"该后端不支持 agentOptions"的校验门在生产路径永不触发（CLI/进程外后端声明 `false`、校验放行、运行时才失败；测试直接注入原生 capabilities 所以全绿）——修复为仅显式 `false` 落为 `false`（未声明的旧宿主保持宽松），回归新增挂载级用例钉住声明后端被拒、未声明后端放行（verify-subagents-host 24 → 25 checks）；② `agentOptions` 白名单补宿主合法键 `reasoningEffort`（此前手写行被面板拒绝、序列化器丢字段），校验与序列化同步；③ 内置 CLI 后端 `CLI_CONFIG_KEYS` 补 `model`（codex / claude-code 包 Config 的可选成员），此前手写 `model:` 的行经面板保存一次即被整行重建无声丢弃。
+- **插件启停对 insert 形状的行不对称：可禁用、永不启用**（`lib/plugin-admin.js`）：`upsertDisableRows` 经 `findRowEntry` 能禁用 `- insert:` 块内嵌套的 `- id:` 条目，`removeDisableRows` 却只检查每个 top-level 块首行——嵌套行被停用后 `setEnabled(false)` 恒 `changed:false`，面板显示已启用而 `disabled: true` 留在盘上（单向开关）。修复：启用方向按 `matchRowIdLine` + `entryEndAt` 扫描块体到达嵌套条目，bare 顶级行整块删除、共享块内只摘 disabled 行（span 按 id 行缩进定界，嵌套 config 里的 `disabled:` 仍绝不触碰）。回归进 `host-check`：嵌套 upsert → remove 往返。
+- **pluginAdmin.install 不容忍 pnpm v11 的 ERR_PNPM_IGNORED_BUILDS**（`lib/plugin-admin.js`）：该错误下 pnpm 已改写 package.json 但以非零退出，install 直连 `runPnpm` 非零即 reject——面板报"安装失败"、reconcileBundles 与 peer 兼容预检被跳过，profile 停在"依赖已入、bundle 列表未同步"的中间态。修复：与 `ensureProfileDependency` 同型容错——错误文本命中且依赖集确实增长才算成功（输出附注哪些依赖落了地、构建脚本未获批），依赖集未变仍如实抛错。
+
+### 审查轻微项清理（24 项，按域归并）
+
+- **工作流引擎**（`lib/workflow-engine.js` / `lib/workflow-runs.js` / `lib/workflow-command.js` / `lib/workflow-library.js`）：① 脚本终值补宿主侧 4M 字符预算——worker 堆帽只护 isolate，无帽的聚合型返回全文进 journal/get()/完成通知可致宿主 OOM，超帽按脚本错误落定（fail-loud，提示返回摘要）；② `stopInner` 的收尾竞速改为按真实结果上报——terminate 后 `done` 赢（journal 已写完）不再误报 `abandoned:true`，**活跃 run 的第一次 amend 不再被误拒**（回归进 verify-workflow-runs，原断言钉的是旧上报）；③ `/workflow run` 斜杠命令补 `argsSchema` 合约（`describeArgsProblem` 上移 workflow-library 导出，与 `run_saved` 工具同源）；④ shell 步骤结果补 `truncated` 旗标——此前执行器截断流时脚本把尾段当全量；⑤ `canonicalJson` 的 seen 集改祖先栈纪律，共享（非循环）引用不再被误判成 `[circular]` 损坏指纹材料。
+- **patch 行编辑**（`lib/plugin-admin.js` / `lib/web-search-admin.js` / `lib/overlay-admin.js`）：⑥ `bundleComposingRowIds` 的 `hasName` 只认条目自身键缩进（id 行 +2/+4），深层 config 的 `name:` 不再把纯 id-override 行误判成可停用的组合行；⑦ `web` 覆盖行经 registry 读**运行中 web 条目的完整 config** 并复述（`searchProvider` 覆写、值走 JSON flow），base 层未来加键不再被选择器一次点击静默剥离（回归 scenario 8b）；⑧ overlay `rebuildSearchEntry` 探测 config 块的实际键缩进并按它删除/落键，非规范手写缩进不再产出 YAML 重复键。
+- **探测与兼容**（`lib/mcp-probe.js` / `lib/peer-compat.js`）：⑨ `killProcessTree` 只在 taskkill **无法启动**时回退裸 kill——taskkill 跑了但非零退出意味着 pid 已不在，裸 kill 正是 pid 复用误伤的来源（回归改钉 verify-run-command）；⑩ streamable-http 探测的后续请求（ping/tools/list/tools/call）按 initialize 应答携带协商出的 `MCP-Protocol-Version` 头，严格校验该头的 server 不再把探测判成协议违约；⑪ peer-compat 对部分版本的 `>`/`<=` 按 node-semver 脱糖到带界（`>1.2`=`>=1.3.0`、`<=1.2`=`<1.3.0`），两个方向对宿主的漏报/误报都有回归用例（verify-peer-compat 表扩 9 例）。
+- **命令 / 钩子 / 子智能体**（`lib/command-hook-admin.js` / `lib/subagent-admin.js`）：⑫ `saveHook` 跨 store 迁移的两次原子写补对账回滚——第二份失败时恢复第一份，条目不再两侧各留一半；⑬ `rebuildActiveHooks` 特跳自有 `__proto__` 键（JSON.parse 可造出，普通赋值触发原型 setter）；⑭ `parseMapping` 键首允许下划线，`_FOO` 这类 env 键落盘后能被回读（此前回读丢键、下次保存连带抹掉；回归进 verify-subagents-host）。
+- **cron**（`lib/cron-admin.js` + `src/client/panels/automation.js`）：⑮ watcher 不再"文件存在才挂"——监听目录按 basename 过滤，存储文件的**首次外部创建**也进镜像（此前要等下一次 RPC 写或重启）；⑯ cron 字段与步长只收十进制整数字面量（`0x10`/`1e1`/`+5` 此前被 `Number()` 静默折成域内值；回归进 verify-cron-admin）；⑰ 「调度器未运行」横幅删除（`schedulerActive` 恒真、服务缺席时 RPC 整体失败走 error 分支——不可达死 UI），宿主字段留 wire 兼容并注明。
+- **用量台账**（`lib/usage-ledger.js` + `lib/index.js`）：⑱ `usageLedgerCap` 挂载校验收敛到 resolver 同一区间 `[100, 100000]`——50 这类值曾通过校验却被静默换成默认 2000（回归进 host-check）；⑲ 存在但解析失败的台账文件先改名 `.corrupt` 留证再按空表继续，下次合并的原子覆写不再销毁损坏现场（回归进 verify-usage-ledger）。
+- **客户端**（`src/client/panels/workflow.js` / `src/client/i18n.js`）：⑳ 工作库卡片 React key 补 scope（项目/全局同名双卡片此前撞 key、节点错误复用）；㉑ i18n 共享状态加代际守卫——HMR 双挂载时旧实例的 disposer 不再把新实例刚 bind 的翻译函数置 null。
+- **文档失真**（`lib/skills-admin.js` 注释 + `docs/ARCHITECTURE.md` + `docs/COMPAT.md` + `src/client/native-coverage.js`）：㉒ `standingKeyFor` 旧宿主回退如实改写——没有任何已发布宿主暴露该成员，缺 `acquireScope` 的宿主按作用域读取失败上报 `complete:false`（防御探测分支保留）；㉓ cron 秋令时回拨日重复墙钟分钟只投一次，ARCHITECTURE 注明与 POSIX cron 的偏差；㉔ native-coverage 的覆盖探测依赖"官方面板先于第三方客户端装配"的时点假设，COMPAT 接缝表与代码注释注明（重载设置页自愈，localStorage 可强制开关）。
+
 ## [1.27.2] - 2026-10-02
 
 ### Fixed

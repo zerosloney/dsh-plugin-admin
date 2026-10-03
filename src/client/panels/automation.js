@@ -422,7 +422,6 @@ export function CronSection(props) {
     presets: [],
     permissionPresetNames: [],
     storagePath: '',
-    schedulerActive: true,
     editorOpen: false,
     draft: null,
     confirmId: null,
@@ -461,7 +460,6 @@ export function CronSection(props) {
         tasks: v.tasks || [],
         history: v.history || [],
         storagePath: v.storagePath || '',
-        schedulerActive: v.schedulerActive === true,
         presets: h.presets || [],
         permissionPresetNames: h.permissionPresetNames || [],
       })
@@ -971,11 +969,9 @@ export function CronRender(view, actions) {
 
   if (view.error) elements.push(createElement('div', { className: 'error', key: 'err' }, view.error))
 
-  if (!view.schedulerActive) {
-    elements.push(createElement('div', { className: 'update-strip checking', key: 'sched-banner' },
-      createElement('span', null, dshT('调度器未运行（headless 部署或插件加载失败）——任务可编辑，但不会自动触发')),
-    ))
-  }
+  // 「调度器未运行」横幅已删除：cronAdmin/list 恒报 schedulerActive:true（服务
+  // 在即调度器在），服务不挂载时 RPC 本身就失败走 error 分支——该横幅是永假
+  // 条件下的不可达死 UI。
 
   // 新手引导条：一句话说清定时任务是什么 + 三步操作（与工作流页签同版式）。
   elements.push(createElement('div', { className: 'card', key: 'guide', style: { padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--dsw-static-blue-500, #5B4CF0)', background: 'var(--dsw-alias-interactive-bg-hover, rgba(91,76,240,.06))' } }, [

@@ -92,7 +92,7 @@ await check('serialize → parse round-trip (full config)', () => {
     toolName: 'web_researcher',
     persona: 'Line one\nLine two with "quotes" and {{model}}',
     toolFilter: { allow: ['read', 'glob'], deny: ['bash'] },
-    agentOptions: { provider: 'optirouter', model: 'auto', maxTokens: 8192 },
+    agentOptions: { provider: 'optirouter', model: 'auto', reasoningEffort: 'high', maxTokens: 8192 },
     maxDepth: 2,
     backgroundMode: 'continuable',
     enableRunInBackground: true,
@@ -107,7 +107,10 @@ await check('serialize → parse round-trip (full config)', () => {
   assert.equal(config.toolName, 'web_researcher')
   assert.equal(config.persona, 'Line one\nLine two with "quotes" and {{model}}')
   assert.deepEqual(config.toolFilter, { allow: ['read', 'glob'], deny: ['bash'] })
-  assert.deepEqual(config.agentOptions, { provider: 'optirouter', model: 'auto', maxTokens: 8192 })
+  // reasoningEffort is a real dsh tool-subagent agentOptions member: it must
+  // survive serialize → parse (it used to be rejected by the whitelist and
+  // dropped by the serializer).
+  assert.deepEqual(config.agentOptions, { provider: 'optirouter', model: 'auto', reasoningEffort: 'high', maxTokens: 8192 })
   assert.equal(config.maxDepth, 2)
   assert.equal(config.backgroundMode, 'continuable')
   assert.equal(config.enableRunInBackground, true)
@@ -394,27 +397,81 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
   }
 })
 
+/* 7b ── collectProviders keeps agentOptions: the mounted gate must fire */
+await check('mounted upsert rejects agentOptions for a backend that declares agentOptions:false', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-gate-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
+    writeFileSync(join(dir, 'cordis.patch.yml'), BASE_PATCH)
+    const STRICT = {
+      name: 'strict-cli',
+      capabilities: { outputSchema: false, depthLimit: false, toolFilter: false, persona: false, agentOptions: false },
+      inheritsParentContext: false,
+    }
+    const registered = { provided: null, warns: [] }
+    const ctx = {
+      baseUrl: dir,
+      logger: { warn: (message) => registered.warns.push(message) },
+      provide: (key, service) => { registered.provided = { key, service } },
+      effect: (fn) => { fn() },
+      tools: { schemas: () => [], get: () => undefined },
+      subagents: {
+        list: () => ['spawn', 'strict-cli'],
+        getProvider: (name) => (name === 'spawn' ? SPAWN : name === 'strict-cli' ? STRICT : undefined),
+        interrupt: () => {},
+        prompt: () => Promise.resolve({ messageId: 'm' }),
+      },
+      get: () => undefined,
+    }
+    applySubagentAdmin(ctx)
+    const service = registered.provided.service
+    const listed = await service.list()
+    // collectProviders is the mounted validation env's provider source: an
+    // explicit agentOptions:false must survive normalization (it used to be
+    // dropped, which turned both agentOptions gates into dead code), while an
+    // UNDECLARED flag stays lenient so hosts whose providers omit the member
+    // keep working.
+    const strictMeta = listed.meta.providers.find((provider) => provider.name === 'strict-cli')
+    assert.equal(strictMeta.capabilities.agentOptions, false, 'explicit agentOptions:false reaches the mounted capability map')
+    const spawnMeta = listed.meta.providers.find((provider) => provider.name === 'spawn')
+    assert.equal(spawnMeta.capabilities.agentOptions, true, 'an undeclared agentOptions stays lenient')
+    await assert.rejects(
+      () => service.upsert({ entry: { id: 'gate1', config: { provider: 'strict-cli', toolName: 'gate_tool', agentOptions: { model: 'm' } } } }),
+      /不支持 agentOptions/,
+      'the mounted gate fires for a declaring backend (it used to save the row and fail at runtime)',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 /* 8 ── CLI backend block lifecycle: upsert / replace / remove */
 await check('CLI block: upsert creates, replaces in place, remove cleans up marker', () => {
   const codex = CLI_BACKENDS.find(item => item.id === 'subagent-codex')
   const claude = CLI_BACKENDS.find(item => item.id === 'subagent-claude-code')
   let lines = BASE_PATCH.split(/\r?\n/)
 
-  lines = upsertCliIntoLines(lines, codex, { providerName: 'codex', permissionMode: 'never', disposeGraceMs: 3000, env: { OPENAI_API_KEY: 'sk-1' } })
+  lines = upsertCliIntoLines(lines, codex, { providerName: 'codex', permissionMode: 'never', disposeGraceMs: 3000, env: { OPENAI_API_KEY: 'sk-1', _PRIVATE_FLAG: '1' } })
   let text = lines.join('\n')
   assert.ok(text.includes(CLI_BLOCK_MARKER), 'marker written')
   assert.ok(text.includes("name: '@deepseek-ai/dsh-subagent-codex'"), 'provider row written')
   let rows = parseCliBackends(text)
   assert.equal(rows.length, 1)
-  assert.deepEqual(rows[0].config.env, { OPENAI_API_KEY: 'sk-1' }, 'env dict round-trips')
+  // _PRIVATE_FLAG：env 键名允许键首下划线（CLI_ENV_KEY_PATTERN），落盘后必须
+  // 能被 parseMapping 读回——旧的首字母 `[A-Za-z]` 把 `_FOO` 行跳过，回读丢键、
+  // 下次保存连带抹掉。
+  assert.deepEqual(rows[0].config.env, { OPENAI_API_KEY: 'sk-1', _PRIVATE_FLAG: '1' }, 'env dict round-trips, underscore-led keys included')
 
   lines = upsertCliIntoLines(lines, claude, claude.defaultConfig)
-  lines = upsertCliIntoLines(lines, codex, { providerName: 'codex-primary', permissionMode: 'approve-for-me', disposeGraceMs: 5000, env: {} })
+  lines = upsertCliIntoLines(lines, codex, { providerName: 'codex-primary', permissionMode: 'approve-for-me', model: 'gpt-5.2', disposeGraceMs: 5000, env: {} })
   text = lines.join('\n')
   rows = parseCliBackends(text)
   assert.equal(rows.length, 2, 'still two rows after replace')
   assert.equal(rows[0].config.providerName, 'codex-primary', 'row replaced in place')
   assert.equal(rows[0].config.permissionMode, 'approve-for-me')
+  // model round-trips: a hand-written model: row must survive a panel save
+  // instead of being silently rewritten away (the serializer rebuilds the row).
+  assert.equal(rows[0].config.model, 'gpt-5.2')
   assert.equal(rows.find(row => row.backendId === 'subagent-claude-code').config.providerName, 'claude-code')
   assert.equal(parseManagedEntries(text).length, 0, 'tool-subagent block untouched')
 
@@ -443,6 +500,11 @@ await check('validateCliConfig: shape, enums, env keys', () => {
   assert.throws(() => validateCliConfig(codex, { providerName: 'Bad Name' }), /providerName/)
   assert.throws(() => validateCliConfig(codex, { env: { 'BAD KEY': 'v' } }), /env 键名/)
   assert.throws(() => validateCliConfig(codex, { env: { OK: 5 } }), /必须是字符串/)
+  // model: real member of both stock CLI packages' Config schemas — accepted,
+  // and a bad value rejected with the key's own name (it used to be "unknown").
+  assert.deepEqual(validateCliConfig(codex, { providerName: 'codex', permissionMode: 'never', model: 'gpt-5.2', disposeGraceMs: 3000, env: {} }), undefined)
+  assert.throws(() => validateCliConfig(codex, { model: '' }), /model/)
+  assert.throws(() => validateCliConfig(codex, { model: 'x'.repeat(201) }), /model/)
 })
 
 /* 10 ── detection matrix with stubbed probes + mounted rows from disk */

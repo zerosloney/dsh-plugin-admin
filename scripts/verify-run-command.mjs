@@ -11,8 +11,10 @@
  *   2. `killProcessTree` (lib/mcp-probe.js) no longer blocks the host: it used
  *      `spawnSync('taskkill', …, { timeout: 5_000 })`, freezing the event loop
  *      for up to 5s exactly when a wedged process tree made the kill necessary.
- *      The tree walk is now a spawn, and a FAILED taskkill still falls back to
- *      the direct SIGKILL.
+ *      The tree walk is now a spawn, and only a taskkill that could not RUN
+ *      at all falls back to the direct SIGKILL (a non-zero exit means the
+ *      pid is already gone — the bare-kill fallback there was a recycled-pid
+ *      stray-kill window).
  *
  * Zero dependencies; runs real child processes; part of npm test.
  */
@@ -120,7 +122,7 @@ await check('the tree kill is non-blocking and never throws', () => {
   }
 })
 
-await check('a FAILED taskkill falls back to the direct SIGKILL', () => {
+await check('a taskkill that cannot RUN falls back to the direct SIGKILL; a non-zero exit does not', () => {
   const spawned = []
   const kills = []
   const fakeSpawn = () => {
@@ -132,8 +134,15 @@ await check('a FAILED taskkill falls back to the direct SIGKILL', () => {
   killProcessTree(777, { spawnFn: fakeSpawn, killFn: (pid, signal) => kills.push({ pid, signal }) })
   if (process.platform === 'win32') {
     assert.deepEqual(kills, [], 'nothing direct until taskkill reports back')
+    // taskkill RAN and exited non-zero = the pid is already gone (or belongs to
+    // someone else): bare-killing here is the recycled-pid stray kill this path
+    // must never produce, so the non-zero fallback is gone.
     spawned[0].emit('exit', 1)
-    assert.deepEqual(kills, [{ pid: 777, signal: 'SIGKILL' }], 'a non-zero taskkill triggers the fallback')
+    assert.deepEqual(kills, [], 'a non-zero taskkill means the tree is already gone — no bare kill')
+    // taskkill could not RUN at all (spawn 'error', e.g. ENOENT): the bare kill
+    // is the only lever left.
+    spawned[0].emit('error', new Error('taskkill ENOENT'))
+    assert.deepEqual(kills, [{ pid: 777, signal: 'SIGKILL' }], 'an unspawnable taskkill still falls back')
   } else {
     assert.deepEqual(kills, [{ pid: 777, signal: 'SIGKILL' }])
   }

@@ -126,6 +126,14 @@ if (NATIVE_COVERAGE.map(function (row) { return row.panel }).join(',') !== PANEL
  * Whether one slot list already carries an entry with this id. Tolerates a
  * host without `slots.entries` (older shells, the test harness): an unreadable
  * list reports "not covered", which keeps the panel — never the reverse.
+ *
+ * TIMING ASSUMPTION: this probe reads the slot list AT OUR APPLY TIME, so it
+ * only sees official panels the host has already assembled. On the verified
+ * baseline the host mounts the official settings panels before third-party
+ * clients; if a future host inverts that order, the first pass reads "not
+ * covered" and the panel stays registered until the next settings reload —
+ * the pluginAdmin/panels reconciliation carries only the config row, not
+ * coverage. Operators can force any panel via localStorage `dsh-admin-panels`.
  * @param {Record<string, any>} ctx - the client plugin context.
  * @param {string} name - the slot name.
  * @param {string} id - the entry id to look for.

@@ -565,6 +565,7 @@ var I18N_EN = {
   " 已启用。": " has been enabled.",
   "；警告：": "; warning: ",
   " 行缺少「=」已忽略": " line(s) missing \"=\" were ignored",
+  "；已清空全部 env/header 键——存储的旧值已随本次保存删除，无法恢复": "; every env/header key was emptied — the stored values were deleted with this save and cannot be recovered",
   "已显示前 ": "Showing the first ",
   " 个会话——用过滤条件缩小范围查看其余": " sessions — narrow with the filter above to see the rest",
   " 条命中": " hit(s)",
@@ -783,7 +784,6 @@ var I18N_EN = {
   "Prompt 模板": "Prompt template",
   "留空使用默认模板。$RULE / $DELIVERY / $EVENT / $PAYLOAD 会被替换。": "Empty = the default template. $RULE / $DELIVERY / $EVENT / $PAYLOAD are substituted.",
   "创建": "Create",
-  "调度器未运行（headless 部署或插件加载失败）——任务可编辑，但不会自动触发": "The scheduler is not running (headless deployment or plugin failed to load) — tasks are editable but never fire automatically",
   "+ 新建任务": "+ New task",
   "还没有定时任务。点上方模板卡片一键创建，或「＋ 新建任务」从零开始；任务在 dsh 运行期间按 cron 表达式自动触发。": "No scheduled tasks yet. Click a template card above to create one in a click, or ＋ New task from scratch; tasks fire on their cron expression while dsh runs.",
   "无可触发时刻": "No schedulable time",
@@ -977,6 +977,13 @@ function readActiveLocaleId(locale) {
   } catch (e) { return null }
 }
 
+/** How many locale runtimes this module has installed. The shared module
+ * state below (boundTranslate / localeActiveId / localeSetLocale) belongs to
+ * the LATEST installation: an older instance's disposer must not null what a
+ * newer instance just bound (HMR / a test harness mounts the bundle twice,
+ * and the old disposer runs after the new mount). */
+var localeRuntimeGeneration = 0
+
 /**
  * Adopt the shell locale service when one is mounted: register the table as
  * the dshAdmin namespace, bind it, and mirror its active locale + switch
@@ -995,6 +1002,7 @@ export function installLocaleRuntime(ctx) {
   // A second materialization of this bundle (HMR, a test harness mounting
   // twice) would hit "already has locale": the table is identical either way,
   // so fall back to binding whatever is registered instead of failing the mount.
+  var generation = ++localeRuntimeGeneration
   /** @type {(() => void)|null} */
   var dispose = null
   try {
@@ -1013,9 +1021,13 @@ export function installLocaleRuntime(ctx) {
     : null
   return function () {
     if (typeof unsubscribe === 'function') unsubscribe()
-    boundTranslate = null
-    localeActiveId = null
-    localeSetLocale = null
+    // 共享的模块级状态只归最新一次安装所有：旧实例的 disposer 若无条件置
+    // null，会把 HMR 后新实例刚 bind 的翻译函数一起掐掉（双挂载互踩）。
+    if (localeRuntimeGeneration === generation) {
+      boundTranslate = null
+      localeActiveId = null
+      localeSetLocale = null
+    }
     if (typeof dispose === 'function') dispose()
   }
 }

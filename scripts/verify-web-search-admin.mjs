@@ -304,10 +304,51 @@ assert.equal(set8.fetchProvider, 'http', 'setActive reports the restated fetch p
 const after8 = readFileSync(patchPath, 'utf8')
 assert.ok(/^- id: web$/m.test(after8), 'setActive authors a web override row')
 assert.ok(/^ {4}searchProvider: perplexity$/m.test(after8), 'override carries searchProvider')
-assert.ok(/^ {4}fetchProvider: http$/m.test(after8), 'override restates fetchProvider (config is replaced whole)')
+assert.ok(/^ {4}fetchProvider: "http"$/m.test(after8), 'override restates fetchProvider (config is replaced whole; values ride JSON flow, valid YAML)')
 const active8 = await service.active()
 assert.equal(active8.searchProvider, 'perplexity', 'active() reads the authored override')
 console.log('scenario 8 OK: setActive authors the web override row when the bundle row is not in the patch')
+
+// ---------- Scenario 8b: the override restates the LIVE web config ----------
+// A patch replaces the target's whole config: a future base layer adding keys
+// beyond searchProvider/fetchProvider must not be stripped by the next picker
+// click. The authored row therefore restates the RUNNING web entry's config
+// (read via the registry seam, the same one the MCP hot-apply rides), with
+// searchProvider overridden. Scenario 8's ctx carries no registry — it pins
+// the two-key fallback; this one pins the restate path.
+{
+  writeFileSync(patchPath, '# test patch\n', 'utf8')
+  let carriedCaptured = null
+  const carriedCtx = {
+    baseUrl: ctx.baseUrl,
+    get: ctx.get,
+    effect(cb, _label) { cb.call(carriedCtx); return () => {} },
+    provide(_key, svc) { carriedCaptured = svc },
+    registry: {
+      entries() {
+        return [[undefined, {
+          name: 'web',
+          fibers: [{
+            entry: {
+              options: {
+                config: { searchProvider: 'deepseek-official', fetchProvider: 'http', someFutureKey: 'keep-me', nested: { a: 1 } },
+              },
+            },
+          }],
+        }]]
+      },
+    },
+  }
+  applyWebSearchAdmin(carriedCtx)
+  assert.ok(carriedCaptured !== null, 'carried-ctx service mounted')
+  const set8b = await carriedCaptured.setActive('exa')
+  assert.equal(set8b.searchProvider, 'exa', 'setActive reports the new provider on the carried path too')
+  const after8b = readFileSync(patchPath, 'utf8')
+  assert.ok(/^ {4}searchProvider: exa$/m.test(after8b), 'override carries the new searchProvider')
+  assert.ok(/someFutureKey: "keep-me"/.test(after8b), 'the live config is RESTATED (a future base-layer key survives the picker)')
+  assert.ok(/nested: {"a":1}/.test(after8b), 'nested carried values ride JSON flow (valid YAML)')
+}
+console.log('scenario 8b OK: the web override restates the live entry config')
 
 // ---------- Scenario 9: uninstalling the ACTIVE provider clears the id -----
 // A dangling `searchProvider` makes every search fail with

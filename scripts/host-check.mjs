@@ -1118,6 +1118,14 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
   assert.ok(Array.isArray(bad.issues) && /config\.sessionSearchLimit must be an integer/.test(bad.issues[0].message), 'mistyped knob reports an issue: ' + JSON.stringify(bad))
   const notMapping = Config['~standard'].validate('soon')
   assert.ok(Array.isArray(notMapping.issues) && /config must be a mapping/.test(notMapping.issues[0].message), 'non-mapping config reports an issue: ' + JSON.stringify(notMapping))
+  // usageLedgerCap 的下限与 usage-ledger 的 resolver 同一区间：50 曾通过挂载
+  // 校验却被 resolveLedgerCap 的 [100, MAX] 窗口静默换成默认 2000。
+  assert.throws(
+    () => resolvePluginConfig({ usageLedgerCap: 50 }),
+    /usageLedgerCap must be between 100 and 100000/,
+    'a below-floor ledger cap fails the mount instead of silently falling back',
+  )
+  assert.equal(resolvePluginConfig({ usageLedgerCap: 100 }).usageLedgerCap, 100, 'the floor itself is accepted')
 
   // The exported key lists are the contract the unknown-key report rides: the
   // resolved object must expose exactly the validated tunables, so a knob added
@@ -2536,6 +2544,82 @@ assert.deepEqual(bundleComposingRowIds(togglePatchText), ['toggle-tool', 'toggle
   assert.equal(down.changed, true)
   assert.ok(!down.lines.join('\n').includes('disabled: true'), 'disable lines removed')
   assert.ok(down.lines.join('\n').includes('keep: yes'), 'user override survives enable')
+}
+// Pure layer: the enable direction reaches INSERT-NESTED rows. upsertDisableRows
+// disables any shape findRowEntry finds — including a `- id:` child inside an
+// `- insert:` block (the shape real bundle patches compose) — so the enable
+// direction must scan block bodies too. The old removeDisableRows only looked
+// at each block's FIRST line, so a nested disable made the toggle one-way:
+// `setEnabled(false)` reported changed:false while `disabled: true` stayed.
+{
+  const nested = [
+    '- insert:',
+    '    - id: nested-tool',
+    '      name: dsh-nested-tool',
+    '      config:',
+    '        keep: yes',
+    '    - id: nested-tool-b',
+    '      name: dsh-nested-tool-b',
+  ]
+  const upNested = upsertDisableRows(nested, ['nested-tool', 'nested-tool-b'])
+  assert.equal(upNested.changed, true)
+  const upText = upNested.lines.join('\n')
+  assert.ok(upText.includes('- id: nested-tool\n      disabled: true'), 'nested disable authored at the entry indent')
+  assert.ok(upText.includes('keep: yes'), 'nested user config survives disable')
+  const downNested = removeDisableRows(upNested.lines, ['nested-tool', 'nested-tool-b'])
+  assert.equal(downNested.changed, true, 'enable reaches insert-nested rows (one-way-toggle fix)')
+  const downText = downNested.lines.join('\n')
+  assert.ok(!downText.includes('disabled: true'), 'nested disable lines removed')
+  assert.ok(downText.includes('keep: yes'), 'nested user config survives enable')
+  assert.ok(downText.includes('- id: nested-tool') && downText.includes('- id: nested-tool-b'), 'nested rows themselves intact')
+  assert.equal(removeDisableRows(downNested.lines, ['nested-tool']).changed, false, 'enable is a no-op once clean')
+}
+/* ------------- ensureProfileDependency: every operand passes the gate -------------
+ * The peer loop assembles `${peer}@${peerVersion}` from an INSTALLED package's
+ * own manifest (peerDependencies keys, version field) — attacker-shaped when
+ * that package is hostile and invisible to the RPC call sites' assertions. The
+ * shared `add()` in lib/patch-utils.js must assert the allowlist, or a poisoned
+ * manifest reaches the win32 cmd.exe command line through ANY later install
+ * (including under installScripts:'deny', which only silences lifecycle
+ * scripts — this operand assembly is plugin code, not package code).
+ */
+{
+  const { ensureProfileDependency } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
+  const evilProfile = join(here, '../.host-check-tmp/evil-peer-profile')
+  const evilPkg = join(evilProfile, 'node_modules/evil-pkg')
+  mkdirSync(evilPkg, { recursive: true })
+  writeFileSync(join(evilPkg, 'package.json'), JSON.stringify({
+    name: 'evil-pkg',
+    version: '1.0.0 & calc',
+    peerDependencies: { '@deepseek-ai/dsh-core': '^0.2.0' },
+  }, null, 2), 'utf8')
+  writeFileSync(join(evilProfile, 'package.json'), JSON.stringify({
+    name: 'evil-profile',
+    dependencies: { 'evil-pkg': '^1.0.0' },
+  }, null, 2), 'utf8')
+  const evilCalls = []
+  const evilResult = await ensureProfileDependency(evilProfile, 'evil-pkg', async (dir, args) => { evilCalls.push(args); return '' })
+  assert.deepEqual(evilCalls, [], 'a poisoned manifest version reaches no pnpm command line')
+  assert.equal(evilResult.state, 'present', 'the peer whose operand fails the whitelist is skipped, not executed')
+  // Positive control: a CLEAN version still reaches pnpm verbatim, so the fix
+  // is a gate, not a wall.
+  const cleanProfile = join(here, '../.host-check-tmp/clean-peer-profile')
+  const cleanPkg = join(cleanProfile, 'node_modules/clean-pkg')
+  mkdirSync(cleanPkg, { recursive: true })
+  writeFileSync(join(cleanPkg, 'package.json'), JSON.stringify({
+    name: 'clean-pkg',
+    version: '1.2.3',
+    peerDependencies: { '@deepseek-ai/dsh-core': '^0.2.0' },
+  }, null, 2), 'utf8')
+  writeFileSync(join(cleanProfile, 'package.json'), JSON.stringify({
+    name: 'clean-profile',
+    dependencies: { 'clean-pkg': '^1.2.3' },
+  }, null, 2), 'utf8')
+  const cleanCalls = []
+  await ensureProfileDependency(cleanProfile, 'clean-pkg', async (dir, args) => { cleanCalls.push(args); return '' })
+  assert.deepEqual(cleanCalls, [['add', '@deepseek-ai/dsh-core@1.2.3']], 'a clean peer version is installed exactly as before')
+  rmSync(evilProfile, { recursive: true, force: true })
+  rmSync(cleanProfile, { recursive: true, force: true })
 }
 // Service layer: fixture bundle with two composing rows in the live profile.
 const toggleProfile = join(here, '../.host-check-tmp/updates/profile')

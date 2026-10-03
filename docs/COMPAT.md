@@ -41,6 +41,7 @@
 | ⚠ `ctx.typert.register` 描述符 | 14 个命名空间的 RPC 面 | 包级 `schemas:[]` 为空，但 87 个 wire 已挂 `mode:strict` 边界校验（见下） | `lib/rpc-manifest.js` + `lib/rpc-schema.js` + `verify-rpc-schema` |
 | ⚠ `workspaceRegistry.unarchiveSession` 等动词 | 归档集清理 / 取消归档 | 版本间增删 | 挂载期能力探测 + 显式降级警告 |
 | ⚠ `agentPresets.acquireScope` 租约 | 读取预设 skill 作用域 | 与宿主 `dsh-webhook` 同款用法，属半公开 | 读毕即 dispose；失败逐作用域降级 |
+| 客户端 `slots.entries` 装配时点 | native-coverage 官方覆盖探测（自动让位） | 探测在本插件客户端 `apply()` 时点读 slot 列表；若官方设置面板晚于第三方客户端装配，本轮探测落空、面板多注册一轮 | 验证基线上宿主为官方面板先行（无复现）；重载设置页 / 重启即自愈，`localStorage dsh-admin-panels` 可强制开关（native-coverage.js 的 TIMING ASSUMPTION 注释） |
 
 ## 接缝矩阵（Phase G）
 

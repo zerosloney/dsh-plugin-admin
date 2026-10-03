@@ -574,7 +574,7 @@ await check('traversal-shaped runIds read as absent, not as arbitrary files', as
   await assert.rejects(() => r.resume('..\\..\\secret'), /not found/, 'resume refuses traversal id')
 })
 
-await check('stop reaps an abort-ignoring script at the budget (abandoned, not hung); amend proceeds safely', async () => {
+await check('stop reaps an abort-ignoring script at the budget (settles, not hung); amend proceeds on the first try', async () => {
   const home = join(tmpBase, 'stop-hang')
   const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
   const { id } = await r.start({
@@ -587,7 +587,10 @@ await check('stop reaps an abort-ignoring script at the budget (abandoned, not h
   const result = await r.stop(id, 'test')
   const elapsed = Date.now() - started
   assert.equal(result.stopped, true)
-  assert.equal(result.abandoned, true, 'non-interruptible run reports abandoned instead of hanging stop')
+  // terminate 之后的收尾竞速被 done 赢（settle 已把 journal 写完）——这**不是**
+  // abandoned。旧实现无论谁赢都返回 abandoned:true，amend 对一个仍活跃的
+  // run 的第一次请求误拒（重试才成功）。
+  assert.equal(result.abandoned, undefined, 'a terminate-settled run is not misreported abandoned')
   assert.ok(elapsed < 5000, `stop should return at the budget, took ${elapsed}ms`)
   // worker 时代：预算到点 terminate() 把不可抢占的脚本连 isolate 一起回收，
   // 僵尸句柄不复存在——记录落定为 stopped、journal 落盘。旧契约"amend 拒绝
@@ -597,8 +600,24 @@ await check('stop reaps an abort-ignoring script at the budget (abandoned, not h
   const rec = r.get(id)
   assert.equal(rec.status, 'stopped', `the reaped run settles as stopped, got ${rec.status}`)
   const res2 = await r.amend(id, 'return 1', { parent: { id: 'sess-hang' } })
-  assert.ok(res2.id, 'amend proceeds once the abandoned run has been reaped')
+  assert.ok(res2.id, 'amend proceeds once the reaped run has settled')
   await r.join(res2.id)
+})
+
+await check('amend of an ACTIVE abort-ignoring run proceeds on the first attempt (no abandoned misreport)', async () => {
+  const home = join(tmpBase, 'amend-active-hang')
+  const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 120 })
+  const { id } = await r.start({
+    script: `await new Promise(() => {})`,
+    parent: { id: 'sess-hang-amend' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  // run 仍活跃时 amend：stopInner 预算到点 terminate、收尾竞速 done 赢——
+  // 修复前这里返回 abandoned:true，第一次 amend 被误拒（重试才成功）。
+  const res = await r.amend(id, 'return 1', { parent: { id: 'sess-hang-amend' } })
+  assert.ok(res && res.id, 'first amend of the active run starts the derived run')
+  assert.ok(!res.error, `amend reports no refusal, got ${JSON.stringify(res.error ?? null)}`)
+  await r.join(res.id)
 })
 
 await check('a second amend of the same journal is refused while the derived run is active', async () => {

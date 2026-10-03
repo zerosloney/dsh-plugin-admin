@@ -119,6 +119,11 @@ check('parseCron rejects malformed input', () => {
   for (const bad of ['', '   ', '* * * *', '* * * * * *', '60 * * * *', '* 25 * * *', '* * 32 * *', '* * * 13 *', '* * * * 8', 'a b c d e', '* * * * *x', '1-5/0 * * * *']) {
     assert.throws(() => parseCron(bad), Error, `expected rejection of ${JSON.stringify(bad)}`)
   }
+  // 只收十进制整数字面量：Number('0x10')/Number('1e1')/Number('+5') 会把非
+  // cron 形状静默折成域内数值（dow `0x1` 曾静默成立）。步长同理。
+  for (const bad of ['* 0x10 * * *', '* * * * 0x1', '* 1e1 * * *', '* * * * +5', '*/0x2 * * * *', '5/1e1 * * * *']) {
+    assert.throws(() => parseCron(bad), Error, `expected rejection of non-decimal ${JSON.stringify(bad)}`)
+  }
 })
 
 /* ========================================================================== */

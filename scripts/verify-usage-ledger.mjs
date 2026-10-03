@@ -192,6 +192,10 @@ check('7. the file round-trips through the atomic replace, and a broken file rea
   assert.deepEqual(readUsageLedger(path), entries, 'read returns what write stored')
   writeFileSync(path, '{ not json')
   assert.deepEqual(readUsageLedger(path), [], 'a hand-broken file degrades to an empty ledger')
+  // 存在但解析失败的文件先留证：下一次合并的原子覆写会抹掉损坏现场，坏块
+  // 与手改就再也区分不出来。改名失败（权限/平台）不阻断读取。
+  assert.ok(existsSync(path + '.corrupt'), 'the broken bytes are preserved beside the file')
+  assert.equal(readFileSync(path + '.corrupt', 'utf8'), '{ not json', 'the corrupt copy carries the original bytes')
   assert.deepEqual(readUsageLedger(join(tmp, 'missing.json')), [], 'a missing file is an empty ledger')
 })
 

@@ -80,6 +80,18 @@ const SATISFIED = [
   ['1.2.9', '1.2.3 - 1.4.0'],
   ['0.1.10-rc.1', '^0.1.9'],
   ['0.2.0-rc.1', '^0.1.6'],
+  // node-semver desugars a PARTIAL version on `>` and `<=` to the band edge:
+  // `>1.2` = >=1.3.0 (the 1.2.* band excluded), `<=1.2` = <1.3.0 (the band
+  // included). The old zero-padded literal comparison admitted 1.2.5 on `>1.2`
+  // (precheck passed while the host skipped the bundle) and warned on 1.2.5
+  // for `<=1.2` (host ran it fine) — both directions pinned here.
+  ['1.3.0', '>1.2'],
+  ['2.0.0', '>1.2'],
+  ['1.2.3', '<=1.2'],
+  ['1.0.0', '<=1.2'],
+  ['2.0.0', '>1'],
+  ['1.9.9', '<=1'],
+  ['1.5.0', '>1.2'],
 ]
 const REFUSED = [
   ['0.1.7-rc.2', '^0.1.8'],
@@ -98,6 +110,9 @@ const REFUSED = [
   ['1.3.0', '1.2.x'],
   ['1.4.1', '1.2.3 - 1.4.0'],
   ['0.1.9', '^0.1.10'],
+  // The desugar's exclusion/inclusion edges, pinned in the refused direction.
+  ['1.2.5', '>1.2'],
+  ['1.3.0', '<=1.2'],
 ]
 
 check('2. satisfiesDshRange mirrors the host admission rule (includePrerelease, workspace, fail closed)', () => {

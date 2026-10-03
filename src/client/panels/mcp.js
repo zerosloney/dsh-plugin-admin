@@ -632,26 +632,40 @@ export function McpSection(props) {
     // Lines without a top-level `=` cannot become pairs; they are skipped (and
     // reported in the save note) instead of silently shaping the outcome.
     var skippedPairLines = 0
+    /** How many env/header maps the user EMPTIED this save (the note says so:
+     * the stored values are unrecoverable once the keys are gone). */
+    var clearedSecretMaps = 0
     /** @type {Record<string, any>} */
     var config
     if (draft.transport === 'streamable-http') {
       config = { transport: 'streamable-http', serverName: draft.serverName, url: draft.url }
       var headersStr = Object.keys(draft.headersOriginal || {}).map(function (k) { return k + '=' + draft.headersOriginal[k] }).join('\n')
-      var headers = (draft.headersChanged && draft.headers !== headersStr) ? {} : draft.headersOriginal
-      if (draft.headersChanged && draft.headers !== headersStr && draft.headers !== '') {
-        // Newline-only split: header values legitimately contain ';'/','
-        // (Cookie, Accept), which must never become pair separators.
-        var pairs = draft.headers.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
-        for (var i = 0; i < pairs.length; i++) {
-          var eq = pairs[i].indexOf('=')
-          if (eq > 0) headers[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
-          else skippedPairLines += 1
+      /** @type {Record<string, any>} */
+      var headers
+      if (draft.headersChanged && draft.headers !== headersStr) {
+        headers = {}
+        if (draft.headers !== '') {
+          // Newline-only split: header values legitimately contain ';'/','
+          // (Cookie, Accept), which must never become pair separators.
+          var headerPairs = draft.headers.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
+          for (var hi = 0; hi < headerPairs.length; hi++) {
+            var hEq = headerPairs[hi].indexOf('=')
+            if (hEq > 0) headers[headerPairs[hi].slice(0, hEq).trim()] = headerPairs[hi].slice(hEq + 1).trim()
+            else skippedPairLines += 1
+          }
+          // Nothing parsed out of a non-empty box: treat the field as unchanged.
+          // Letting the map stay empty would drop the whole `headers` key on the
+          // floor and the host would erase every stored value (including the
+          // secrets). An EMPTIED box is different: that IS the explicit
+          // "remove every key" — headers stays {} and config.headers is omitted
+          // below, which the host-side secret contract (lib/secret-fields.js)
+          // reads as "delete these keys" (an empty VALUE would mean "keep").
+          if (Object.keys(headers).length === 0) headers = draft.headersOriginal
+        } else if (Object.keys(draft.headersOriginal || {}).length > 0) {
+          clearedSecretMaps += 1
         }
-        // Nothing parsed out of a non-empty box: treat the field as unchanged.
-        // Letting the map stay empty would drop the whole `headers` key on the
-        // floor and the host would erase every stored value (including the
-        // secrets); emptying the box entirely is the explicit "delete all".
-        if (Object.keys(headers).length === 0) headers = draft.headersOriginal
+      } else {
+        headers = draft.headersOriginal
       }
       if (Object.keys(headers).length > 0) config.headers = headers
     } else {
@@ -660,19 +674,28 @@ export function McpSection(props) {
       var args = (draft.argsChanged && draft.args !== argsStr) ? draft.args.split(/\s+/).filter(Boolean) : draft.argsOriginal
       if (args.length > 0) config.args = args
       var envStr = Object.keys(draft.envOriginal || {}).map(function (k) { return k + '=' + draft.envOriginal[k] }).join('\n')
-      var env = (draft.envChanged && draft.env !== envStr) ? {} : draft.envOriginal
-      if (draft.envChanged && draft.env !== envStr && draft.env !== '') {
-        // Newline-only split: values like PATH=C:\a;C:\b would lose their
-        // tail (and Windows paths carry ';' everywhere).
-        var pairs = draft.env.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
-        for (var i = 0; i < pairs.length; i++) {
-          var eq = pairs[i].indexOf('=')
-          if (eq > 0) env[pairs[i].slice(0, eq).trim()] = pairs[i].slice(eq + 1).trim()
-          else skippedPairLines += 1
+      /** @type {Record<string, any>} */
+      var env
+      if (draft.envChanged && draft.env !== envStr) {
+        env = {}
+        if (draft.env !== '') {
+          // Newline-only split: values like PATH=C:\a;C:\b would lose their
+          // tail (and Windows paths carry ';' everywhere).
+          var envPairs = draft.env.split('\n').map(function (/** @type {string} */ s) { return s.trim() }).filter(Boolean)
+          for (var ei = 0; ei < envPairs.length; ei++) {
+            var eEq = envPairs[ei].indexOf('=')
+            if (eEq > 0) env[envPairs[ei].slice(0, eEq).trim()] = envPairs[ei].slice(eEq + 1).trim()
+            else skippedPairLines += 1
+          }
+          // Same unchanged-fallback as headers above: a box of malformed lines
+          // must not silently erase the stored env map. Only a fully EMPTIED
+          // box deletes the keys (see the headers branch).
+          if (Object.keys(env).length === 0) env = draft.envOriginal
+        } else if (Object.keys(draft.envOriginal || {}).length > 0) {
+          clearedSecretMaps += 1
         }
-        // Same unchanged-fallback as headers above: a box of malformed lines
-        // must not silently erase the stored env map.
-        if (Object.keys(env).length === 0) env = draft.envOriginal
+      } else {
+        env = draft.envOriginal
       }
       if (Object.keys(env).length > 0) config.env = env
       if (draft.cwd !== '') config.cwd = draft.cwd
@@ -703,6 +726,7 @@ export function McpSection(props) {
           ? dshT('✅ 已保存并热应用至运行中的 server（无需重启）')
           : (value.hotReason !== undefined ? dshT('✅ 已保存，重启 dsh 后生效 — ') + value.hotReason : dshT('✅ 已保存，重启 dsh 后生效'))
         if (skippedPairLines > 0) note += dshT('；警告：') + skippedPairLines + dshT(' 行缺少「=」已忽略')
+        if (clearedSecretMaps > 0) note += dshT('；已清空全部 env/header 键——存储的旧值已随本次保存删除，无法恢复')
         patchMcp({ mcpBusy: false, mcpEntries: value.entries || [], mcpEditorOpen: false, mcpDraft: null, mcpNote: note })
       } else {
         patchMcp({ mcpBusy: false, mcpError: dshT('保存 MCP 配置失败：') + messageOf(result.error) })
