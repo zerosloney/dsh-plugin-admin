@@ -2881,14 +2881,32 @@ delete process.env.DSH_HOME
 // 递增退避；重试耗尽仍失败则如实上抛（附带目录清单便于定位迟到者）。
 {
   const hostCheckTmp = join(here, '../.host-check-tmp')
+  const listLeftovers = (dir, out, depth) => {
+    if (depth > 4 || out.length >= 40) return
+    let entries = []
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (out.length >= 40) return
+      const full = join(dir, entry.name)
+      out.push((entry.isDirectory() ? 'd ' : 'f ') + full)
+      if (entry.isDirectory()) listLeftovers(full, out, depth + 1)
+    }
+  }
   for (let attempt = 1; ; attempt += 1) {
     try {
       rmSync(hostCheckTmp, { recursive: true, force: true })
       break
     } catch (error) {
       const code = error !== null && typeof error === 'object' ? String(/** @type {any} */ (error).code ?? '') : ''
-      if (attempt >= 5 || !['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES'].includes(code)) throw error
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * attempt)
+      if (attempt >= 8 || !['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES'].includes(code)) {
+        // 重试耗尽：带着残留清单抛错——ENOTEMPTY 的真实原因（迟到的写入者）
+        // 只有看到"还剩了什么"才定位得了。
+        const leftovers = []
+        try { listLeftovers(hostCheckTmp, leftovers, 0) } catch { /* the tree may have vanished between the rm and the listing */ }
+        const detail = leftovers.length > 0 ? ' — leftovers: ' + leftovers.join(' | ') : ''
+        throw new Error(`host-check cleanup failed after ${attempt} attempt(s): ${error instanceof Error ? error.message : String(error)}${detail}`, { cause: error })
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt)
     }
   }
 }
