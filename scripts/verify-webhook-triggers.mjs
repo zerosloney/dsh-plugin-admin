@@ -306,16 +306,28 @@ id: 'no-trust', secret: '', event: '',
 action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
 }, []), /outside the calling session|outside every workspace/, 'no trust context refuses an explicit path')
 // The trusted direction still works: the known workspace, and a subdirectory of it.
+// runneradmin 这类账号带 8.3 短名（TEMP 环境变量用 RUNNER~1 拼写）：host 的
+// canonical 形态走 libuv realpath、保留输入拼写，native 才展开长名——断言
+// 「规范化到同一个真实目录」（native + win32 大小写折叠），不钉拼写。
 const sub = join(WORKSPACE, 'packages')
 mkdirSync(sub, { recursive: true })
-assert.equal(validateRuleEntry({
+const sameRealDir = (a, b) => realpathSync.native(a).toLowerCase() === realpathSync.native(b).toLowerCase()
+assert.equal(
+  sameRealDir(validateRuleEntry({
 id: 'gated-ok', secret: '', event: '',
 action: { mode: 'create', workspacePath: WORKSPACE, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
-}, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, realpathSync.native(WORKSPACE), 'a known workspace is accepted (canonicalized)')
-assert.equal(validateRuleEntry({
+  }, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, WORKSPACE),
+  true,
+  'a known workspace is accepted (canonicalized to the same real directory)',
+)
+assert.equal(
+  sameRealDir(validateRuleEntry({
 id: 'gated-sub', secret: '', event: '',
 action: { mode: 'create', workspacePath: sub, agentPreset: 'cordis', permissionPreset: 'workspace-write' },
-}, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, realpathSync.native(sub), 'a subdirectory of a known workspace is accepted')
+  }, [], { registry: fakeWorkspaceRegistry }).action.workspacePath, sub),
+  true,
+  'a subdirectory of a known workspace is accepted',
+)
 })
 
 const storagePath = join(webhookHome, 'webhook-triggers.json')
