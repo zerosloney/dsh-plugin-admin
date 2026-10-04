@@ -26,7 +26,7 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -2906,7 +2906,14 @@ delete process.env.DSH_HOME
     try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
       const full = join(dir, entry.name)
-      if (entry.isSymbolicLink()) {
+      // readdir 的 Dirent 不解码 reparse 标记：junction 报成 isDirectory()，
+      // 必须 lstat 才认得出 symlink——只看 Dirent 的 sweep 会递归「进」junction
+      // 而永远摘不掉它（rmSync 的树遍历同理，这就是 ENOTEMPTY 持久存在的原因）。
+      let isLink = entry.isSymbolicLink()
+      if (!isLink && !entry.isFile()) {
+        try { isLink = lstatSync(full).isSymbolicLink() } catch { /* vanished */ }
+      }
+      if (isLink) {
         try { unlinkSync(full) } catch { /* leave it for the listing */ }
       } else if (entry.isDirectory()) {
         sweepLinks(full, depth + 1)
