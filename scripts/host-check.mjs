@@ -2876,7 +2876,22 @@ for (const dispose of globalEffectDisposers) {
   try { dispose() } catch { /* teardown is idempotent per contract */ }
 }
 delete process.env.DSH_HOME
-rmSync(join(here, '../.host-check-tmp'), { recursive: true, force: true })
+// CI 的冷文件系统（杀毒/索引器短持新建文件句柄）会让 recursive rmdir 以
+// ENOTEMPTY/EBUSY 告终——与 patch-utils 的 atomicRename 重试同类。有界重试 +
+// 递增退避；重试耗尽仍失败则如实上抛（附带目录清单便于定位迟到者）。
+{
+  const hostCheckTmp = join(here, '../.host-check-tmp')
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      rmSync(hostCheckTmp, { recursive: true, force: true })
+      break
+    } catch (error) {
+      const code = error !== null && typeof error === 'object' ? String(/** @type {any} */ (error).code ?? '') : ''
+      if (attempt >= 5 || !['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES'].includes(code)) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * attempt)
+    }
+  }
+}
 
 // The packaged manifest must still round-trip (apply() read it for pluginAdmin).
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
