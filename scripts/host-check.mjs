@@ -410,7 +410,16 @@ for (const tail of ['commands/listCommands', 'commands/saveCommand', 'commands/d
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(''), /must be a non-empty string/, 'reveal rejects empty path')
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(42), /must be a non-empty string/, 'reveal rejects non-string')
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal('relative/path'), /must be an absolute path/, 'reveal rejects a relative path (it would resolve against the host cwd)')
-await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal('\\\\attacker.example\\share\\p'), /network share/, 'reveal rejects a UNC share (outbound SMB auth)')
+// `//` 拼写在两个平台上都到达 UNC 检查（POSIX 上它也是绝对路径）；win32 反斜杠
+// 拼写在 POSIX 上不是绝对路径，先被「必须绝对路径」拒绝——同为拒绝，fail-closed
+// 方向一致（本断言曾把 Windows 拼写的拒绝理由钉死，在 ubuntu CI 上首跑即炸：
+// 该轮断言 v1.27.0 之后才加，此前从未在 Linux 上执行过）。
+await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal('//attacker.example/share/p'), /network share/, 'reveal rejects a UNC share in its POSIX spelling (outbound SMB auth)')
+await assert.rejects(
+  () => fakeCtx.provided.fsAdmin.reveal('\\\\attacker.example\\share\\p'),
+  process.platform === 'win32' ? /network share/ : /must be an absolute path/,
+  'reveal rejects the win32 UNC spelling on every platform',
+)
 await assert.rejects(() => fakeCtx.provided.fsAdmin.reveal(join(here, '..', '.host-check-tmp', 'no-such-path')), /does not exist/, 'reveal rejects a nonexistent path')
 
 await fakeCtx.provided.sessionAdmin.deleteSession(TARGET)
@@ -739,7 +748,11 @@ assert.throws(() => assertRevealablePath('relative/path', 'reveal'), /must be an
 assert.throws(() => assertRevealablePath(join(here, '..', '.host-check-tmp', 'reveal-gate', 'nope'), 'reveal'), /does not exist/, 'a nonexistent path is refused')
 assert.throws(() => assertRevealablePath('   ', 'reveal'), /must be a non-empty string/, 'an empty path is refused')
 assert.throws(() => assertRevealablePath(42, 'reveal'), /must be a non-empty string/, 'a non-string is refused')
-assert.throws(() => assertRevealablePath('\\\\attacker.example\\share\\p', 'reveal'), /network share/, 'a UNC path is refused (outbound SMB auth)')
+assert.throws(
+  () => assertRevealablePath('\\\\attacker.example\\share\\p', 'reveal'),
+  process.platform === 'win32' ? /network share/ : /must be an absolute path/,
+  'a win32 UNC spelling is refused on every platform (POSIX refuses it as non-absolute — same direction)',
+)
 assert.throws(() => assertRevealablePath('//attacker.example/share/p', 'reveal'), /network share/, 'the POSIX spelling of a UNC path is refused too')
 assert.throws(() => assertRevealablePath('\\\\?\\C:\\Windows', 'reveal'), /namespace prefix/, 'the Win32 file namespace is refused')
 assert.throws(() => assertRevealablePath('\\\\.\\PhysicalDrive0', 'reveal'), /namespace prefix/, 'the device namespace is refused')
