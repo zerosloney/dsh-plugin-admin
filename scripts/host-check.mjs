@@ -754,8 +754,16 @@ assert.throws(
   'a win32 UNC spelling is refused on every platform (POSIX refuses it as non-absolute — same direction)',
 )
 assert.throws(() => assertRevealablePath('//attacker.example/share/p', 'reveal'), /network share/, 'the POSIX spelling of a UNC path is refused too')
-assert.throws(() => assertRevealablePath('\\\\?\\C:\\Windows', 'reveal'), /namespace prefix/, 'the Win32 file namespace is refused')
-assert.throws(() => assertRevealablePath('\\\\.\\PhysicalDrive0', 'reveal'), /namespace prefix/, 'the device namespace is refused')
+assert.throws(
+  () => assertRevealablePath('\\\\?\\C:\\Windows', 'reveal'),
+  process.platform === 'win32' ? /namespace prefix/ : /must be an absolute path/,
+  'the Win32 file namespace is refused (POSIX refuses the spelling as non-absolute — same direction)',
+)
+assert.throws(
+  () => assertRevealablePath('\\\\.\\PhysicalDrive0', 'reveal'),
+  process.platform === 'win32' ? /namespace prefix/ : /must be an absolute path/,
+  'the device namespace is refused (POSIX refuses the spelling as non-absolute — same direction)',
+)
 assert.throws(() => assertRevealablePath(revealableFile + '\u0001', 'reveal'), /control character/, 'a control character is refused (PowerShell argv breakout)')
 assert.throws(() => assertRevealablePath(revealableFile + '"', 'reveal'), /control character or a double quote/, 'a double quote is refused')
 // The input checks see the CALLER'S spelling, but explorer gets realpathSync's
