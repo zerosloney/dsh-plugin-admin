@@ -11,6 +11,7 @@
 ### Miscellaneous
 
 - **发布管线校验，无代码变更**：内容与 1.27.4 相同（1.27.4 的 tag 曾指向未过 CI 的提交，已在测试基建修复后重指向绿提交并发布）。本次以干净 tag 走完整 Release 链（npm test 全量闸门 → publish → smoke-published），验证 CI 修复后的发布管线端到端可用。
+- 回归套件计数基线随本轮发布补记：`verify-webhook-triggers` 38 → 39 checks（新增的损坏文件 `.corrupt` 留证隔离用例——该用例随 1.27.4 轮落地，计数当时未及登记）。
 
 ## [1.27.4] - 2026-10-04
 
