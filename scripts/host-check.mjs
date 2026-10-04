@@ -786,7 +786,7 @@ if (process.platform === 'win32') {
     // rmSync(force) 对指向远程/受管目标的 junction 曾静默留下链接，让最终的
     // 整树清理以 ENOTEMPTY 告终。
     try { unlinkSync(localJunction) } catch { /* already gone */ }
-    rmSync(localJunction, { force: true, recursive: true })
+    try { rmSync(localJunction, { force: true, recursive: true }) } catch { /* the cleanup sweep is the backstop */ }
   }
   // The refusal itself needs a junction that RESOLVES to a UNC spelling here —
   // an admin share may be visible yet not resolvable in this context (null
@@ -811,7 +811,7 @@ if (process.platform === 'win32') {
     }
   } finally {
     try { unlinkSync(uncJunction) } catch { /* already gone */ }
-    rmSync(uncJunction, { force: true, recursive: true })
+    try { rmSync(uncJunction, { force: true, recursive: true }) } catch { /* the cleanup sweep is the backstop */ }
   }
 }
 // A path on ANOTHER DRIVE with no registry is still accepted: reveal is a
@@ -2897,6 +2897,22 @@ delete process.env.DSH_HOME
       if (entry.isDirectory()) listLeftovers(full, out, depth + 1)
     }
   }
+  // 摘除残留的 symlink/junction 条目：指向远程/受管目标的 junction 在 CI 上
+  // 曾让 rmSync 的常规遍历整体失败（条目本身删不掉 → 根目录永远 ENOTEMPTY），
+  // unlinkSync 直接摘 reparse 点、不触及目标。
+  const sweepLinks = (dir, depth) => {
+    if (depth > 4) return
+    let entries = []
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        try { unlinkSync(full) } catch { /* leave it for the listing */ }
+      } else if (entry.isDirectory()) {
+        sweepLinks(full, depth + 1)
+      }
+    }
+  }
   for (let attempt = 1; ; attempt += 1) {
     try {
       rmSync(hostCheckTmp, { recursive: true, force: true })
@@ -2911,6 +2927,7 @@ delete process.env.DSH_HOME
         const detail = leftovers.length > 0 ? ' — leftovers: ' + leftovers.join(' | ') : ''
         throw new Error(`host-check cleanup failed after ${attempt} attempt(s): ${error instanceof Error ? error.message : String(error)}${detail}`, { cause: error })
       }
+      sweepLinks(hostCheckTmp, 0)
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt)
     }
   }
