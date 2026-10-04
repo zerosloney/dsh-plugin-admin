@@ -111,6 +111,12 @@ export function tabKeyDown(event, tabs, selectedId, select) {
 /* Searchable picker (single/multi) */
 /* ========================================================================== */
 
+/** Per-instance id source for the combobox wiring (aria-controls /
+ * aria-activedescendant must point at stable DOM ids). useState's
+ * initializer runs once per instance, so the id is stable across renders
+ * even though two pickers on one panel must not collide. */
+var pickerIdSeq = 0
+
 /**
  * Filterable picker used for the model/provider selects (single) and the
  * tool-constraint chips (multi). Renders a text input plus a scrollable,
@@ -135,6 +141,8 @@ export function Picker(props) {
  var highlightState = useState(0)
  var highlight = highlightState[0]
  var setHighlight = highlightState[1]
+ var idState = useState(function () { return 'sa-picker-' + (++pickerIdSeq) })
+ var listId = idState[0] + '-list'
 
  var selected = /** @type {Record<string, boolean>} */ ({})
  for (var si = 0; si < values.length; si++) selected[values[si]] = true
@@ -146,6 +154,13 @@ export function Picker(props) {
  var label = (o.label || o.value).toLowerCase()
  return label.indexOf(q) !== -1 || o.value.toLowerCase().indexOf(q) !== -1
  })
+
+ // The highlighted option's DOM id, for aria-activedescendant — present only
+ // while the listbox is open and has options to point at. (Computed AFTER
+ // `filtered`: the expression reads it.)
+ var activeDescendant = open && !disabled && filtered.length > 0 && highlight >= 0 && highlight < filtered.length
+ ? listId + '-opt-' + highlight
+ : undefined
 
  /**
  * Hand the next value list to the caller (suppressed while disabled).
@@ -227,13 +242,14 @@ export function Picker(props) {
  }) : null
 
  var list = open && !disabled
- ? createElement('div', { className: 'sa-picker-list', role: 'listbox', 'aria-label': props.ariaLabel || props.placeholder || '' },
+ ? createElement('div', { className: 'sa-picker-list', role: 'listbox', id: listId, 'aria-label': props.ariaLabel || props.placeholder || '' },
  filtered.length === 0
  ? createElement('div', { className: 'sa-picker-empty' }, allowCustom && text.trim() !== '' ? dshT('回车添加：') + text.trim() : dshT('无匹配'))
  : filtered.map(function (o, idx) {
  return createElement('div', {
  key: o.value,
  role: 'option',
+ id: listId + '-opt-' + idx,
  'aria-selected': multi ? selected[o.value] === true : values[0] === o.value,
  className: 'sa-picker-opt' + (idx === highlight ? ' active' : ''),
  onMouseDown: function (/** @type {MouseEventLike} */ ev) { if (!disabled) { ev.preventDefault(); pick(o) } },
@@ -245,10 +261,18 @@ export function Picker(props) {
  return createElement('div', { className: 'sa-picker' + (multi ? ' tag-input' : '') },
  tokens,
  // The official Input (the composite no longer needs a ref: see `live` above).
+ // Combobox wiring: the input owns the expanded/collapsed state and points at
+ // the highlighted option (aria-activedescendant → the listbox's option ids),
+ // so a screen reader announces the highlight the arrow keys move.
  createElement(UiInput, {
  value: multi ? text : (values[0] || ''),
  placeholder: props.placeholder || '',
  'aria-label': props.ariaLabel || props.placeholder || '',
+ role: 'combobox',
+ 'aria-expanded': open && !disabled ? 'true' : 'false',
+ 'aria-controls': open && !disabled ? listId : undefined,
+ 'aria-autocomplete': 'list',
+ 'aria-activedescendant': activeDescendant,
  disabled: disabled,
  onChange: onInputChange,
  onKeyDown: onKeyDown,

@@ -296,6 +296,51 @@ await checkAsync('parallel itself does NOT gate; the leaf agent() calls do (glob
   assert.equal(agentPeak, 2, `leaf calls must respect the shared semaphore (peak 2, got ${agentPeak})`)
 })
 
+await checkAsync('realm-side nested parallel cannot self-deadlock; the per-run limit gates the leaves (regression: permit-around-thunk hang)', async () => {
+  const { ctx } = mockCtx()
+  // Count the REAL overlap of the stubbed subagent starts.
+  let active = 0; let leafPeak = 0
+  const subagents = ctx.get('subagents')
+  const originalGet = ctx.get
+  ctx.get = (key) => key === 'subagents'
+    ? { start: async (...args) => {
+        active += 1; leafPeak = Math.max(leafPeak, active)
+        try { return await subagents.start(...args) } finally { active -= 1 }
+      } }
+    : originalGet(key)
+  const controller = new AbortController()
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal,
+    semaphore: createSemaphore(2),
+    // The realm-side per-run leaf limit under test: 4 outer groups x nested
+    // parallel is exactly the shape that used to hang forever when the
+    // per-run permits wrapped the WHOLE thunk (the first `limit` outer thunks
+    // held every permit; their nested parallel waited on them).
+    semaphoreLimit: 2,
+  })
+  const { code } = await compileScript(`
+    const groups = await parallel([
+      () => parallel([() => agent('a1'), () => agent('a2')]),
+      () => parallel([() => agent('b1'), () => agent('b2')]),
+      () => parallel([() => agent('c1')]),
+      () => parallel([() => agent('d1')]),
+    ])
+    return groups.flat().length
+  `)
+  // A budget turns the old behavior (permanent hang) into a decidable failure.
+  let budget = null
+  try {
+    const value = await Promise.race([
+      run(code, {}),
+      new Promise((_, reject) => { budget = setTimeout(() => reject(new Error('nested parallel deadlocked (15s budget)')), 15_000) }),
+    ])
+    assert.equal(value, 6, 'every leaf step completed through the nested fan-out')
+    assert.ok(leafPeak >= 1 && leafPeak <= 2, `leaf concurrency respected the per-run limit (peak ${leafPeak} <= 2)`)
+  } finally {
+    if (budget !== null) clearTimeout(budget)
+  }
+})
+
 await checkAsync('pipeline stages chain and null short-circuits', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()

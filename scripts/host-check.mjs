@@ -644,7 +644,7 @@ for (const registrySpec of ['some-plugin', '@scope/pkg', 'some-plugin@^1.2.3', '
   assert.equal(isRegistryInstallSpec(registrySpec), true, `${registrySpec} is a registry package`)
   assert.doesNotThrow(() => assertInstallSpecAllowed(registrySpec, 'registry-only'), `${registrySpec} is permitted under registry-only`)
 }
-for (const localSpec of ['E:/work/my-plugin', '/opt/plugins/x', './pkg', '../pkg', 'file:./pkg.tgz', 'link:../dsh-x', '//nas/share/pkg']) {
+for (const localSpec of ['E:/work/my-plugin', '/opt/plugins/x', './pkg', '../pkg', 'file:./pkg.tgz', 'link:../dsh-x']) {
   assert.equal(isRegistryInstallSpec(localSpec), false, `${localSpec} is not a registry package`)
   assert.doesNotThrow(() => assertInstallSpecAllowed(localSpec, 'registry-only'), `the operator's own path ${localSpec} is still permitted`)
 }
@@ -653,6 +653,22 @@ for (const localSpec of ['E:/work/my-plugin', '/opt/plugins/x', './pkg', '../pkg
 // a registry package, so `registry-only` cloned the repository and ran its
 // prepare. A semver range/dist-tag never contains `:` or `/`; every remote
 // reference does.
+// UNC（`\\server\share\pkg` 与其 POSIX 写法 `//server/share/pkg`）是远程来源：
+// 曾被 isLocalInstallSpec 判为"本机路径"——registry-only 拦不住、local-only 照跑
+// 脚本，同仓 fsAdmin/reveal 拒绝的正是这一形状（外发 SMB 认证 + 远端声明的
+// prepare）。归为非本地后与 git/tarball 同类：registry-only 拒绝、local-only
+// 加 --ignore-scripts、allow 保持 CLI 同义的放行。
+for (const uncSpec of ['\\\\nas\\share\\pkg', '//nas/share/pkg']) {
+  assert.equal(isRegistryInstallSpec(uncSpec), false, `${uncSpec} is not a registry package`)
+  assert.throws(
+    () => assertInstallSpecAllowed(uncSpec, 'registry-only'),
+    /registry-only' refuses/,
+    `${uncSpec} is a remote share and is refused under registry-only`,
+  )
+}
+assert.equal(shouldIgnoreScripts('\\\\nas\\share\\pkg', 'local-only'), true, 'local-only: a UNC share does not run scripts')
+assert.equal(shouldIgnoreScripts('//nas/share/pkg', 'local-only'), true, 'local-only: the // spelling neither')
+
 for (const remoteSpec of ['git+https://host/repo.git', 'git+https://host/repo.git#semver:^1.0.0', 'github:user/repo', 'user/repo', 'https://host/pkg.tgz', 'git+ssh://git@host/repo.git', 'foo@git+https://github.com/evil/repo.git', 'foo@github:user/repo', 'foo@user/repo', 'foo@https://host/pkg.tgz', 'git@github.com:evil/repo.git']) {
   assert.equal(isRegistryInstallSpec(remoteSpec), false, `${remoteSpec} is not a registry package`)
   assert.throws(

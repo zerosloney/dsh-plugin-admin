@@ -592,9 +592,16 @@ export function WorkflowSection(props) {
         key: 'scope', value: ed.scope,
         onChange: function (/** @type {{ target: { value: string } }} */ e) { ed.scope = e.target.value; patch({ savedEditor: ed }) },
         style: inputStyle(),
+        'aria-label': dshT('保存作用域'),
       }, [
         h('option', { key: 'g', value: 'global' }, dshT('全局')),
-        h('option', { key: 'p', value: 'project' }, dshT('项目（随工作区 .dsh/）')),
+        // 项目作用域对面板是死路：宿主 saveSaved 对 project scope 必须拿到
+        // workspacePath（<root>/.dsh/workflows 的信任闸门），而面板调用没有
+        // 会话上下文可携带——真给这选项放行，保存 100% 报错。禁用并指路。
+        h('option', {
+          key: 'p', value: 'project', disabled: true,
+          title: dshT('面板保存无法携带工作区路径——项目级工作流请经模型的 workflow_admin 工具保存（自动存入当前会话的项目）'),
+        }, dshT('项目（随工作区 .dsh/）')),
       ]),
       h(UiInput, {
         key: 'desc', className: 'wf-input', placeholder: dshT('一句话描述（可选）'), value: ed.description,
@@ -638,7 +645,7 @@ export function wfTemplates() {
   {
     title: dshT('总结一个主题'),
     desc: dshT('派一个子智能体，按你给的主题输出一段总结'),
-    label: '主题总结',
+    label: dshT('主题总结'),
     argsText: '{\n  "topic": "dsh 插件系统"\n}',
       script: [
       '// 一步工作流：一个子智能体完成一次总结',

@@ -661,6 +661,9 @@ export function ChHooksTab(props) {
  setBusy(true)
  setError('')
  setConfirming(null)
+ // 链式 .catch（不是双参 .then）：网关把宿主 throw 包成**已兑现**的
+ // {ok:false} 信封，unwrap 在其上 throw——双参 then 的 rejection 处理器接不住
+ // 兑现分支里的异常，setBusy(false) 永不执行，整页 busy 卡死到重挂面板。
  call('commandHookAdmin/' + verb, {}).then(function (result) {
  var value = unwrap(result)
  if (verb === 'codexBridgeInstall') {
@@ -672,7 +675,7 @@ export function ChHooksTab(props) {
  setNote(dshT('Codex 钩子桥已卸载：patch 行与依赖包均已移除（重启 dsh 后完全生效）。'))
  }
  load()
- }, function (e) {
+ }).catch(function (e) {
  setError((verb === 'codexBridgeInstall' ? dshT('安装失败：') : dshT('卸载失败：')) + messageOf(e))
  setBusy(false)
  })

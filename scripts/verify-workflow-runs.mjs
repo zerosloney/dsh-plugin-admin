@@ -321,6 +321,30 @@ await check('persist() writes a summary sidecar beside the journal', async () =>
   assert.equal(sidecar.id, id, 'but it does identify the run')
 })
 
+await check('summarizeBounded caps an OBJECT result in the sidecar and list() (get() keeps the full body)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'sidecar-object-cap')
+  const r = makeRegistry(bundle.ctx, home)
+  // An aggregate object near the engine's terminal budget used to ride the
+  // sidecar AND every list() row whole — the 240-char cap only bit strings.
+  const { id } = await r.start({ script: `return { pad: 'x'.repeat(50000) }`, parent: { id: 'sess-objcap' } })
+  await runToDone({ id }, r)
+  const listed = r.list().find((x) => x.id === id)
+  assert.ok(listed, 'the run is listed')
+  assert.equal(typeof listed.result, 'string', 'an oversized object result degrades to a truncated preview string on list()')
+  assert.ok(listed.result.length <= 260, `the preview is bounded (got ${String(listed.result).length} chars)`)
+  assert.ok(String(listed.result).endsWith('…[截断]'), 'the truncation marker is present')
+  const sidecar = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.summary.json'), 'utf8'))
+  assert.equal(typeof sidecar.result, 'string', 'the sidecar carries the bounded preview, not the object')
+  const detail = r.get(id)
+  assert.deepEqual(detail.result, { pad: 'x'.repeat(50000) }, 'get() still serves the full body')
+  // 小对象原样保留（不折字符串）。
+  const { id: smallId } = await r.start({ script: `return { a: 1 }`, parent: { id: 'sess-objcap' } })
+  await runToDone({ id: smallId }, r)
+  const smallListed = r.list().find((x) => x.id === smallId)
+  assert.deepEqual(smallListed.result, { a: 1 }, 'a small object result stays intact on list()')
+})
+
 await check('list() from sidecars equals list() from full journals (legacy fallback parity)', async () => {
   const bundle = makeCtx()
   const home = join(tmpBase, 'sidecar-parity')

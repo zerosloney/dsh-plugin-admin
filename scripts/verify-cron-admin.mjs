@@ -291,6 +291,18 @@ try {
     assert.equal(raw.tasks.length, 1)
   })
 
+  check('a corrupt tasks file is renamed aside before the next write (no silent wipe)', async () => {
+    // 手改文件的一个多余逗号曾让下一次 upsert 把全表换成只含新条目的文件——
+    // 与 usage-ledger 的 `.corrupt` 同策略：先留证再按空表继续。
+    writeFileSync(storagePath, '{ not json', 'utf8')
+    await service.upsert(validSteer())
+    const corrupt = storagePath + '.corrupt'
+    assert.equal(existsSync(corrupt), true, 'the broken content is preserved beside the store')
+    assert.equal(readFileSync(corrupt, 'utf8'), '{ not json', 'the evidence is byte-identical')
+    const res = await service.list()
+    assert.equal(res.tasks.length, 1, 'the store continues from empty with the new write')
+  })
+
   check('upsert rejects an impossible cron without touching storage', async () => {
     const before = JSON.parse(readFileSync(storagePath, 'utf8')).tasks.length
     await assert.rejects(() => service.upsert({ ...validSteer(), id: 'bad', cron: '0 0 31 2 *' }), /cron/)

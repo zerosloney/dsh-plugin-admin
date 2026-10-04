@@ -261,7 +261,15 @@ export function PluginsSection(props) {
     }, function (failure) {
       checkingRef.current = false
       if (!alive.current) return
-      patchPlugin({ checkingUpdates: false, error: dshT('检查更新调用失败：') + messageOf(failure) })
+      // 批量更新完成后那次刷新若走失败分支，就地消费滞留的批量总结：留着
+      // 不消费会让总结丢失，且下一次成功的检查更新会把它当自己的 note 盖
+      // 出来（张冠李戴）。
+      var pendingBulkNote = bulkNoteRef.current
+      bulkNoteRef.current = ''
+      /** @type {Record<string, any>} */
+      var failurePatch = { checkingUpdates: false, error: dshT('检查更新调用失败：') + messageOf(failure) }
+      if (pendingBulkNote !== '') failurePatch.note = pendingBulkNote
+      patchPlugin(failurePatch)
     })
   }
 
@@ -893,7 +901,7 @@ export function renderPluginCard(plugin, view, remove, patch, upgrade, setEnable
         variant: 'outline',
         size: 'sm',
         disabled: view.busy,
-        title: dshT('升级到 v') + updateInfo.latest + '（npm install ' + plugin.name + '@' + updateInfo.latest + dshT('）'),
+        title: dshT('升级到 v') + updateInfo.latest + dshT('（') + 'npm install ' + plugin.name + '@' + updateInfo.latest + dshT('）'),
         onClick: function () { upgrade(plugin.name) },
       }, dshT('⬆ 更新')))
     }

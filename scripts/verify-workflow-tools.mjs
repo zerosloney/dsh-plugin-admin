@@ -35,7 +35,8 @@ function fakeRegistry(overrides = {}) {
       const id = `wf_${++seq}`
       lastRecord = {
         id, label: spec.label, status: 'completed', updatedAt: Date.now(),
-        steps: [{ kind: 'agent' }], result: { ok: true }, durationMs: 12,
+        // journal 步骤带 phase（before/after 双条目）；runSummary 按 after 计数。
+        steps: [{ kind: 'agent', phase: 'after' }], result: { ok: true }, durationMs: 12,
       }
       overrides.onStart?.(lastRecord)
       return { id, status: 'running', diagnostics: [], jobId: null, ...overrides.startResult }

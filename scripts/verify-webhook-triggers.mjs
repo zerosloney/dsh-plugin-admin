@@ -269,6 +269,22 @@ check('service provided with typertRemote binding and descriptors', () => {
   assert.ok(registeredRoutes.length === 1 && registeredRoutes[0].path === '/webhook-triggers', 'prefix route registered on the fake webServer')
 })
 
+await checkAsync('a corrupt rules file is renamed aside before the next write (no silent wipe)', async () => {
+  // 手改文件的一个多余逗号曾让下一次 saveRule 把全表换成只含新规则的文件——
+  // 与 usage-ledger 的 `.corrupt` 同策略：先留证再按空表继续。
+  const triggersPath = join(webhookHome, 'webhook-triggers.json')
+  writeFileSync(triggersPath, '{ broken', 'utf8')
+  const webhookAdmin = ctx.provided.webhookAdmin
+  await webhookAdmin.saveRule({ id: 'corrupt-check', enabled: true, secret: 'topsecret-key-16chars', event: '', action: { mode: 'steer', sessionId: 'session-live', steer: true }, promptTemplate: 'x' })
+  const corrupt = triggersPath + '.corrupt'
+  assert.equal(existsSync(corrupt), true, 'the broken content is preserved beside the store')
+  assert.equal(readFileSync(corrupt, 'utf8'), '{ broken', 'the evidence is byte-identical')
+  const listed = await webhookAdmin.list()
+  assert.equal(listed.rules.length, 1, 'the store continues from empty with the new write')
+  // 清掉自己的规则，恢复后续用例依赖的空表起点。
+  await webhookAdmin.deleteRule('corrupt-check')
+})
+
 check('validateRuleEntry gates a create rule workspacePath on TRUST, not mere absoluteness', () => {
 // A create rule PERSISTS workspacePath and every delivery roots a session
 // there, so an absolute path is not enough — the path must resolve inside a
