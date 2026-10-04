@@ -26,7 +26,7 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -782,7 +782,11 @@ if (process.platform === 'win32') {
       'a junction to a local directory still reveals (resolved form, not refused)',
     )
   } finally {
-    rmSync(localJunction, { force: true })
+    // junction 的删除用 unlinkSync 摘 reparse 点（不递归进目标）：CI 上
+    // rmSync(force) 对指向远程/受管目标的 junction 曾静默留下链接，让最终的
+    // 整树清理以 ENOTEMPTY 告终。
+    try { unlinkSync(localJunction) } catch { /* already gone */ }
+    rmSync(localJunction, { force: true, recursive: true })
   }
   // The refusal itself needs a junction that RESOLVES to a UNC spelling here —
   // an admin share may be visible yet not resolvable in this context (null
@@ -806,7 +810,8 @@ if (process.platform === 'win32') {
       console.log('  (skip: the local admin share does not resolve to a UNC path here — the junction→UNC reveal case cannot be exercised)')
     }
   } finally {
-    rmSync(uncJunction, { force: true })
+    try { unlinkSync(uncJunction) } catch { /* already gone */ }
+    rmSync(uncJunction, { force: true, recursive: true })
   }
 }
 // A path on ANOTHER DRIVE with no registry is still accepted: reveal is a
