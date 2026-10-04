@@ -28,6 +28,7 @@
 - **eval 的 `timeoutMs` 无上界**（`lib/workflow-engine.js`）：模型传 `1e12` 即得到千年硬超时，该值同时是 vm 同步前缀预算——工具调用被占死。修复：入口钳到 60s 上界（schema 文档同步），需要长等待走 run 的 wait 通道。
 - **客户端清理**（`src/client/panels/*.js` + `src/client/i18n.js` + `src/client/styles.js`，bundle 已重建）：① 工作库编辑器的「项目」作用域选项对面板是死路（面板调用无法携带 workspacePath，宿主对 project scope 缺路径必抛）——禁用并指路「经模型的 workflow_admin 工具保存」，顺手补 select 的 aria-label；② 插件面板批量更新总结在 `bulkNoteRef` 滞留——紧随的检查更新失败时该总结丢失、之后任意一次成功检查把它当自己的 note 盖出来，失败分支改为就地消费；③ 操作审计卡的 `audit-*` CSS 类此前不存在（裸排无行距、失败行无红色标识），补一组最小规则；④ EN 界面残留的三处硬编码（工作流模板 label「主题总结」、MCP 传输下拉「（HTTP）」、插件更新 tooltip 的全角括号）入表；⑤ Picker 补 combobox 语义（`role/aria-expanded/aria-controls/aria-activedescendant` + option id，读屏能播报高亮项）；⑥ MCP 编辑器全部输入框/下拉/文本域补 `aria-label`（其余面板早有，唯独它没有）。
 - **文档漂移**（`lib/webhook-triggers.js` 注释 + `docs/COMPAT.md` + `docs/ARCHITECTURE.md`）：`seenPathFor` 与 COMPAT 各自残留的「25 键配置面」改为 30（16 校验 + 14 直通，host-check 键集断言不变）；ARCHITECTURE 补 cron 双实例双触发的已知边界、installScripts 的 UNC 分类、facade 并发上限「收在叶子」的口径。
+- **CI 平台暴露的测试基建修复**（`scripts/host-check.mjs` + `scripts/verify-webhook-triggers.mjs`；v1.27.1-27.3 未触发 CI，这批断言首次在 Linux/CI runner 上执行）：① reveal 的 win32 专有拼写（反斜杠 UNC、`\\?\` / `\\.\` 命名空间）在 POSIX 上先被「必须绝对路径」拒绝——按平台断言各自的拒绝理由，`//` 拼写双平台都保留真实 UNC 拒绝断言；② 指向管理共享的 junction 在 runner 上拒绝 unlink（EPERM），junction 场景 finally 改 unlinkSync + 容错、清理重试间按 lstat 主动摘 symlink（readdir 的 Dirent 把 junction 报成目录）、清理重试耗尽降级为带残留清单的告警而非推翻闸门；③ webhook 信任闸门断言不再钉路径拼写——runneradmin 的 8.3 短名（TEMP=`RUNNER~1`）下 host canonical 保留短名、native 才展开长名，改为「规范化到同一真实目录」（native + 大小写折叠）。
 
 ## [1.27.3] - 2026-10-03
 
