@@ -30,7 +30,7 @@
 | 历史会话（批删 / 导出 / 体检 / 置顶） | `ui-workspace`（会话管理）、`session-query` | 增量 | `sessionPersistence` + ⚠ `workspaceRegistry` 归档集 | host-check |
 | Web 搜索（provider 切换） | `ui-settings-web-search`（DeepSeek provider 配置） | 增量（exa / perplexity 装卸） | profile patch row + `settings.mutate`（有 settings 命名空间时） | verify-web-search-admin |
 | 用量仪表盘 | 无 | **独占** | `session/event` 事件流 + `$DSH_HOME/usage-ledger.json` | verify-usage-ledger |
-| 待办 dock | `ui-conversation` 的 `TodoPanel`（`conversation.input.dock` order 0） | **覆盖**（order 5；有数据时隐藏原生条） | `conversation.input.dock` slot | verify-todo-panel |
+| 待办 dock | `ui-conversation` 的 `TodoPanel`（`conversation.input.dock` order 0） | **让位**（官方 todo 条已挂载即不注册；`dsh-admin-panels` / `config.panels.todo: 'on'` 可强制） | `conversation.input.dock` slot | verify-todo-panel |
 | 工作区管理 | `ui-workspace` + `ui-sidebar-browser` | **已退役** | —（宿主侧 `workspaceAdmin` 命名空间保留为兼容 RPC 面；服务可经 `config.workspaceAdmin: 'off'` 停挂——描述符保留、调用在网关处失败） | integration-check |
 
 ## 已知的高风险接缝（升级时优先回归）
@@ -91,7 +91,7 @@ DSH_CHECKOUTS="D:/dsh/0.2.0-rc.1, D:/dsh/next" npm run test:matrix
 | Web 搜索 | `ui-settings-web-search`（官方 provider 配置页） | — | 保留（provider 切换无官方页） |
 | 用量仪表盘 | 无 | — | 保留 |
 | 自动化 | `ui-schedule`（会话级任务） | — | 保留（宿主级 cron / Webhook 入站无官方页） |
-| 待办清单 | `ui-conversation` TodoPanel（`conversation.input.dock` id `todo`） | — | 保留（是叠加增强：有数据时替换原生条） |
+| 待办清单 | `ui-conversation` TodoPanel（`conversation.input.dock` id `todo`） | `conversation.input.dock` 有 id `todo` | **让位**（探测命中即不注册） |
 
 **未实现的探测**：上表中标 "—" 的行目前 `detect` 恒为 false，即面板保留。这是刻意的：**探测不到就不让位**——把看不见的东西当作"已覆盖"会让功能凭空消失。后续上游补齐（例如官方 MCP 管理页）时，只需给对应行加一条探测。
 

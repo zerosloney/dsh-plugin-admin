@@ -101,6 +101,8 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 ### ✅ 待办清单
 输入框上方浮层，随会话实时投影；勾选完成（删除线 + 进度条）、进行中项实时计时、已完成折叠；git 文件变更区（分支徽标 + 每文件 ± 行数 + 复制 diff + 定位文件）。
 
+**默认让位**：官方 `ui-conversation` 自 0.1.7 起在 `conversation.input.dock` 挂了自己的 TodoPanel（id `todo`），探测命中即不注册本插件浮层（见 docs/COMPAT.md 官方覆盖表）；要找回增强版，`config.panels.todo: 'on'` 或 localStorage `dsh-admin-panels` 强制。
+
 **git 读取失败与"工作区干净"是两件事，分开呈现**：`gitDiff` / `fileStats` 各自带一个 `error` 字段（成功路径为 `null`）。读不出来时（非仓库、无 git、超时）不再返回零值充当"无改动"——那会让"复制 diff"按钮复制空字符串并弹出「工作区干净」，把相反的结论说得斩钉截铁。失败时 `gitDiff` 回 `error` 而非空 diff（超时与非超时措辞不同，因为二者对用户含义不同），`fileStats` 回零值 + `error`，面板据此隐藏该区段而不是显示 `0 个文件`；"没有 cwd"仍算合法的空答案（`error: null`）。git 的 stderr 常是一大段选项用法，诊断只取能说明原因的那一行，取不到就只报退出码——不把无关的 flag 列表念给用户。
 
 ### 🌐 i18n

@@ -106,7 +106,9 @@ export const NATIVE_COVERAGE = Object.freeze([
     label: '待办清单',
     official: 'ui-conversation TodoPanel（conversation.input.dock 的 todo 条）',
     since: '0.1.7',
-    detect: function () { return false },   // overlay, not a duplicate: ours replaces the strip while it has data
+    detect: function (/** @type {any} */ ctx) {
+      return hasSlotEntry(ctx, 'conversation.input.dock', 'todo')
+    },
   }),
 ])
 

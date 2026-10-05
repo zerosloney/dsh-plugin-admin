@@ -2030,7 +2030,7 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 {
   const POLICY_CACHE = 'dsh-admin-panels-policy'
   const mountPanels = async (officialPanelIds, configPanels = {}, options = {}) => {
-    const { askFails = false, cache, force } = options
+    const { askFails = false, cache, force, officialDock = [] } = options
     dom.window.localStorage.removeItem('dsh-admin-panels')
     dom.window.localStorage.removeItem(POLICY_CACHE)
     if (force) dom.window.localStorage.setItem('dsh-admin-panels', force)
@@ -2055,7 +2055,11 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
       get: () => undefined,
       slots: {
         // Only the panel list carries the official entries the probes look for.
-        entries: (name) => (name === 'sidebar.panellist' ? officialPanelIds.map((id) => ({ options: { id } })) : []),
+        entries: (name) => (name === 'sidebar.panellist'
+          ? officialPanelIds.map((id) => ({ options: { id } }))
+          : name === 'conversation.input.dock'
+            ? officialDock.map((id) => ({ options: { id } }))
+            : []),
         inject: (key, cb) => { injected.push({ key, cb }); return () => {} },
         register: (options, component) => {
           registered.push({ options, component })
@@ -2082,6 +2086,13 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
   const forced = await mountPanels(['plugins'], {}, { force: 'extensions' })
   assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
+
+  // The todo dock probes the conversation slot, not the settings tabs: the
+  // official ui-conversation registers id 'todo' on 'conversation.input.dock'.
+  const todoOfficial = await mountPanels([], {}, { officialDock: ['todo'] })
+  assert.ok(!todoOfficial.includes('todo-admin'), 'official conversation todo 条 present → the todo dock yields')
+  const todoForced = await mountPanels([], {}, { officialDock: ['todo'], force: 'todo' })
+  assert.ok(todoForced.includes('todo-admin'), 'dsh-admin-panels forces the todo dock back on')
 
   // Phase E3: the profile config is the profile's word.
   const offByConfig = await mountPanels([], { mcp: 'off' })
