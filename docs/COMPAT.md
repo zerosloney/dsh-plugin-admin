@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> **验证基线：dsh 0.2.0-rc.1**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.0-rc.1`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）· 插件 v1.26.2。
+> **验证基线：dsh 0.2.0-rc.1**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.0-rc.1`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）· 插件 v1.27.5。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
 > 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
@@ -31,7 +31,7 @@
 | Web 搜索（provider 切换） | `ui-settings-web-search`（DeepSeek provider 配置） | 增量（exa / perplexity 装卸） | profile patch row + `settings.mutate`（有 settings 命名空间时） | verify-web-search-admin |
 | 用量仪表盘 | 无 | **独占** | `session/event` 事件流 + `$DSH_HOME/usage-ledger.json` | verify-usage-ledger |
 | 待办 dock | `ui-conversation` 的 `TodoPanel`（`conversation.input.dock` order 0） | **覆盖**（order 5；有数据时隐藏原生条） | `conversation.input.dock` slot | verify-todo-panel |
-| 工作区管理 | `ui-workspace` + `ui-sidebar-browser` | **已退役** | —（宿主侧 `workspaceAdmin` 命名空间保留为兼容 RPC 面） | integration-check |
+| 工作区管理 | `ui-workspace` + `ui-sidebar-browser` | **已退役** | —（宿主侧 `workspaceAdmin` 命名空间保留为兼容 RPC 面；服务可经 `config.workspaceAdmin: 'off'` 停挂——描述符保留、调用在网关处失败） | integration-check |
 
 ## 已知的高风险接缝（升级时优先回归）
 

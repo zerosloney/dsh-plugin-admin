@@ -1180,6 +1180,34 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
   )
   assert.equal(PASSTHROUGH_CONFIG_KEYS.length, 14, 'the documented passthrough list stays at 14 keys (auditLogPath in F3; webhookAllowRemote/webhookRateLimit in F4)')
 
+  // The workspaceAdmin mount switch: absent stays 'legacy' (unchanged history),
+  // 'off' is accepted, anything else fails the mount.
+  assert.equal(resolvePluginConfig(undefined).workspaceAdmin, 'legacy', 'an absent workspaceAdmin switch defaults to legacy (history unchanged)')
+  assert.equal(resolvePluginConfig({ workspaceAdmin: 'off' }).workspaceAdmin, 'off', 'the off value resolves through untouched')
+  assert.throws(() => resolvePluginConfig({ workspaceAdmin: 'hidden' }), /config\.workspaceAdmin must be one of/, 'a mistyped workspaceAdmin switch fails the mount')
+
+  // 'off' at MOUNT time: the service is not provided, the plugin mounts
+  // anyway, and the descriptors stay on the wire (compat callers still see the
+  // surface; calls fail at the gateway). Own collectors: the shared
+  // typertRegistrations table admits exactly one registration per process.
+  {
+    let offRegistration = null
+    const offCtx = {
+      ...fakeCtx,
+      // The spread carries fakeCtx's OWN `provided` bag (the legacy mount's
+      // service map, workspaceAdmin included) — drop it, or the assertion
+      // below reads the legacy mount's service, not this mount's decision.
+      provided: undefined,
+      provide: (key, service) => { offCtx.provided ??= {}; offCtx.provided[key] = service },
+      typert: { register: (descriptor) => { offRegistration = descriptor; return () => {} } },
+    }
+    apply(offCtx, { workspaceAdmin: 'off' })
+    assert.equal(offCtx.provided?.workspaceAdmin, undefined, "workspaceAdmin: 'off' mounts no workspaceAdmin service")
+    assert.ok(offCtx.provided?.pluginAdmin && offCtx.provided?.sessionAdmin, "workspaceAdmin: 'off' keeps the rest of the plugin mounted")
+    const wired = (offRegistration?.invocations ?? []).filter((i) => i.namespace === 'workspaceAdmin').length
+    assert.ok(wired > 0, "workspaceAdmin: 'off' keeps the descriptors on the wire (compat surface intact)")
+  }
+
   // Documented passthrough overrides keep their raw identity when valid...
   assert.equal(resolvePluginConfig({ commandsDir: 'x' }).commandsDir, 'x', 'a documented passthrough override keeps its raw value')
   assert.deepEqual(

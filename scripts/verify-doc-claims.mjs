@@ -34,7 +34,9 @@
  *   4. every `NN → MM checks` claim in the newest CHANGELOG sections names a
  *      suite that really prints that count — the numbers are read back from the
  *      verifier's own summary line, not retyped;
- *   5. the documented config-key counts equal `resolvePluginConfig`'s tables.
+ *   5. the documented config-key counts equal `resolvePluginConfig`'s tables;
+ *   6. the plugin version strings in README.md and docs/COMPAT.md equal the
+ *      package.json version (release commits must move all three together).
  *
  * Zero dependencies; part of npm test.
  */
@@ -246,6 +248,23 @@ check('the documented validated/passthrough config counts match lib/index.js', (
     const claimed = Number(match[1] ?? match[2])
     const expected = match[1] !== undefined ? validatedCount : passthroughCount
     assert.equal(claimed, expected, `ARCHITECTURE.md claims ${claimed}; index.js exports ${expected}`)
+  }
+})
+
+/* ── 6. the plugin version strings equal the package version ───────────────── */
+
+check('README/COMPAT 的插件版本串等于 package.json version', () => {
+  const version = JSON.parse(read('package.json')).version
+  assert.ok(typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version), `package.json version is not a plain release triple: ${JSON.stringify(version)}`)
+  for (const [file, pattern] of [
+    // The npm badge line: "… · v1.27.5 · MIT · …"
+    ['README.md', /·\s*v(\d+\.\d+\.\d+)\s*·\s*MIT/],
+    // The COMPAT header: "… · 插件 v1.27.5。"
+    ['docs/COMPAT.md', /插件\s*v(\d+\.\d+\.\d+)\s*[。.]/],
+  ]) {
+    const match = pattern.exec(read(file))
+    assert.ok(match !== null, `${file} 没有可解析的插件版本串（期望 v${version}）`)
+    assert.equal(match[1], version, `${file} 写的是 v${match[1]}，package.json 是 ${version} —— 发版时三处（含 package.json）一起改`)
   }
 })
 

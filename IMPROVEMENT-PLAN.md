@@ -29,7 +29,7 @@
 | G1 接缝断言 | ✅ 完成 | 探测 78 → 88 条：补 `slots.entries`（E）、locale 运行时（C）、`WebRoute`（F4）；只读源码无需构建 |
 | G2 多版本矩阵 | ✅ 完成 | `check-matrix.mjs` + `npm run test:matrix`：无 checkout 目录记 SKIP，任一存在者漂移即失败；COMPAT 记录用法与承重接缝 |
 
-| D1 RPC 单一真相表 | ✅ 完成 | `lib/rpc-manifest.js`（89 方法/14 命名空间）由挂载表面导出；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）；模块已改为从表生成（见 D1b），结构上不可能不一致 |
+| D1 RPC 单一真相表 | ✅ 完成 | `lib/rpc-manifest.js`（91 方法/14 命名空间；D1 落地时为 89，方法面随面板增删演进，当前值以 `lib/rpc-manifest.js` 与 `verify-rpc-schema` 实测为准）由挂载表面导出；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）；模块已改为从表生成（见 D1b），结构上不可能不一致 |
 | D1b 模块从表生成描述符 | ✅ 完成 | 14 个命名空间全部改用 `invocationsFor(namespace)`；89 条手写描述符与 4 处死常量删除；host-check 的挂载等值断言逐轮把关 |
 | D3 双向一致性测试 | ✅ 完成 | 见上；含负向验证 |
 | D2 描述符补 schemas | ✅ 完成（用户点名实现） | **87 个参数**改挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验。校验器手写零依赖（`lib/rpc-schema.js`，7 个 schema）—— 注册表只要求 `typeSymbol` 非空 + `create()` 返回带 `parse` 的对象，**不必引入 zod、不必生成类型**（原先判断为不采纳正是卡在"必须用生成器的 Zod 工厂"这个前提上，实测不成立）。刻意不比服务更严（不枚举 entry 字段）、省略语义不变（`acceptsUndefined`）。`RPC_PARAM_SCHEMAS` 由 host-check 断言完整且忠实，`verify-rpc-schema.mjs` 5 项 |

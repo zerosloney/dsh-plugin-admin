@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`config.workspaceAdmin` 挂载开关（`legacy` 默认 / `off`）**（`lib/index.js` + `docs/ARCHITECTURE.md` + `docs/COMPAT.md`）：workspaceAdmin 命名空间已随官方面板退役（客户端无入口），但 12 个 RPC（其中 9 个变更动词）仍照常挂载——同源脚本可触达的管理面比「已退役」宣称的大一圈。`off` 不挂载服务：RPC 描述符保留在 wire 上（兼容调用方仍能看到表面），调用在网关处得到 typed 错误（`gateway/lookup-not-found`），不再能变更一个部署方已关闭的面。写错值挂载期报错；受校验配置键面 16 → 17（`host-check` 键集断言与 `verify-doc-claims` 计数断言随动，无需改脚本）。
+
+### Docs
+
+- **README / docs/COMPAT.md 的插件版本串钉进 `verify-doc-claims`**：修正两处滞后（README 写 v1.27.0、COMPAT 头部写「插件 v1.26.2」，package.json 已是 1.27.5），并新增断言——版本串 ≠ package.json version 即闸门失败，发版必须两处同改。`lib/patch-utils.js` 的 pnpm 操作数白名单注释同步实现现状（`^` 的处理是「加引号」不是早已废弃的「双写」；`=` 实际在白名单内而非被排除）；IMPROVEMENT-PLAN 的「89 方法」快照补注当前实测口径。
+
 ## [1.27.5] - 2026-10-04
 
 ### Miscellaneous

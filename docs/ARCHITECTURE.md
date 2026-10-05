@@ -108,13 +108,13 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 
 ## 4. 可调配置键（插件 config 行）
 
-`resolvePluginConfig` 认 **30 个键，全部受校验**：**16 个可调项**（第一张表）与 **14 个直通覆盖**（第二张表）。任意一个写错类型 / 范围都会在**挂载期直接报错**（fail-loud，不会静默降级）——包括 `commandsDir: 5` 这类直通键，不再静默失效。
+`resolvePluginConfig` 认 **31 个键，全部受校验**：**17 个可调项**（第一张表）与 **14 个直通覆盖**（第二张表）。任意一个写错类型 / 范围都会在**挂载期直接报错**（fail-loud，不会静默降级）——包括 `commandsDir: 5` 这类直通键，不再静默失效。
 
 两处例外按同一契约处理：**未文档化的键**不报错（同一 config 行也可能载着别的 reader 的键），但会**每进程告警一次**（`warnUnknownConfigKeys`，日志形如 `plugin-admin: unknown config key(s) ignored: xxx — see docs/ARCHITECTURE.md 可调配置键`），写错拼写不再无声无息；**直通键缺省时保持 undefined**，各子模块仍用自己的历史默认值，因此不改变既有行为。
 
 导出的 `VALIDATED_CONFIG_KEYS` / `PASSTHROUGH_CONFIG_KEYS` 就是这两张表的代码形态，`host-check` 断言前者与 `resolvePluginConfig` 实际填出的键集完全一致 —— 新增旋钮忘了登记会在测试里失败，而不是在挂载期被当成"未知键"。
 
-**受校验可调项（16）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
+**受校验可调项（17）**——`resolvePluginConfig`（`lib/index.js`）解析，`Config` schema 走同一个函数：
 
 | 分组 | 键 | 默认 | 说明 |
 |---|---|---|---|
@@ -133,6 +133,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 | 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
 | 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
 | 面板开关 | `panels` | `{}` | 逐面板三态开关：`auto`（默认，官方已覆盖就让位）/ `on`（即使官方有也注册）/ `off`（不注册，优先级最高）。键名必须是 11 个面板 id 之一（`extensions` / `mcp` / `skills` / `subagents` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`），值必须是三态之一；写错任一处**挂载期报错**。浏览器半读不到 config 行，所以挂载时经 `pluginAdmin/panels` 问宿主一次，答**上次的答案缓存**在 localStorage（键 `dsh-admin-panels-policy`），新答案到达后对账（关掉该关的、补上该开的）。 |
+| 面板开关 | `workspaceAdmin` | `legacy` | 已退役的 workspaceAdmin RPC 面的挂载开关：`legacy`（默认，照常挂载，行为与历史版本一致）/ `off`（**不挂载服务**——RPC 描述符保留在 wire 上，兼容调用方仍能看到表面，但调用在网关处得到 typed 错误，不再能变更这个部署已关闭的面）。该命名空间无客户端入口（见 docs/COMPAT.md「工作区管理 已退役」行），`off` 是给想彻底关掉这组变更 RPC 的部署准备的；写错值挂载期报错。 |
 | 安装 | `installScripts` | `allow` | pnpm 安装时是否允许依赖的生命周期脚本、以及什么样的来源规格可以被安装：`allow`（默认，与 `dsh plugin add` 一致——registry / git / URL / 本机路径一律装、一律可跑脚本）/ `registry-only`（**registry 包**与**本机路径**照常装且可跑脚本——原生模块需要它的 prepare；而任意**远程仓库/协议规格**——`git+https://…`、`github:user/repo`、`user/repo`、tarball URL、**UNC 网络路径**（`\\server\share\pkg` 及其 `//` 写法，与 fsAdmin/reveal 拒绝的同一形状）——直接**拒绝**，不是禁脚本）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL / UNC 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来，这一取舍由部署方决定；`registry-only` 正是为了避免这个取舍而加——在它之前，想让 registry 包构建就只能同时在任意 git 仓库上也构建。**`registry-only` 的拒绝发生在 pnpm 启动之前**（拒绝之后已经克隆并构建完了）。`remove` 不受该键约束（卸载不取代码）。**运行这些脚本的子进程会继承操作者的环境（只剔除 `DSH_*`）——含 API key 等凭据，详见 §5。** |
 
 **受校验直通覆盖（14）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
