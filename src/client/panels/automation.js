@@ -189,6 +189,7 @@ export function WebhookSection(props) {
     draft: null,
     showSecret: false,
     confirmId: null,
+    pickerAvailable: true, // native directory picker capability; the first workspaceAdmin/pickDirectory call corrects it
   })
   var state = kit.state
   var setState = kit.set
@@ -386,6 +387,27 @@ export function WebhookSection(props) {
     })
   }
 
+  /**
+   * Native directory picker via the host (the workspaces create form's
+   * gesture); the picked path lands in the draft's workspacePath. The
+   * returned capability snapshot keeps the button's availability honest.
+   */
+  function pickDirectory() {
+    callRemote('workspaceAdmin/pickDirectory', {}).then(function (result) {
+      if (!alive.current) return
+      if (result.ok) {
+        var v = result.value || {}
+        patch({ pickerAvailable: v.available === true })
+        if (typeof v.path === 'string' && v.path !== '') patchDraft({ workspacePath: v.path })
+      } else {
+        patch({ error: dshT('目录选择失败：') + messageOf(result.error) })
+      }
+    }, function (err) {
+      if (!alive.current) return
+      patch({ error: dshT('目录选择失败：') + messageOf(err) })
+    })
+  }
+
   // WebhookRender is a plain tree-builder (returns a keyed fragment), not a
   // React component — call it directly and hand it the actions object.
   var webhookActions = {
@@ -399,6 +421,7 @@ export function WebhookSection(props) {
     deleteRule: deleteRule,
     testRule: testRule,
     runtimeInstall: runtimeInstall,
+    pickDirectory: pickDirectory,
   }
   return createElement('div', { 'data-dsh-admin-section': '' },
     WebhookRender(state, webhookActions))
@@ -425,6 +448,7 @@ export function CronSection(props) {
     editorOpen: false,
     draft: null,
     confirmId: null,
+    pickerAvailable: true, // native directory picker capability; the first workspaceAdmin/pickDirectory call corrects it
     nowMs: Date.now(),
   })
   var state = kit.state
@@ -663,6 +687,27 @@ export function CronSection(props) {
     })
   }
 
+  /**
+   * Native directory picker via the host (the workspaces create form's
+   * gesture); the picked path lands in the draft's workspacePath. The
+   * returned capability snapshot keeps the button's availability honest.
+   */
+  function pickDirectory() {
+    callRemote('workspaceAdmin/pickDirectory', {}).then(function (result) {
+      if (!alive.current) return
+      if (result.ok) {
+        var v = result.value || {}
+        patch({ pickerAvailable: v.available === true })
+        if (typeof v.path === 'string' && v.path !== '') patchDraft({ workspacePath: v.path })
+      } else {
+        patch({ error: dshT('目录选择失败：') + messageOf(result.error) })
+      }
+    }, function (err) {
+      if (!alive.current) return
+      patch({ error: dshT('目录选择失败：') + messageOf(err) })
+    })
+  }
+
   var cronActions = {
     patch: patch,
     patchDraft: patchDraft,
@@ -674,6 +719,7 @@ export function CronSection(props) {
     deleteTask: deleteTask,
     toggleTask: toggleTask,
     runNow: runNow,
+    pickDirectory: pickDirectory,
   }
   return createElement('div', { 'data-dsh-admin-section': '' },
     CronRender(state, cronActions))
@@ -920,7 +966,18 @@ export function renderWebhookEditor(view, actions) {
       : createElement('div', { key: 'f-target', style: { display: 'flex', flexDirection: 'column', gap: '7px' } },
         createElement('div', { style: groupStyle },
           createElement('label', { style: labelStyle }, dshT('工作区路径')),
-          createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+          createElement('div', { style: { display: 'flex', gap: '6px' } },
+            createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+            createElement(UiButton, {
+              variant: 'outline',
+              size: 'sm',
+              disabled: view.pickerAvailable === false,
+              title: view.pickerAvailable === false
+                ? dshT('原生选择器不可用，请手动输入绝对路径')
+                : dshT('打开宿主的目录选择器，选中后自动填入'),
+              onClick: function () { actions.pickDirectory() },
+            }, dshT('📁 选择目录')),
+          ),
         ),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
           createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },
@@ -1356,7 +1413,18 @@ export function renderCronEditor(view, actions) {
       : createElement('div', { key: 'f-target', style: { display: 'flex', flexDirection: 'column', gap: '7px' } },
         createElement('div', { style: groupStyle },
           createElement('label', { style: labelStyle }, dshT('工作区路径')),
-          createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+          createElement('div', { style: { display: 'flex', gap: '6px' } },
+            createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+            createElement(UiButton, {
+              variant: 'outline',
+              size: 'sm',
+              disabled: view.pickerAvailable === false,
+              title: view.pickerAvailable === false
+                ? dshT('原生选择器不可用，请手动输入绝对路径')
+                : dshT('打开宿主的目录选择器，选中后自动填入'),
+              onClick: function () { actions.pickDirectory() },
+            }, dshT('📁 选择目录')),
+          ),
         ),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
           createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },

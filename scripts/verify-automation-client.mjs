@@ -136,6 +136,7 @@ await checkAsync('cron create mode: labeled workspace + preset fields', async ()
   const preset = editor().querySelector('select[aria-label="Agent 预设"]')
   assert.ok(preset !== null, 'agent preset select present')
   assert.ok(preset.options.length >= 1, 'agent preset has options')
+  assert.ok(editor().textContent.includes('📁 选择目录'), 'directory picker button present beside the path input')
 })
 
 await checkAsync('webhook tab mounts and its editor opens with header title', async () => {
@@ -166,6 +167,7 @@ await checkAsync('webhook create mode: labeled workspace + preset fields', async
   for (const label of ['工作区路径', 'Agent 预设', '权限预设']) {
     assert.ok(editor().textContent.includes(label), `label "${label}" present`)
   }
+  assert.ok(editor().textContent.includes('📁 选择目录'), 'directory picker button present beside the path input')
 })
 
 act(() => { root.unmount() })

@@ -784,6 +784,7 @@ var I18N_EN = {
   "编辑规则": "Edit rule",
   "共享密钥": "Shared secret",
   "事件过滤": "Event filter",
+  "打开宿主的目录选择器，选中后自动填入": "Open the host's directory picker; the picked path fills the input",
   "推送到既有会话": "Push to an existing session",
   "新建会话": "Create a session",
   "目标会话 ID（如 session-xxx）": "Target session ID (e.g. session-xxx)",
