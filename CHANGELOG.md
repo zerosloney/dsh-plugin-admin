@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.27.8] - 2026-10-05
+
+### Added
+
+- **定时任务 / Webhook 编辑器的工作区路径支持目录选择**（`src/client/panels/automation.js`）：create 模式的工作区路径输入框右侧新增「📁 选择目录」按钮，复用工作区新建表单的宿主原生选择器（`workspaceAdmin/pickDirectory`，零新增 RPC），选中即填入 `workspacePath`。宿主无可用选择器时按钮禁用并提示手动输入（能力快照 `pickerAvailable` 首次调用后以宿主返回的 `available` 为准，与 workspaces 面板同一手势）；选择失败走面板错误条。`verify-automation-client` 的两个 create 模式检查补按钮存在性断言（计数不变：10 checks）。
+
 ## [1.27.7] - 2026-10-05
 
 ### Added
