@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.27.6] - 2026-10-05
+
 ### Added
 
 - **`config.workspaceAdmin` 挂载开关（`legacy` 默认 / `off`）**（`lib/index.js` + `docs/ARCHITECTURE.md` + `docs/COMPAT.md`）：workspaceAdmin 命名空间已随官方面板退役（客户端无入口），但 12 个 RPC（其中 9 个变更动词）仍照常挂载——同源脚本可触达的管理面比「已退役」宣称的大一圈。`off` 不挂载服务：RPC 描述符保留在 wire 上（兼容调用方仍能看到表面），调用在网关处得到 typed 错误（`gateway/lookup-not-found`），不再能变更一个部署方已关闭的面。写错值挂载期报错；受校验配置键面 16 → 17（`host-check` 键集断言与 `verify-doc-claims` 计数断言随动，无需改脚本）。
