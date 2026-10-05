@@ -75,6 +75,7 @@ const STEPS = [
   { name: 'verify-workflow-tools', desc: 'the model-facing workflow_admin tool: action enum, eval, save', cmd: [node, 'scripts/verify-workflow-tools.mjs'] },
   { name: 'verify-workflow-command', desc: '/workflow slash command: create → eval → background run', cmd: [node, 'scripts/verify-workflow-command.mjs'] },
   { name: 'verify-workflow-client', desc: 'workflow panel in jsdom: create, stop, saved library, polling', cmd: [node, 'scripts/verify-workflow-client.mjs'] },
+  { name: 'verify-automation-client', desc: 'automation tab in jsdom: cron/webhook editor layout contract (header, field-group labels, schedule inset, action modes)', cmd: [node, 'scripts/verify-automation-client.mjs'] },
   { name: 'integration-check', desc: 'seam probes against a real dsh checkout (DSH_CHECKOUT / sibling; SKIP without one locally)', cmd: [node, 'scripts/integration-check.mjs'] },
 ]
 

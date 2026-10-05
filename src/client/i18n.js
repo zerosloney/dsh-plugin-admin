@@ -780,6 +780,10 @@ var I18N_EN = {
   "显示": "Show",
   "事件过滤（留空 = 任意事件）": "Event filter (empty = any event)",
   "动作模式": "Action mode",
+  "新建规则": "New rule",
+  "编辑规则": "Edit rule",
+  "共享密钥": "Shared secret",
+  "事件过滤": "Event filter",
   "推送到既有会话": "Push to an existing session",
   "新建会话": "Create a session",
   "目标会话 ID（如 session-xxx）": "Target session ID (e.g. session-xxx)",
@@ -808,6 +812,12 @@ var I18N_EN = {
   "每天 ": "Daily at ",
   "任务标识（英文字母开头，无空格）": "Task id (starts with a letter, no spaces)",
   "任务 ID": "Task ID",
+  "新建定时任务": "New scheduled task",
+  "编辑定时任务": "Edit scheduled task",
+  "目标会话": "Target session",
+  "工作区路径": "Workspace path",
+  "Agent 预设": "Agent preset",
+  "权限预设": "Permission preset",
   "调度（本地时区 ": "Schedule (local timezone ",
   "调度频率": "Frequency",
   "每小时": "Hourly",
@@ -919,11 +929,6 @@ var I18N_EN = {
   "// 可用：agent(prompt, opts?) / parallel(thunks) / pipeline(items, ...stages)": "// Available: agent(prompt, opts?) / parallel(thunks) / pipeline(items, ...stages)",
   "//       phase(title) / log(msg) / report(key, value) / shell(cmd)": "//       phase(title) / log(msg) / report(key, value) / shell(cmd)",
   "// 顶层 return 返回结果；单步失败 agent() 返回 null，脚本继续。": "// A top-level return yields the result; a failed agent() step returns null and the script continues.",
-  // Phase F3: privileged-action audit card in the Plugins panel.
-  "操作审计": "Action audit",
-  "加载审计": "Load audit",
-  "尚未加载。审计记录特权动作（安装/卸载插件、写入钩子、删除会话等）。文件：": "Not loaded yet. The trail records privileged actions (installing or removing plugins, writing hooks, deleting sessions). File: ",
-  "暂无记录。": "No entries yet.",
 }
 
 

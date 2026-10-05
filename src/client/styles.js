@@ -267,14 +267,6 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .mcp-test-fail { color: var(--dsw-alias-state-error-primary, #ef4444); }',
   '[data-dsh-admin-section] .mcp-test-warn { color: #d97706; opacity: 0.95; }',
   '[data-dsh-admin-section] .mcp-test-cached { font-size: 10px; color: var(--dsw-alias-label-secondary, #61666b); }',
-  // 操作审计卡（plugins 面板 Phase F3）：此前只有结构没有样式，时间/动作/
-  // 详情三个 span 裸排一行，失败行没有红色标识。
-  '[data-dsh-admin-section] .audit-list { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }',
-  '[data-dsh-admin-section] .audit-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; line-height: 1.5; min-width: 0; }',
-  '[data-dsh-admin-section] .audit-time { flex: none; color: var(--dsw-alias-label-secondary, #61666b); font-variant-numeric: tabular-nums; white-space: nowrap; }',
-  '[data-dsh-admin-section] .audit-action { flex: none; font-weight: 600; color: var(--dsw-alias-label-primary, #222); word-break: break-all; }',
-  '[data-dsh-admin-section] .audit-action.bad { color: var(--dsw-alias-state-error-primary, #ef4444); }',
-  '[data-dsh-admin-section] .audit-detail { color: var(--dsw-alias-label-secondary, #61666b); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
   '@media (max-width: 520px) { [data-dsh-admin-section] { gap: 10px; } [data-dsh-admin-section] .list.grid2 { grid-template-columns: 1fr; } [data-dsh-admin-section] .toolbar { align-items: stretch; flex-wrap: wrap; padding: 8px; } [data-dsh-admin-section] .toolbar .input-wrap { flex-basis: 100%; } [data-dsh-admin-section] .card-header { align-items: flex-start; } [data-dsh-admin-section] .card-actions { flex-wrap: wrap; justify-content: flex-end; } [data-dsh-admin-section] .footer { gap: 6px; align-items: flex-start; flex-direction: column; } [data-dsh-admin-section] .footer .path { max-width: 100%; } }',
   '@keyframes dsh-toast-in { 0% { opacity: 0; transform: translateY(-12px) scale(0.96); } 100% { opacity: 1; transform: translateY(0) scale(1); } }',
   '@keyframes dsh-toast-out { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-8px) scale(0.96); } }',

@@ -714,8 +714,8 @@ await act(async () => {
   propsOfSearch(searchInput).onChange({ target: { value: 'custom' } })
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
-// Scope to the plugin LIST: the panel also renders an audit card (Phase F3),
-// which is not a search result and must not be counted here.
+// Scope to the plugin LIST: the selector must not pick up cards outside the
+// grid, which are not search results and must not be counted here.
 const cardTextsAfterSearch = [...host.querySelectorAll('.list .card')].map((c) => c.textContent || '')
 assert.equal(cardTextsAfterSearch.length, 1, 'search narrows the list to matching cards')
 assert.ok(cardTextsAfterSearch[0].includes('dsh-custom-tool'), 'matching card is dsh-custom-tool')

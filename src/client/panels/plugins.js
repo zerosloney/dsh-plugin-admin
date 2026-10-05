@@ -1,5 +1,5 @@
 /** plugins — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, UiPill, createElement, currentLanguage, dshT, formatDate, messageOf, sectionState, setAdminLang, showToast, useEffect, useRef } from './context.js'
+import { UiButton, UiInput, UiPill, createElement, currentLanguage, dshT, messageOf, sectionState, setAdminLang, showToast, useEffect, useRef } from './context.js'
 import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateReminders, updateCheckNote } from './mcp.js'
 
 /**
@@ -51,12 +51,6 @@ import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateRe
  */
 
 /**
- * One entry of the Phase F3 privileged-action audit trail (host-side a
- * bounded file read); fields beyond `at`/`ok` stay host-owned.
- * @typedef {{ at: number, ok?: boolean, action?: string, detail?: string, error?: string }} PluginAuditEntry
- */
-
-/**
  * The change event this panel's own handlers read out of a text input /
  * select (mirrors mcp.js's McpInputEvent and shared.js's InputChangeEvent,
  * which are module-local there and therefore not importable).
@@ -64,9 +58,7 @@ import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateRe
  */
 
 /**
- * The 扩展插件 section state bag. The audit fields (auditBusy / auditError /
- * auditEntries / auditPath) only exist after 操作审计 loaded them, so they
- * stay optional; everything else is seeded at mount.
+ * The 扩展插件 section state bag; every field is seeded at mount.
  * @typedef {{
  * profileDir: string,
  * plugins: Array<PluginListEntry>,
@@ -82,10 +74,6 @@ import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateRe
  * updateChecked: boolean,
  * updates: PluginUpdateMap,
  * bulkUpdate: PluginBulkProgress | null,
- * auditBusy?: boolean,
- * auditError?: string | null,
- * auditEntries?: Array<PluginAuditEntry>,
- * auditPath?: string,
  * }} PluginsSectionState
  */
 
@@ -197,32 +185,11 @@ export function PluginsSection(props) {
    * are per-plugin, never fatal.
    * @param force - true to force the host to bypass its update cache.
    */
-  // Phase F3: the privileged-action trail, fetched on demand (host-side it is
-  // a bounded file read). Newest first; the host caps the slice at 100.
-  function loadAudit() {
-    patchPlugin({ auditBusy: true, auditError: null })
-    callRemote('pluginAdmin/auditLog', {}).then(function (result) {
-      if (!result || result.ok !== true) {
-        patchPlugin({ auditBusy: false, auditError: messageOf(result && result.error) })
-        return
-      }
-      var value = result.value || {}
-      patchPlugin({
-        auditBusy: false,
-        auditError: null,
-        auditEntries: Array.isArray(value.entries) ? value.entries : [],
-        auditPath: typeof value.path === 'string' ? value.path : '',
-      })
-    }, function (error) {
-      patchPlugin({ auditBusy: false, auditError: messageOf(error) })
-    })
-  }
-
   /**
    * (Re)query the host for registry updates and merge the results into the
    * reminder map; the AUTO check on panel open is cache-friendly and a
    * manual check passes force=true (the full merge semantics are documented
-   * in the section doc block above loadAudit).
+   * in the section doc block above checkUpdates).
    * @param {boolean} [force] - true to force the host to bypass its update cache.
    */
   function checkUpdates(force) {
@@ -582,7 +549,7 @@ export function PluginsSection(props) {
   }, [pView.updates])
 
   return createElement('div', { 'data-dsh-admin-section': '' },
-    renderPluginsView(pView, patchPlugin, installPlugin, removePlugin, checkUpdates, upgradePlugin, upgradeAllPlugins, toggleEnabled, loadAudit))
+    renderPluginsView(pView, patchPlugin, installPlugin, removePlugin, checkUpdates, upgradePlugin, upgradeAllPlugins, toggleEnabled))
 }
 
 /* ========================================================================== */
@@ -591,8 +558,8 @@ export function PluginsSection(props) {
 
 /**
  * Render the 扩展插件 panel: toolbar (search / install / check-updates /
- * upgrade-all), filter pills, the update-check strip, the plugin cards,
- * and the 操作审计 footer. Pure — every mutation goes through a callback.
+ * upgrade-all), filter pills, the update-check strip, and the plugin cards.
+ * Pure — every mutation goes through a callback.
  * @param {PluginsSectionState} view - the section state bag.
  * @param {(partial: Record<string, any>) => void} patch - merge into the section state.
  * @param {() => void} install - install the spec currently in the input box.
@@ -601,9 +568,8 @@ export function PluginsSection(props) {
  * @param {(name: string) => void} upgrade - upgrade one bundle to its latest version.
  * @param {() => void} upgradeAll - serially upgrade every bundle with a pending reminder.
  * @param {(name: string, disabled: boolean) => void} setEnabled - toggle one bundle's disable rows without uninstalling.
- * @param {() => void} loadAudit - load the privileged-action audit trail.
  */
-export function renderPluginsView(view, patch, install, remove, checkUpdates, upgrade, upgradeAll, setEnabled, loadAudit) {
+export function renderPluginsView(view, patch, install, remove, checkUpdates, upgrade, upgradeAll, setEnabled) {
   var elements = []
   // How many plugins currently flag an update — the bulk-upgrade button's count.
   var upgradeAllCount = 0
@@ -776,31 +742,6 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
   // Footer
   var hintText = view.note !== '' ? view.note : dshT('更改在重启 dsh 后生效（关闭 dsh 进程后重新运行即可）')
   var hintTitle = view.output !== '' ? dshT('pnpm 输出：\n') + view.output : undefined
-  // Phase F3: privileged-action audit trail (install/remove, hooks writes,
-  // session deletion, ...). Loaded on demand: the host reads a file.
-  elements.push(createElement('div', { className: 'card', key: 'audit' },
-    createElement('div', { className: 'card-header' },
-      createElement('span', { className: 'card-title-text' }, dshT('操作审计')),
-      createElement(UiButton, {
-        variant: 'outline',
-        size: 'sm',
-        disabled: view.auditBusy === true,
-        onClick: function () { loadAudit() },
-      }, view.auditBusy === true ? dshT('加载中…') : dshT('加载审计')),
-    ),
-    view.auditError ? createElement('div', { className: 'error', key: 'audit-error' }, view.auditError) : null,
-    Array.isArray(view.auditEntries) === false
-      ? createElement('div', { className: 'empty', key: 'audit-empty' },
-        dshT('尚未加载。审计记录特权动作（安装/卸载插件、写入钩子、删除会话等）。文件：') + (view.auditPath || '—'))
-      : (view.auditEntries.length === 0
-        ? createElement('div', { className: 'empty', key: 'audit-none' }, dshT('暂无记录。'))
-        : createElement('div', { className: 'audit-list', key: 'audit-list' }, view.auditEntries.slice(0, 30).map(function (entry, index) {
-          return createElement('div', { className: 'audit-row', key: index },
-            createElement('span', { className: 'audit-time' }, formatDate(entry.at)),
-            createElement('span', { className: 'audit-action' + (entry.ok === false ? ' bad' : '') }, String(entry.action || '')),
-            createElement('span', { className: 'audit-detail' }, String(entry.detail || entry.error || '')))
-        }))),
-  ))
   elements.push(createElement('div', { className: 'footer', key: 'footer' },
     createElement('span', { className: 'path', key: 'profile-path', title: view.profileDir }, view.profileDir || dshT('Profile: 默认')),
     createElement('span', { className: 'hint', key: 'hint', title: hintTitle }, hintText)

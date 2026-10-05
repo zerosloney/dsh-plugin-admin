@@ -827,30 +827,53 @@ export function WebhookRender(view, actions) {
 
 /**
  * The webhook rule editor card; reads `view.draft` (null = nothing open).
+ * Layout follows the cron editor's field-group pattern: a card-header title
+ * row, then small-secondary-label groups (groupStyle/labelStyle).
  * @param {Record<string, any>} view - the WebhookSection state bag.
  * @param {Record<string, any>} actions - the section's actions bag.
  */
 export function renderWebhookEditor(view, actions) {
   var d = view.draft
   if (!d) return null
+  var secondary = 'var(--dsw-alias-label-secondary, #61666b)'
+  var groupStyle = { display: 'flex', flexDirection: 'column', gap: '5px' }
+  var labelStyle = { fontSize: '11px', color: secondary }
   return createElement('div', { className: 'card mcp-editor', key: 'editor' },
-    createElement('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline' } },
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600, flex: 'none' } }, 'ID'),
-      createElement(UiInput, {  value: d.id, disabled: !d.isNew, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) }, placeholder: dshT('规则标识（英文字母开头，无空格）') }),
+    // Header: what is being edited + the 启用 toggle on the right — same
+    // identity anchor as the cron editor.
+    createElement('div', { className: 'card-header', key: 'h' },
+      createElement('span', { className: 'card-title' },
+        createElement('span', { className: 'card-title-text' },
+          d.isNew ? dshT('新建规则') : dshT('编辑规则') + ' · ' + d.id)),
+      createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', flex: 'none', cursor: 'pointer' } },
+        createElement(UiCheckbox, {
+          checked: d.enabled,
+          onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ enabled: next }) },
+          label: dshT('启用'),
+        }),
+      ),
     ),
-    createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
-      createElement(UiCheckbox, {
-        checked: d.enabled,
-        onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ enabled: next }) },
-        label: dshT('启用'),
+    // ID
+    createElement('div', { style: groupStyle, key: 'f-id' },
+      createElement('label', { style: labelStyle }, 'ID'),
+      createElement(UiInput, {
+        value: d.id,
+        disabled: !d.isNew,
+        'aria-label': 'ID',
+        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) },
+        placeholder: dshT('规则标识（英文字母开头，无空格）'),
       }),
     ),
-    createElement('div', { style: { display: 'flex', gap: '10px' } },
-      createElement('div', { style: { flex: 1 } },
+    // 密钥 + 事件过滤 — two labeled halves on one wrapping row; the secret
+    // keeps its 显示 / 换一个 buttons beside the input.
+    createElement('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' }, key: 'f-secret-event' },
+      createElement('div', { style: { flex: 1, minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '5px' } },
+        createElement('label', { style: labelStyle }, dshT('共享密钥')),
         createElement('div', { style: { display: 'flex', gap: '6px' } },
           createElement(UiInput, {
             type: view.showSecret ? 'text' : 'password',
             autoComplete: 'new-password',
+            'aria-label': dshT('共享密钥'),
             value: d.secret,
             onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ secret: e.target.value }) },
             placeholder: dshT('共享密钥（必填；编辑时留空表示保持不变）'),
@@ -864,21 +887,29 @@ export function renderWebhookEditor(view, actions) {
           }, dshT('🎲 换一个')),
         ),
       ),
-      createElement('div', { style: { flex: 1 } },
-        createElement(UiInput, {  value: d.event, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ event: e.target.value }) }, placeholder: dshT('事件过滤（留空 = 任意事件）') }),
+      createElement('div', { style: { flex: 1, minWidth: '200px', display: 'flex', flexDirection: 'column', gap: '5px' } },
+        createElement('label', { style: labelStyle }, dshT('事件过滤')),
+        createElement(UiInput, {
+          value: d.event,
+          'aria-label': dshT('事件过滤'),
+          onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ event: e.target.value }) },
+          placeholder: dshT('事件过滤（留空 = 任意事件）'),
+        }),
       ),
     ),
-    createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600, flex: 'none' } }, dshT('动作模式')),
-      createElement('div', { style: { display: 'flex', gap: '6px', marginTop: '4px' } },
+    // 动作模式
+    createElement('div', { style: groupStyle, key: 'f-action' },
+      createElement('label', { style: labelStyle }, dshT('动作模式')),
+      createElement('div', { style: { display: 'flex', gap: '6px' } },
         createElement(UiPill, { active: d.actionMode === 'steer', onClick: function () { actions.patchDraft({ actionMode: 'steer' }) } }, dshT('推送到既有会话')),
         createElement(UiPill, { active: d.actionMode === 'create', onClick: function () { actions.patchDraft({ actionMode: 'create' }) } }, dshT('新建会话')),
       ),
     ),
     d.actionMode === 'steer'
-      ? createElement('div', null,
-        createElement(UiInput, {  value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
-        createElement('span', { style: { marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' } },
+      ? createElement('div', { style: groupStyle, key: 'f-target' },
+        createElement('label', { style: labelStyle }, dshT('目标会话')),
+        createElement(UiInput, { value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
+        createElement('span', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: secondary } },
           createElement(UiCheckbox, {
             checked: d.steer,
             onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ steer: next }) },
@@ -886,30 +917,40 @@ export function renderWebhookEditor(view, actions) {
           }),
         ),
       )
-      : createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-        createElement(UiInput, {  value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+      : createElement('div', { key: 'f-target', style: { display: 'flex', flexDirection: 'column', gap: '7px' } },
+        createElement('div', { style: groupStyle },
+          createElement('label', { style: labelStyle }, dshT('工作区路径')),
+          createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+        ),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
-          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
-              return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
-            }),
+          createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },
+            createElement('label', { style: labelStyle }, dshT('Agent 预设')),
+            createElement('select', { className: 'input', style: { width: '100%' }, value: d.agentPreset, 'aria-label': dshT('Agent 预设'), onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) } },
+              (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
+                return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
+              }),
+            ),
           ),
-          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
-              return createElement('option', { key: n, value: n }, n)
-            }),
+          createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },
+            createElement('label', { style: labelStyle }, dshT('权限预设')),
+            createElement('select', { className: 'input', style: { width: '100%' }, value: d.permissionPreset, 'aria-label': dshT('权限预设'), onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) } },
+              (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
+                return createElement('option', { key: n, value: n }, n)
+              }),
+            ),
           ),
         ),
       ),
-    createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('Prompt 模板')),
+    // Prompt 模板
+    createElement('div', { style: groupStyle, key: 'f-prompt' },
+      createElement('label', { style: labelStyle }, dshT('Prompt 模板')),
       createElement('textarea', {
         className: 'input',
         value: d.promptTemplate,
         onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ promptTemplate: e.target.value }) },
         placeholder: dshT('留空使用默认模板。$RULE / $DELIVERY / $EVENT / $PAYLOAD 会被替换。'),
         rows: 4,
-        style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical', marginTop: '4px' },
+        style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical' },
       }),
     ),
     createElement('div', { className: 'card-actions', style: { justifyContent: 'flex-end', display: 'flex', gap: '6px', marginTop: '8px' } },
@@ -1179,6 +1220,9 @@ export function tzLabel() {
 
 /**
  * The cron task editor card; reads `view.draft` (null = nothing open).
+ * Layout follows the MCP editor's house pattern: a card-header title row,
+ * then small-secondary-label field groups (groupStyle/labelStyle), with the
+ * schedule controls composed on one inset panel.
  * @param {Record<string, any>} view - the CronSection state bag.
  * @param {Record<string, any>} actions - the section's actions bag.
  */
@@ -1189,17 +1233,21 @@ export function renderCronEditor(view, actions) {
   // Uniform control height for the schedule row — selects and the time input
   // otherwise render at slightly different natural heights.
   var schedSelectStyle = { width: 'auto', height: '32px', padding: '0 30px 0 12px' }
+  // Field-group rhythm shared with the MCP editor: a small secondary label
+  // sits over each control; groups separate via the card's own row gap.
+  var groupStyle = { display: 'flex', flexDirection: 'column', gap: '5px' }
+  var labelStyle = { fontSize: '11px', color: secondary }
+  // The schedule row reads as one unit: controls composed on a soft inset
+  // panel, the human description / raw cron hint right under it.
+  var schedPanelStyle = { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 10px', borderRadius: '10px', background: 'var(--dsw-alias-interactive-bg-hover, rgba(200,200,210,0.12))' }
   return createElement('div', { className: 'card mcp-editor', key: 'editor' },
-    // Row 1: identity — the ID field with the 启用 toggle riding beside it.
-    createElement('div', { style: { display: 'flex', gap: '14px', alignItems: 'center' } },
-      createElement(UiInput, {
-        value: d.id,
-        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) },
-        placeholder: dshT('任务标识（英文字母开头，无空格）'),
-        'aria-label': dshT('任务 ID'),
-        style: { flex: 1 },
-      }),
-      createElement('span', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', flex: 'none', cursor: 'pointer' } },
+    // Header: what is being edited + the 启用 toggle on the right — the form
+    // opens with an identity anchor instead of a bare unlabeled input row.
+    createElement('div', { className: 'card-header', key: 'h' },
+      createElement('span', { className: 'card-title' },
+        createElement('span', { className: 'card-title-text' },
+          d.isNew ? dshT('新建定时任务') : dshT('编辑定时任务') + ' · ' + d.id)),
+      createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', flex: 'none', cursor: 'pointer' } },
         createElement(UiCheckbox, {
           checked: d.enabled,
           onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ enabled: next }) },
@@ -1207,9 +1255,21 @@ export function renderCronEditor(view, actions) {
         }),
       ),
     ),
-    createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('调度（本地时区 ') + tzLabel() + dshT('）')),
-      createElement('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
+    // 任务 ID
+    createElement('div', { style: groupStyle, key: 'f-id' },
+      createElement('label', { style: labelStyle }, dshT('任务 ID')),
+      createElement(UiInput, {
+        value: d.id,
+        onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ id: e.target.value }) },
+        placeholder: dshT('任务标识（英文字母开头，无空格）'),
+        'aria-label': dshT('任务 ID'),
+      }),
+    ),
+    // 调度 — mode/weekday/time controls on the inset panel, the composed
+    // description (or the raw-cron syntax help in custom mode) under it.
+    createElement('div', { style: groupStyle, key: 'f-sched' },
+      createElement('label', { style: labelStyle }, dshT('调度（本地时区 ') + tzLabel() + dshT('）')),
+      createElement('div', { style: schedPanelStyle },
         createElement('select', {
           className: 'input', style: schedSelectStyle,
           value: d.schedMode,
@@ -1266,24 +1326,26 @@ export function renderCronEditor(view, actions) {
           : null,
       ),
       createElement('div', {
-        style: { fontSize: '11px', color: secondary, marginTop: '2px' },
+        style: { fontSize: '11px', color: secondary },
         title: d.cron,
       },
         d.schedMode === 'custom'
           ? dshT('5 位 cron（分 时 日 月 周）：支持 *, 逗号列表, 短横范围, 斜杠步长；周接受 0-7 与 SUN-SAT。')
           : describeSchedule(d.schedMode, d.schedTime, d.schedDow) + ' · ' + d.cron + dshT(' · 进程重启期间到期的任务不补投。')),
     ),
-    createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('动作模式')),
-      createElement('div', { style: { display: 'flex', gap: '6px', marginTop: '4px' } },
+    // 动作模式
+    createElement('div', { style: groupStyle, key: 'f-action' },
+      createElement('label', { style: labelStyle }, dshT('动作模式')),
+      createElement('div', { style: { display: 'flex', gap: '6px' } },
         createElement(UiPill, { active: d.actionMode === 'steer', onClick: function () { actions.patchDraft({ actionMode: 'steer' }) } }, dshT('推送到既有会话')),
         createElement(UiPill, { active: d.actionMode === 'create', onClick: function () { actions.patchDraft({ actionMode: 'create' }) } }, dshT('新建会话')),
       ),
     ),
     d.actionMode === 'steer'
-      ? createElement('div', null,
-        createElement(UiInput, {  value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
-        createElement('span', { style: { marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: secondary } },
+      ? createElement('div', { style: groupStyle, key: 'f-target' },
+        createElement('label', { style: labelStyle }, dshT('目标会话')),
+        createElement(UiInput, { value: d.sessionId, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ sessionId: e.target.value }) }, placeholder: dshT('目标会话 ID（如 session-xxx）') }),
+        createElement('span', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: secondary } },
           createElement(UiCheckbox, {
             checked: d.steer,
             onChange: function (/** @type {boolean} */ next) { actions.patchDraft({ steer: next }) },
@@ -1291,30 +1353,40 @@ export function renderCronEditor(view, actions) {
           }),
         ),
       )
-      : createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-        createElement(UiInput, {  value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+      : createElement('div', { key: 'f-target', style: { display: 'flex', flexDirection: 'column', gap: '7px' } },
+        createElement('div', { style: groupStyle },
+          createElement('label', { style: labelStyle }, dshT('工作区路径')),
+          createElement(UiInput, { value: d.workspacePath, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ workspacePath: e.target.value }) }, placeholder: dshT('工作区绝对路径（如 E:\\projects\\my-app）') }),
+        ),
         createElement('div', { style: { display: 'flex', gap: '8px' } },
-          createElement('select', { className: 'input', value: d.agentPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
-              return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
-            }),
+          createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },
+            createElement('label', { style: labelStyle }, dshT('Agent 预设')),
+            createElement('select', { className: 'input', style: { width: '100%' }, value: d.agentPreset, 'aria-label': dshT('Agent 预设'), onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ agentPreset: e.target.value }) } },
+              (view.presets.length > 0 ? view.presets : [{ id: 'cordis', name: 'cordis' }]).map(function (/** @type {Record<string, any>} */ p) {
+                return createElement('option', { key: p.id, value: p.id }, p.name || p.id)
+              }),
+            ),
           ),
-          createElement('select', { className: 'input', value: d.permissionPreset, onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) }, style: { width: 'auto' } },
-            (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
-              return createElement('option', { key: n, value: n }, n)
-            }),
+          createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' } },
+            createElement('label', { style: labelStyle }, dshT('权限预设')),
+            createElement('select', { className: 'input', style: { width: '100%' }, value: d.permissionPreset, 'aria-label': dshT('权限预设'), onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ permissionPreset: e.target.value }) } },
+              (view.permissionPresetNames.length > 0 ? view.permissionPresetNames : ['workspace-write', 'danger-full-access']).map(function (/** @type {string} */ n) {
+                return createElement('option', { key: n, value: n }, n)
+              }),
+            ),
           ),
         ),
       ),
-    createElement('div', null,
-      createElement('label', { style: { fontSize: '12px', fontWeight: 600 } }, dshT('Prompt 模板')),
+    // Prompt 模板
+    createElement('div', { style: groupStyle, key: 'f-prompt' },
+      createElement('label', { style: labelStyle }, dshT('Prompt 模板')),
       createElement('textarea', {
         className: 'input',
         value: d.promptTemplate,
         onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ promptTemplate: e.target.value }) },
         placeholder: dshT('留空使用默认模板。$RULE / $DELIVERY / $EVENT / $PAYLOAD 会被替换。'),
         rows: 4,
-        style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical', marginTop: '4px' },
+        style: { fontFamily: 'monospace', fontSize: '12px', resize: 'vertical' },
       }),
     ),
     createElement('div', { className: 'card-actions', style: { justifyContent: 'flex-end', display: 'flex', gap: '6px', marginTop: '8px' } },
