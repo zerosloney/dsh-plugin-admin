@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [1.27.7] - 2026-10-05
+
+### Added
+
+- **自动化页签的常驻浏览器侧回归 `verify-automation-client`**（`scripts/verify-automation-client.mjs` + `scripts/run-gate.mjs`；闸门 40 → 41 步）：定时任务 / Webhook 两个编辑器此前没有客户端布局契约——本轮重排的验证靠一次性冒烟脚本，跑完即删，之后回归全靠手。新增 verify-automation-client 0 → 10 checks：cron 页签装载、编辑器 card-header 标题行（新建标题 + 启用开关）、字段组标签、调度内嵌面板（频率/分钟选择器）、自定义模式换原始 cron 输入、create 模式的带标签工作区/预设字段，webhook 侧同构覆盖加 16 位密钥预填。装载方式与 `verify-workflow-client` 同型（jsdom + 真实 React 18 + mock RPC）。`docs/ARCHITECTURE.md` 与 `docs/COMPAT.md` 的脚本/步数计数随动（36 个脚本 / 共 41 步，`verify-doc-claims` 机械比对）。
+
+### Changed
+
+- **定时任务 / Webhook 编辑器布局按 MCP 编辑器范式重排**（`src/client/panels/automation.js` + `src/client/i18n.js`）：此前表单第一行是裸 ID 输入框、字段组间距靠零散 margin、模式相关字段只有占位符没有标签。统一为「card-header 标题行（新建/编辑 · id，启用开关右置）→ 小标签字段组」：任务/规则 ID、共享密钥、事件过滤、目标会话、工作区路径全部补齐标签与 aria-label；cron 的调度控件（频率/星期/时间）收进一块浅底圆角内嵌面板；新建会话模式的 Agent/权限预设改为并排带标签下拉。字段绑定、保存流程、密钥生成/显隐零改动；新增 10 条 i18n 词条（新建定时任务 / 编辑定时任务 / 新建规则 / 编辑规则 / 目标会话 / 工作区路径 / Agent 预设 / 权限预设 / 共享密钥 / 事件过滤）。
+
+### Removed
+
+- **扩展插件面板的「操作审计」卡**（`src/client/panels/plugins.js` + `src/client/styles.js` + `src/client/i18n.js`）：删除卡片渲染、按需加载函数、审计状态字段与专属样式/文案（`加载中…` 等跨面板共用文案保留）。宿主侧审计写入与 `pluginAdmin/auditLog` RPC 保持挂载（CLI/SDK 读取面不变）；因客户端不再调用，按 `host-check` 的 RPC 面一致性机制将其转入 `RPC_HOST_ONLY_TARGETS`（`lib/rpc-manifest.js`）——移除客户端调用点后正是这道闸门当轮报出孤儿挂载。
+
 ## [1.27.6] - 2026-10-05
 
 ### Added
