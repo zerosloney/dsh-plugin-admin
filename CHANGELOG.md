@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.27.9] - 2026-10-05
+
+### Changed
+
+- **待办清单浮层默认让位官方 TodoPanel**（`src/client/native-coverage.js`）：官方 `ui-conversation` 自 0.1.7 起在 `conversation.input.dock` 挂了自己的 TodoPanel（id `todo`，order 0），覆盖表 todo 行的 `detect` 从恒 `false`（旧理由「叠加增强，有数据时替换原生条」）改为真实探测该 slot 的官方条目——默认 `auto` 下官方在场即不注册本插件浮层；探测不到（老宿主、装配时序落空）仍保留，`config.panels.todo: 'on'` 或 localStorage `dsh-admin-panels` 可强制找回。`docs/COMPAT.md` 两处策略行（覆盖 → 让位）与 `docs/ARCHITECTURE.md` 待办节随动；self-check 官方覆盖组的 slots 替身补 `conversation.input.dock` 喂条，todo 探针 0 → 2 checks（官方条目在场 → 不注册；localStorage 强制 → 找回）。
+
 ## [1.27.8] - 2026-10-05
 
 ### Added
