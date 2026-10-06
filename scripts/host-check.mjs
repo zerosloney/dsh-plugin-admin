@@ -430,6 +430,81 @@ assert.ok(!existsSync(logDir), 'session log directory removed')
 assert.deepEqual(nextState?.archivedSessionIds, ['session-stays'],
   'target cleared from the archived set, others kept')
 
+// Cross-process write lease (the second-instance guard): the rm is fenced by
+// persistence.open(id,'write') — dsh's resume() takes the SAME kernel lease,
+// so contention here means a writer this process cannot see (another dsh
+// instance sharing this DSH_HOME, or a resume that holds the lease before
+// publishing into `sessions`). The lease FILE proves nothing (dsh never
+// removes the POSIX lock file and Windows has none at all), so contending for
+// the lock is the only portable probe — which is exactly what the guard does.
+{
+  const leaseHeader = { id: 'session-leased', cwd: 'E:/nowhere', createdAt: 1 }
+  // 物化日志目录：否则删除流在租约之前就被「有字节无目录」的响亮失败拦下，
+  // 测不到租约守卫本身。
+  const leaseDir = sessionLogDirFor(leaseHeader)
+  mkdirSync(leaseDir, { recursive: true })
+  writeFileSync(join(leaseDir, 'session.jsonl.zstd'), '{}\n')
+  const leaseCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    get: () => undefined,
+    on: () => () => {},
+    typert: { register: () => () => {} },
+    sessionPersistence: {
+      list: async () => [{ header: leaseHeader, revision: 'r' }],
+      stat: async () => ({ header: leaseHeader, revision: 'r', sizeBytes: 3 }),
+      open: async (id, access) => {
+        if (access === 'write') {
+          const err = new Error(`session "${id}" is already owned by an active write handle`)
+          err.name = 'SessionAlreadyOwnedError'
+          throw err
+        }
+        return { read: async () => [], close: async () => {} }
+      },
+    },
+  }
+  apply(leaseCtx)
+  await assert.rejects(
+    () => leaseCtx.provided.sessionAdmin.deleteSession('session-leased'),
+    /write lease/,
+    'a held cross-process write lease refuses the delete (second-instance guard)',
+  )
+}
+// A log that vanished between the stat and the lease open (another instance's
+// delete won the race) must not wedge the path: open('write') NotFound =>
+// proceed unguarded, the rm no-ops on the absent directory, delete succeeds.
+{
+  const goneHeader = { id: 'session-log-gone', cwd: 'E:/nowhere', createdAt: 1 }
+  const dir = sessionLogDirFor(goneHeader)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'session.jsonl.zstd'), '{}\n')
+  const goneCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    get: () => undefined,
+    on: () => () => {},
+    typert: { register: () => () => {} },
+    sessionPersistence: {
+      list: async () => [{ header: goneHeader, revision: 'r' }],
+      stat: async () => ({ header: goneHeader, revision: 'r', sizeBytes: 3 }),
+      open: async () => {
+        const err = new Error('session "session-log-gone" not found')
+        err.name = 'SessionPersistenceNotFoundError'
+        throw err
+      },
+    },
+  }
+  apply(goneCtx)
+  await goneCtx.provided.sessionAdmin.deleteSession('session-log-gone')
+  assert.ok(!existsSync(dir), 'the log-gone path still removes the directory')
+}
+
 // Boundary safety for sessionAdmin.list(): typert gateway rejects results
 // with undefined values via assertJsonValue. The host Workspace entity
 // exposes its id as `id` (WorkspaceView's `workspaceId` is the wire-side

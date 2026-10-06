@@ -1,5 +1,5 @@
 /** sessions — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, panelHidden, sectionState, showToast, useRef, useState } from './context.js'
+import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, panelHidden, sectionState, showToast, useEffect, useRef, useState } from './context.js'
 import { tabKeyDown } from './shared.js'
 import { WebSearchSection } from './web-search.js'
 
@@ -104,15 +104,21 @@ export function SessionsSection(props) {
   var collapsedGroups = pairCollapsed[0]
   var setCollapsedGroups = pairCollapsed[1]
 
+  // Single persistence point for both local preferences: the writes used to
+  // live inside the functional updaters below, which must stay pure (React may
+  // invoke them twice under StrictMode/interrupted renders). Idempotent
+  // either way; the commit boundary is where "the last committed list is what
+  // survives" holds by construction (plugins.js's discipline).
+  useEffect(function () { savePinnedIds(pinnedIds) }, [pinnedIds])
+  useEffect(function () { saveCollapsedGroups(collapsedGroups) }, [collapsedGroups])
+
   /**
    * Toggle one directory group's folded state (persisted with the pins).
    * @param {string} key - the group key ('ungrouped' or 'ws-<workspaceId>').
    */
   function toggleGroupCollapsed(key) {
     setCollapsedGroups(function (/** @type {string[]} */ cur) {
-      var next = cur.indexOf(key) !== -1 ? cur.filter(function (/** @type {string} */ k) { return k !== key }) : cur.concat([key])
-      saveCollapsedGroups(next)
-      return next
+      return cur.indexOf(key) !== -1 ? cur.filter(function (/** @type {string} */ k) { return k !== key }) : cur.concat([key])
     })
   }
 
@@ -221,9 +227,7 @@ export function SessionsSection(props) {
    */
   function togglePinned(id) {
     setPinnedIds(function (/** @type {string[]} */ cur) {
-      var next = cur.indexOf(id) !== -1 ? cur.filter(function (/** @type {string} */ x) { return x !== id }) : cur.concat([id])
-      savePinnedIds(next)
-      return next
+      return cur.indexOf(id) !== -1 ? cur.filter(function (/** @type {string} */ x) { return x !== id }) : cur.concat([id])
     })
   }
 

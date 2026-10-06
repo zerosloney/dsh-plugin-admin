@@ -247,6 +247,93 @@ await checkAsync('failed agent degrades to null, run continues', async () => {
   assert.ok(logs.some((l) => l.kind === 'agent-incomplete' || l.kind === 'step-error'))
 })
 
+await checkAsync('unserializable log()/phase() args degrade to placeholders, the run survives (they used to crash the worker)', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const logs = []
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+    onLog: (e) => logs.push(e),
+  })
+  // 旧实现：log 的 fire-and-forget promise 对 BigInt 参数 reject 成 unhandled
+  // rejection，worker 崩溃，整个运行报废成 "workflow worker crashed: ... Do not
+  // know how to serialize a BigInt"。降级后占位符照常上日志，运行落定为完成。
+  const { code } = await compileScript(`log(10n); phase(20n); await agent('fine'); return 'survived'`)
+  const value = await run(code, {})
+  assert.equal(value, 'survived')
+  const logLine = logs.find((l) => l.kind === 'log')
+  const phaseLine = logs.find((l) => l.kind === 'phase')
+  assert.match(String(logLine?.message), /<unserializable log message:/, 'the log line carries the placeholder')
+  assert.match(String(phaseLine?.title), /<unserializable phase title:/, 'the phase line carries the placeholder')
+})
+
+await checkAsync('site numbers follow script appearance order even when parallel leaves saturate the per-run limit', async () => {
+  // 旧实现按宿主收到 invoke 的顺序计数；per-run 信号量饱和时那是「票释放顺序」，
+  // 最先发起、最后完成的叶子拿到最大序号——同一脚本两次运行的序号漂移，
+  // amend/resume 的指纹整体失配。现在序号在 realm 入口按出现顺序分配。
+  let agentCalls = 0
+  const ctx = {
+    get: (key) => {
+      if (key !== 'subagents') return undefined
+      return {
+        start: async (_name, request) => {
+          agentCalls += 1
+          // 第一个发起的叶子（slow）最后完成：票释放顺序与出现顺序相反。
+          const delay = agentCalls === 1 ? 60 : 1
+          await new Promise((resolve) => { setTimeout(resolve, delay) })
+          return {
+            result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: request.prompt[0].text }] }),
+            dispose: async () => {},
+          }
+        },
+      }
+    },
+  }
+  const controller = new AbortController()
+  const sites = []
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+    // per-run 信号量上限压到 1，制造饱和排队。
+    semaphoreLimit: 1,
+    onStep: (e) => { if (e.phase === 'before') sites.push({ prompt: e.prompt, site: e.site }) },
+  })
+  const { code } = await compileScript(`
+    const results = await parallel([
+      () => agent('slow-first'),
+      () => agent('quick-a'),
+      () => agent('quick-b'),
+    ])
+    return results
+  `)
+  const value = await run(code, {})
+  assert.deepEqual(value, ['slow-first', 'quick-a', 'quick-b'])
+  const byPrompt = new Map(sites.map((entry) => [entry.prompt, entry.site]))
+  assert.deepEqual([...byPrompt.values()].sort((a, b) => a - b), [1, 2, 3], 'three distinct sites')
+  assert.equal(byPrompt.get('slow-first'), 1, 'the first-issued leaf owns site 1 even though it finished last')
+  assert.equal(byPrompt.get('quick-a'), 2)
+  assert.equal(byPrompt.get('quick-b'), 3)
+})
+
+await checkAsync('run-level default provider changes the step fingerprint (opts.provider absent)', async () => {
+  // amend/resume 带 provider 覆盖时，未显式写 provider 的 agent() 步骤实际由
+  // run 级默认选路——它不进键的话会命中旧 provider 的缓存，把上一个模型的
+  // 产出当本次结果上报。
+  const a = stepFingerprint(1, 'agent', 'same prompt', {}, 'provider-a')
+  const b = stepFingerprint(1, 'agent', 'same prompt', {}, 'provider-b')
+  assert.notEqual(a, b, 'a provider change re-runs the step')
+  assert.equal(
+    stepFingerprint(1, 'agent', 'same prompt', {}),
+    stepFingerprint(1, 'agent', 'same prompt', {}, undefined),
+    'no run-level provider => key shape unchanged (old caches stay valid)',
+  )
+  // 调用点自带 provider 的步骤已经携带材料，run 级默认不参与选路、不进键。
+  assert.equal(
+    stepFingerprint(1, 'agent', 'same prompt', { provider: 'call-site' }, 'provider-a'),
+    stepFingerprint(1, 'agent', 'same prompt', { provider: 'call-site' }),
+    'a call-site provider masks the run default',
+  )
+})
+
 await checkAsync('parallel itself does NOT gate; the leaf agent() calls do (global bound, no self-wait deadlock)', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()

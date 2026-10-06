@@ -462,7 +462,7 @@ await check('an address-less transport still brakes brute force, and a real deli
   m.dispose()
 })
 
-await check('rejected-traffic history rows are capped per window (each one rewrites the file)', async () => {
+await check('rejected-traffic history rows AND log lines are capped per window (address rotation included)', async () => {
   const logs = []
   const m = mount({
     webhookTriggersPath: join(dir, 'j-rules.json'),
@@ -472,17 +472,22 @@ await check('rejected-traffic history rows are capped per window (each one rewri
   }, logs)
   await m.service.saveRule(RULE)
   // 30 DISTINCT callers, each getting one 401: every one used to push a history
-  // row, and every row rewrites the whole history sidecar synchronously.
+  // row AND leave a warn line — and per-bucket dedup cannot help here, because
+  // address rotation makes every request a NEW bucket. Both are now bounded by
+  // per-window budgets: rows rewrite the whole history sidecar each, and the
+  // warn flood was the other unbounded surface of the same attack.
   for (let i = 0; i < 30; i += 1) {
     const res = mockRes()
     await m.handler(jsonReq({ remote: `198.51.100.${i + 1}`, secret: 'wrong-secret-16chars' }), res)
-    assert.equal(res.statusCode, 401)
+    assert.equal(res.statusCode, 401, 'caller ' + (i + 1) + ' still answers a plain 401 — only observability is budgeted')
   }
   const view = await m.service.list()
   const rows = view.history.filter((entry) => entry.ok === false)
   assert.ok(rows.length > 0, 'the attack is still visible in the history')
   assert.ok(rows.length <= 10, `at most 10 rejection rows per window (got ${rows.length})`)
-  assert.equal(logs.filter((line) => line.includes('401')).length, 30, 'every caller still leaves a log line')
+  const warns = logs.filter((line) => line.includes('401'))
+  assert.ok(warns.length > 0, 'the attack is still visible in the log')
+  assert.ok(warns.length <= 10, `at most 10 auth-failure warn lines per window (got ${warns.length})`)
   m.dispose()
 })
 

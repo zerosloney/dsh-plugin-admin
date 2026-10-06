@@ -1,5 +1,5 @@
 /** commands-hooks — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiCheckbox, UiInput, createElement, downloadTextFile, dshT, messageOf, useEffect, useState } from './context.js'
+import { UiButton, UiCheckbox, UiInput, createElement, downloadTextFile, dshT, messageOf, useEffect, useRef, useState } from './context.js'
 import { unwrap } from './subagents.js'
 
 /* ========================================================================== */
@@ -235,6 +235,15 @@ export function ChCommandsTab(props) {
   var confirmHooks = useState(null)
   var confirming = confirmHooks[0]
   var setConfirming = confirmHooks[1]
+  // Unmount guard for the import queue: without it, closing the settings panel
+  // mid-import left `next()` issuing one persistent saveCommand write per
+  // remaining entry — operations the user can no longer see or cancel. Every
+  // other panel guards late async work with kit.alive; this tab predates it
+  // and uses raw useState pairs, so it carries the ref directly.
+  var aliveRef = useRef(true)
+  useEffect(function () {
+    return function () { aliveRef.current = false }
+  }, [])
 
   function load() {
     setBusy(true)
@@ -311,6 +320,9 @@ export function ChCommandsTab(props) {
     var failed = 0
     var queue = entries.slice()
     var next = function () {
+      // The panel went away mid-import: stop the queue instead of writing the
+      // remaining entries to disk unseen (see aliveRef above).
+      if (!aliveRef.current) return
       if (queue.length === 0) {
         setBusy(false)
         setImporting(null)

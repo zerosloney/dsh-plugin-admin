@@ -18,13 +18,13 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // `mutatePatch` is deliberately NOT imported here: the cross-process check below
 // spawns a worker that imports it by URL, and an unused local import of it was
 // just lint noise (oxlint no-unused-vars).
-import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, ownerProbeProvesDeath, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, ownerProbeProvesDeath, sweepStaleTempFiles, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -341,6 +341,65 @@ await check('the hot-apply helper restarts with noSave and never throws', async 
   )
   assert.equal(threw.applied, false, 'a rejected config reports a failure, not a success')
   assert.match(threw.reason, /config invalid: serverName/, 'and carries the real reason')
+})
+
+await check('crash residue: a DEAD writer temp is swept, live-pid and foreign files are not', async () => {
+  const sweepDir = join(dir, 'sweep')
+  mkdirSync(sweepDir)
+  // A provably dead pid: start a child, wait for its exit event.
+  const deadPid = await new Promise((resolvePid) => {
+    const child = spawn(process.execPath, ['-e', ''])
+    child.on('exit', () => resolvePid(child.pid))
+  })
+  const dead = join(sweepDir, `target.${deadPid}.7.dsh-admin.tmp`)
+  const mine = join(sweepDir, `target.${process.pid}.7.dsh-admin.tmp`)
+  const foreign = join(sweepDir, 'unrelated.txt')
+  writeFileSync(dead, 'residue')
+  writeFileSync(mine, 'in-flight or not: grammar matches, pid is ours')
+  writeFileSync(foreign, 'not our grammar')
+  sweepStaleTempFiles(sweepDir)
+  assert.ok(!existsSync(dead), 'a dead writer temp is reaped')
+  assert.ok(existsSync(mine), 'our own pid temp is never touched (it may be mid write-to-rename)')
+  assert.ok(existsSync(foreign), 'a file outside the temp grammar is never touched')
+  // A second sweep of the SAME directory is a no-op (once per dir per process):
+  // plant fresh dead-pid residue and confirm it survives until some later
+  // process first write there re-sweeps.
+  const dead2 = join(sweepDir, `target.${deadPid}.8.dsh-admin.tmp`)
+  writeFileSync(dead2, 'residue two')
+  sweepStaleTempFiles(sweepDir)
+  assert.ok(existsSync(dead2), 'the per-directory once guard holds (no repeat readdir churn)')
+})
+
+await check('reentrancy survives a differently-SPELLED path to the same file', () => {
+  const target = join(dir, 'spelling.patch.yml')
+  writeFileSync(target, '# seed' + String.fromCharCode(10), 'utf8')
+  const lockPath = target + '.dsh-admin.lock'
+  const convoluted = join(dir, 'sub', '..', 'spelling.patch.yml')
+  const started = Date.now()
+  withFileLock(target, () => {
+    assert.ok(existsSync(lockPath), 'the outer section holds the lock')
+    // The old guard compared raw strings: this inner call used to take the
+    // normal path, burn the full wait budget failing open against its OWN
+    // outer lock, then run concurrently with it. The canonical key makes the
+    // nested call take the reentrant fast path — near-instant.
+    const inner = withFileLock(convoluted, () => 'inner')
+    const elapsed = Date.now() - started
+    assert.equal(inner, 'inner')
+    assert.ok(elapsed < 2000, `the nested call reentered instead of waiting out the budget (took ${elapsed}ms)`)
+  })
+})
+
+await check('a failed atomicRename reaps its own temp (no orphan residue)', () => {
+  const from = join(dir, 'rename-reap.tmp')
+  const toDir = join(dir, 'rename-target-dir')
+  mkdirSync(toDir)
+  writeFileSync(from, 'payload')
+  // A directory target fails with a non-retryable errno on both platforms, so
+  // the immediate-throw path runs — which is where the temp used to be left
+  // behind forever.
+  assert.throws(() => atomicRename(from, toDir))
+  assert.ok(!existsSync(from), 'the abandoned temp is reaped on the throw path')
+  assert.ok(existsSync(toDir), 'the target directory is untouched')
 })
 
 rmSync(dir, { recursive: true, force: true })

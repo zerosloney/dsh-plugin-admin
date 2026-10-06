@@ -337,12 +337,32 @@ await check('summarizeBounded caps an OBJECT result in the sidecar and list() (g
   const sidecar = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.summary.json'), 'utf8'))
   assert.equal(typeof sidecar.result, 'string', 'the sidecar carries the bounded preview, not the object')
   const detail = r.get(id)
-  assert.deepEqual(detail.result, { pad: 'x'.repeat(50000) }, 'get() still serves the full body')
+  assert.deepEqual(detail.result, { pad: 'x'.repeat(50000) }, 'get() still serves the full body (50K is far under the detail budget)')
   // 小对象原样保留（不折字符串）。
   const { id: smallId } = await r.start({ script: `return { a: 1 }`, parent: { id: 'sess-objcap' } })
   await runToDone({ id: smallId }, r)
   const smallListed = r.list().find((x) => x.id === smallId)
   assert.deepEqual(smallListed.result, { a: 1 }, 'a small object result stays intact on list()')
+})
+
+await check('get() folds a pathological terminal value past its own detail budget (journal keeps the body)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'detail-cap')
+  const r = makeRegistry(bundle.ctx, home)
+  // 600K chars: far over the 512K detail budget, far under the engine's 4M
+  // terminal budget — the shape that used to hand the whole 4M ceiling to the
+  // detail RPC uncapped. The list() side is capped at 240 either way.
+  const { id } = await r.start({ script: `return 'y'.repeat(600000)`, parent: { id: 'sess-detail-cap' } })
+  await runToDone({ id }, r)
+  const listed = r.list().find((x) => x.id === id)
+  assert.ok(String(listed.result).length <= 260, 'list() stays at its tight cap')
+  const detail = r.get(id)
+  assert.equal(detail.resultTruncated, true, 'the fold is honestly marked')
+  assert.ok(typeof detail.result === 'string' && detail.result.length <= 512_000 + 20, `the detail body is bounded (got ${String(detail.result).length})`)
+  assert.ok(String(detail.result).endsWith('…[截断]'), 'the truncation marker rides the body')
+  // Journal still holds the full body: resume/amend and the run record are untouched.
+  const journal = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.json'), 'utf8'))
+  assert.equal(journal.result, 'y'.repeat(600000), 'the journal keeps the full value')
 })
 
 await check('list() from sidecars equals list() from full journals (legacy fallback parity)', async () => {
@@ -808,6 +828,63 @@ await check('concurrent asks queue FIFO: the first one answered first, then the 
   const outcome = await runToDone({ id }, r)
   assert.equal(outcome.status, 'completed')
   assert.equal(outcome.result, 'A1|A2', 'answers are woven in FIFO order')
+})
+
+await check('a corrupt journal is quarantined as .corrupt; list and get converge on "gone"', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'corrupt-journal')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({ script: `return await agent('q')`, parent: { id: 'sess-corrupt' } })
+  await runToDone({ id }, r)
+  const runsDir = join(home, 'workflows', 'runs')
+  const journalPath = join(runsDir, id + '.json')
+  assert.ok(existsSync(journalPath), 'journal exists before the corruption')
+  // Simulate a crash-torn / hand-broken journal (the sidecar stays healthy —
+  // exactly the shape that used to list a run whose detail 404'd forever).
+  writeFileSync(journalPath, '{"id": "' + id + '", "status": "compl')
+  // The sidecar fast path lists before anyone opens the detail; the quarantine
+  // happens on the journal read. One poll later the row converges away —
+  // list-parses-every-journal just to catch corruption one poll earlier would
+  // defeat the sidecar optimization.
+  assert.equal(r.get(id), null, 'get() quarantines: the run reads as gone, not a silent failure')
+  assert.ok(existsSync(journalPath + '.corrupt'), 'the broken file is quarantined as .corrupt evidence')
+  assert.ok(!existsSync(journalPath), 'the broken journal is out of the way (no repeat warn/rename churn)')
+  const listed = r.list().filter((item) => item.id === id)
+  assert.equal(listed.length, 0, 'the next list() no longer shows the run')
+})
+
+await check('a shell step that TIMED OUT is not cached — amend re-runs it', async () => {
+  let shellCalls = 0
+  const shellStub = {
+    // Non-confining executor shape (see lib/workflow-engine.js runShell seam).
+    resolve: (request) => request,
+    execute: async () => {
+      shellCalls += 1
+      return {
+        result: async () => shellCalls === 1
+          ? { exitCode: 124, stdout: { text: '' }, stderr: { text: '' }, timedOut: true, aborted: false }
+          : { exitCode: 0, stdout: { text: 'recovered' }, stderr: { text: '' }, timedOut: false, aborted: false },
+        status: 'completed',
+        kill: () => false,
+        done: Promise.resolve(),
+        readOutput: () => ({ delta: '', lossy: false }),
+      }
+    },
+  }
+  const bundle = makeCtx()
+  bundle.ctx.get = (key) => (key === 'shell' ? shellStub : undefined)
+  const home = join(tmpBase, 'shell-timeout-cache')
+  const r = makeRegistry(bundle.ctx, home)
+  const script = `const out = await shell('flaky', { timeoutMs: 5 }); return out.timedOut ? 'timed-out' : out.stdout`
+  const { id } = await r.start({ script, parent: { id: 'sess-shell-timeout' } })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'completed')
+  assert.equal(rec.result, 'timed-out', 'first run reports the timeout')
+  assert.equal(shellCalls, 1)
+  // amend 同脚本：超时步骤必须重跑（缓存了超时对象的话这里直接回放 timed-out）。
+  await r.amend(id, script, { parent: { id: 'sess-shell-timeout' } })
+  await new Promise((res) => setTimeout(res, 200))
+  assert.equal(shellCalls, 2, 'the timed-out step re-ran instead of replaying the timeout from cache')
 })
 
 // ─── 清理 ─────────────────────────────────────────────────────────────────────

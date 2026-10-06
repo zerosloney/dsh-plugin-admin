@@ -10,12 +10,11 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyWorkflowTools } from '../lib/workflow-tools.js'
-import { canonicalWorkspacePath } from '../lib/workspace-path.js'
-
+import { canonicalWorkspacePath, assertTrustedWorkspacePath } from '../lib/workspace-path.js'
 let failures = 0
 async function check(name, fn) {
   try { await fn(); console.log(`  ok  ${name}`) }
@@ -287,6 +286,39 @@ await check('save honours explicit scope; project takes the session cwd', async 
 
   const bad = JSON.parse(await tool.execute({ action: 'save', name: 'no script' }, exec))
   assert.match(bad.error, /requires a script/)
+})
+
+await check('the workspace gate refuses UNC / namespace paths BEFORE resolution (outbound-SMB guard)', async () => {
+  // canonicalWorkspacePath used to realpathSync the caller's spelling first, so
+  // `\\server\share\...` performed an outbound SMB authentication and the later
+  // containment refusal came too late — the one shape here that leaks
+  // credentials rather than merely failing. The pre-check must fire first and
+  // name the reason (asserting the MESSAGE proves the pre-check, not a
+  // "does not exist" miss on an unreachable share).
+  assert.throws(() => canonicalWorkspacePath('//attacker.example/share/proj'), /network share/, 'POSIX spelling refused before the fs sees it')
+  assert.throws(
+    () => canonicalWorkspacePath(process.platform === 'win32' ? '\\\\attacker.example\\share\\proj' : '\\\\attacker.example\\share\\proj'),
+    process.platform === 'win32' ? /network share/ : /must be an absolute path/,
+    'win32 spelling refused on win32 (on POSIX it is not absolute and is refused as such first)',
+  )
+  assert.throws(
+    () => canonicalWorkspacePath(process.platform === 'win32' ? '\\\\?\\C:\\temp\\proj' : '/?/C:/temp/proj'),
+    process.platform === 'win32' ? /namespace prefix/ : /must be an absolute path/,
+    'Win32 namespace prefix refused before the fs sees it',
+  )
+  // A real local directory still canonicalizes — the gate narrows the shapes,
+  // not legitimate use.
+  const tmp = mkdtempSync(join(tmpdir(), 'wf-tools-unc-'))
+  try {
+    assert.equal(canonicalWorkspacePath(tmp), realpathSync(tmp), 'a plain local directory still canonicalizes')
+    assert.throws(
+      () => assertTrustedWorkspacePath(tmp, { registry: null }),
+      /outside the calling session/,
+      'shape-valid but untrusted paths are still refused by the trust layer',
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
 })
 
 await check('save auto-detects project scope from the session cwd', async () => {

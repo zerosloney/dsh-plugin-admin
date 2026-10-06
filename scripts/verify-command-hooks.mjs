@@ -716,5 +716,20 @@ try {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
+// Seam probe for the cross-process lock on the hooks stores: every other
+// persistent writer in this plugin wraps its read-modify-write in
+// withFileLock, and the hooks pair was the one mutation family that rode the
+// serial queue alone — so two dsh instances sharing one profile ran
+// last-writer-wins on hooks.json / hooks.disabled.json. The exclusion itself
+// is cross-process (untestable in-process without a 3s stall), so the gate
+// pins the wiring: BOTH mutation entry points must enter the lock keyed on
+// the active hooks store.
+{
+  const source = readFileSync(new URL('../lib/command-hook-admin.js', import.meta.url), 'utf8')
+  const wrapped = source.match(/enqueue\(\(\) => withFileLock\(hooksPath/g) ?? []
+  assert.equal(wrapped.length, 2, 'saveHook AND deleteHook enter withFileLock(hooksPath) (found ' + wrapped.length + ')')
+  assert.match(source, /import \{[^}]*withFileLock[^}]*\} from '\.\/patch-utils\.js'/, 'withFileLock is imported from patch-utils')
+}
+
 console.error(results.join('\n'))
 console.log(`\nverify-command-hooks: ${results.length} checks passed`)

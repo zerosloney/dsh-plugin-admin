@@ -31,7 +31,7 @@ import {
 } from '../lib/subagent-admin.js'
 import { inheritSecretFields, maskSecretFields } from '../lib/secret-fields.js'
 import { TOOL_SEED } from '../lib/tool-seed.js'
-import { MANAGED_BLOCK_MARKER } from '../lib/subagent-admin.js'
+import { MANAGED_BLOCK_MARKER, npmScriptFlags } from '../lib/subagent-admin.js'
 
 const results = []
 const check = async (name, fn) => {
@@ -1048,6 +1048,19 @@ await check('apply(): absolute generic CLI command/cwd are gated to known worksp
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// The global npm installer shares the pnpm path's installScripts policy: deny /
+// local-only ignore lifecycle scripts of the (registry-shaped) builtin packages,
+// allow / registry-only keep them building. The wiring used to force
+// `--allow-scripts` regardless of the policy.
+await check('npm install -g script flags follow the installScripts policy', async () => {
+  const pkgs = ['@openai/codex', '@anthropic-ai/claude-code']
+  assert.deepEqual(npmScriptFlags(pkgs, 'deny'), ['--ignore-scripts'], 'deny ignores scripts')
+  assert.deepEqual(npmScriptFlags(pkgs, 'local-only'), ['--ignore-scripts'], 'local-only ignores registry-spec scripts')
+  assert.deepEqual(npmScriptFlags(pkgs, 'registry-only'), pkgs.map(pkg => `--allow-scripts=` + pkg), 'registry-only keeps them building')
+  assert.deepEqual(npmScriptFlags(pkgs, 'allow'), pkgs.map(pkg => `--allow-scripts=` + pkg), 'allow keeps them building')
+  assert.deepEqual(npmScriptFlags(pkgs, undefined), pkgs.map(pkg => `--allow-scripts=` + pkg), 'undefined falls back to the mounted default (allow)')
 })
 
 console.log(results.join('\n'))

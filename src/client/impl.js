@@ -457,7 +457,15 @@ function setupMenuInjection(call, refreshSessions) {
       /** @param {(sessions: any[]) => void} done */
       function fetchSessions(done) {
         call('sessionAdmin/list', {}).then(function (/** @type {any} */ listResult) {
-          done((listResult && listResult.ok && listResult.value && listResult.value.sessions) || [])
+          if (listResult && listResult.ok && listResult.value) {
+            done(listResult.value.sessions || [])
+            return
+          }
+          // The host ANSWERED with a failure: report it as one. Silently
+          // degrading an {ok:false} envelope to [] used to hand the matchers an
+          // empty list, so "the list failed to load" was reported as "no
+          // matching session" — the wrong diagnosis with a confident face.
+          showToast('error', dshT('❌ 无法加载会话列表：') + messageOf(listResult && listResult.error))
         }, function () { showToast('error', dshT('❌ 无法加载会话列表')) })
       }
       // Normalize a title for comparison: trim, collapse spaces, drop
@@ -540,7 +548,13 @@ function setupMenuInjection(call, refreshSessions) {
       if (wsTitle === '') return
       appendMenuItem(viewport, dshT('在资源管理器打开'), 'normal', function () {
         call('sessionAdmin/list', {}).then(function (/** @type {any} */ listResult) {
-          var workspaces = (listResult && listResult.ok && listResult.value && listResult.value.workspaces) || []
+          if (!(listResult && listResult.ok && listResult.value)) {
+            // Same contract as fetchSessions above: an {ok:false} envelope is a
+            // failure to report, not an empty workspace list to mis-diagnose.
+            showToast('error', dshT('❌ 打开失败：无法加载工作区列表（') + messageOf(listResult && listResult.error) + '）')
+            return
+          }
+          var workspaces = listResult.value.workspaces || []
           var wsPath = null
           for (var i = 0; i < workspaces.length; i++) {
             var w = workspaces[i]

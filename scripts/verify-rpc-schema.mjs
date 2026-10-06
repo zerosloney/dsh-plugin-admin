@@ -168,5 +168,25 @@ check('a missing schema row fails loudly instead of shipping unvalidated', () =>
   assert.throws(() => schemaFor('nope'), /unknown schema/)
 })
 
+check('deeply nested json is refused as an RpcSchemaError, not a RangeError', () => {
+  // The recursive validator used to throw a bare `RangeError: Maximum call
+  // stack size exceeded` on a deeply nested payload — not an RpcSchemaError,
+  // so the gateway classified a boundary INPUT error as internal. The
+  // iterative walker refuses it cleanly (past MAX_JSON_DEPTH) with the normal
+  // parameter-contract error.
+  let deep = []
+  let cursor = deep
+  for (let i = 0; i < 100_000; i += 1) {
+    const next = []
+    cursor.push(next)
+    cursor = next
+  }
+  const factory = schemaFor('json')
+  assert.throws(() => factory.parse(deep), RpcSchemaError, 'deep nesting is an input-invalid refusal')
+  assert.equal(factory.accepts(deep), false)
+  // Legitimate depth is nowhere near the cap.
+  assert.equal(factory.accepts({ a: { b: { c: [1, { d: 'e' }] } } }), true, 'shallow payloads still pass')
+})
+
 console.log(results.join('\n'))
 console.log('verify-rpc-schema OK: ' + results.length + ' checks (' + RPC_SCHEMA_NAMES.length + ' schemas, ' + Object.keys(RPC_PARAM_SCHEMAS).length + ' methods)')

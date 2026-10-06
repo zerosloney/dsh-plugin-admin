@@ -1,5 +1,5 @@
 /** mcp — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiCheckbox, UiInput, createElement, dshT, messageOf, sectionState, useRef } from './context.js'
+import { UiButton, UiCheckbox, UiInput, createElement, dshT, messageOf, sectionState, useEffect, useRef } from './context.js'
 import { safeLocalStorage } from './shared.js'
 
 /**
@@ -434,6 +434,15 @@ export function McpSection(props) {
   var setMView = kit.set
 
   var alive = kit.alive
+  // Single persistence point for the probe cache: localStorage mirrors the
+  // latest COMMITTED mcpTestState. The write used to live inside the
+  // functional updater (patchMcpTest) — updaters must stay pure (plugins.js's
+  // discipline): React may invoke them twice under StrictMode/interrupted
+  // renders. Idempotent either way; this moves the mirror to the commit
+  // boundary, where "whatever merge won the last commit is what survives".
+  useEffect(function () {
+    saveMcpTestCache(mView.mcpTestState || {})
+  }, [mView.mcpTestState])
   // Probe sequence guard: the probe of an older click must never overwrite a
   // newer one's result when both are in flight. Keyed PER ENTRY — a single
   // counter let "probe A, then probe B" drop A's (perfectly current) response
@@ -760,15 +769,14 @@ export function McpSection(props) {
 
   /**
    * Set one entry's connectivity-test status against the CURRENT state.
-   * Settled successful probes are mirrored into localStorage so the last
-   * known status survives tab switches and reopening the settings dialog.
+   * Persistence to localStorage happens at the commit boundary (the
+   * useEffect watching mcpTestState) — updaters must stay pure.
    * @param {string} id - the entry whose status is set.
    * @param {Record<string, any>} partial - the test-state keys to overwrite.
    */
   function patchMcpTest(id, partial) {
     setMView(function (/** @type {Record<string, any>} */ cur) {
       var nextTestState = mergeTestState(cur.mcpTestState, id, partial)
-      saveMcpTestCache(nextTestState)
       var next = /** @type {Record<string, any>} */ ({})
       for (var k in cur) next[k] = cur[k]
       next.mcpTestState = nextTestState
