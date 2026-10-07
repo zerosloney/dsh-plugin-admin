@@ -452,13 +452,19 @@ await check('loadRecord reassembles steps so get()/amend see the same shape as b
   // A fresh registry = a restart; it must read the steps back from the JSONL.
   const r2 = makeRegistry(bundle.ctx, home)
   const viaGet = r2.get(id)
-  assert.ok(Array.isArray(viaGet.steps), 'get() returns a steps array')
-  assert.ok(viaGet.steps.length >= 2, `get() sees the reassembled steps (got ${viaGet.steps.length})`)
-  // And stepCount, which the panel shows, agrees with the real step count:
-  // entries are before+after pairs, and the displayed count is after-phase only
-  // (counting raw entries showed the panel 2× the actual steps).
+  // get() serves the detail view (panel / workflow_admin get: script / result /
+  // log) and does NOT inline the reassembled steps — a settled multi-step run
+  // would otherwise carry every prompt+outcome into one payload. The steps
+  // reach the detail view as stepCount (after-phase count, same rule the panel
+  // renders), so that count is the observable of the reassembly here.
+  assert.equal(typeof viaGet.stepCount, 'number', 'get() carries stepCount')
+  assert.ok(viaGet.stepCount >= 1, `get() sees the reassembled steps via stepCount (got ${viaGet.stepCount})`)
+  assert.equal(viaGet.steps, undefined, 'get() does not inline the raw steps array')
+  // And the count agrees with the journal's real step count: entries are
+  // before+after pairs, and the displayed count is after-phase only (counting
+  // raw entries showed the panel 2× the actual steps).
   const listed = r2.list().find((x) => x.id === id)
-  assert.equal(listed.stepCount, viaGet.steps.filter((s) => s.phase === 'after').length, 'list().stepCount counts real steps (after-phase entries)')
+  assert.equal(listed.stepCount, viaGet.stepCount, 'list().stepCount and get().stepCount agree on real steps (after-phase entries)')
   // amend must be able to use those steps as a cache source.
   const amended = await r2.amend(id, `const a = await agent('x')\nreturn a`, { parent: { id: 'sess-asm' } })
   await r2.join(amended.id)
@@ -481,9 +487,21 @@ await check('a truncated final JSONL line keeps every complete step before it', 
   writeFileSync(file, original.slice(0, original.length - 12))
   const r2 = makeRegistry(bundle.ctx, home)
   const rec = r2.get(id)
-  assert.ok(Array.isArray(rec.steps), 'the run still reads')
-  assert.equal(rec.steps.length, lineCount - 1, `every complete line survives (expected ${lineCount - 1}, got ${rec.steps.length})`)
-  assert.ok(rec.steps.length > 0, 'and the earlier steps are intact')
+  // get() no longer inlines the raw steps array (the detail view never rendered
+  // them) — the surviving-lines observable parses the JSONL directly (the torn
+  // tail is still physically in the file; the reader drops it), and the
+  // get()-visible projection is stepCount (after-phase count).
+  assert.equal(typeof rec.stepCount, 'number', 'the run still reads')
+  const rawLines = readFileSync(file, 'utf8').split('\n').filter((l) => l.trim() !== '')
+  const parsed = []
+  for (const line of rawLines) {
+    try { parsed.push(JSON.parse(line)) } catch { /* the torn tail: dropped by the reader */ }
+  }
+  assert.equal(parsed.length, lineCount - 1, `every complete line survives (expected ${lineCount - 1}, got ${parsed.length})`)
+  assert.equal(rawLines.length, lineCount, 'the torn tail itself is still on disk (the reader, not the file, drops it)')
+  assert.ok(parsed.length > 0, 'and the earlier steps are intact')
+  const afterCount = parsed.filter((s) => s.phase === 'after').length
+  assert.equal(rec.stepCount, afterCount, 'get().stepCount counts exactly the surviving after-phase entries')
 })
 
 await check('a journal write failure never becomes an unhandled rejection (the host fail-louds on those)', async () => {
@@ -536,7 +554,10 @@ await check('a legacy journal with inline steps still loads (no migration on rea
 
   const r2 = makeRegistry(bundle.ctx, home)
   const rec = r2.get(id)
-  assert.equal(rec.steps.length, steps.length, 'the inline steps are still read')
+  // get() serves the detail shape (stepCount, not the raw steps array) — the
+  // inline steps being READ is observable through the after-phase count, which
+  // loadRecord computes from the reassembled array.
+  assert.equal(rec.stepCount, steps.filter((s) => s.phase === 'after').length, 'the inline steps are still read (get().stepCount matches the inline after-phase entries)')
   // The read path must NOT have created a JSONL (list()/get() are read paths).
   assert.equal(existsSync(join(dir, id + '.steps.jsonl')), false, 'reading a legacy run does not migrate it')
   const listed = r2.list().find((x) => x.id === id)

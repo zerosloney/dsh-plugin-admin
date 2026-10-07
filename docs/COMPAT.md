@@ -134,9 +134,10 @@ v1.25.4 起还有两步：
 | `cron-tasks.json` | ✅ 锁内 `mutateTasksStore` | `upsert` / `remove` / `toggle`；校验看到的 id 集就是写入替换的修订 |
 | `webhook-triggers.json` | ✅ 锁内 `mutateRulesStore` | `saveRule` / `deleteRule`；"空 secret 继承已存值"查的也是锁内那一份 |
 | `usage-ledger.json` | ✅ 锁内 `withFileLock` 读-合并-替换 | 跨进程锁内重读磁盘 + 与内存镜像取并集（`unionUsageEntries`，镜像优先），两实例写入不互丢 |
-| profile `package.json`、`admin-audit.jsonl`、`webhook-history.json` + `webhook-history.seen.json`、`workflow/runs/**`、`subagent-admin.*.json` | ⚠️ 仅**原子写**（唯一临时名 + `atomicRename` 重试）；读-改-写靠**进程内**串行队列 | 同一 profile 同时跑两个 dsh 实例时这些文件仍可能丢一次更新 |
+| `subagent-admin.cli.json`（通用 CLI 后端店） | ✅ 锁内 `withFileLock` | `cliUpsertGeneric` / `cliRemoveGeneric` 的受保护读、校验（providerName 集就是写入替换的修订）与写都在同一临界区；journal 是追加写、不受锁约束（与审计同姿态） |
+| profile `package.json`、`admin-audit.jsonl`、`webhook-history.json` + `webhook-history.seen.json`、`workflow/runs/**` | ⚠️ 仅**原子写**（唯一临时名 + `atomicRename` 重试）；读-改-写靠**进程内**串行队列 | 同一 profile 同时跑两个 dsh 实例时这些文件仍可能丢一次更新 |
 
-上表 ⚠️ 行的取舍与兜底：交付历史是**可重建的派生数据**（下一次投递会覆盖，且去重集已拆分减少写放大），审计是**追加写**（两个实例的行会交错，但不会互相删除；只有"到达上限压缩"那一步会以读-改-写覆盖），workflow journal / subagent 侧车是单实例写入的产物。用量台账已在锁内实现"镜像 ∪ 文件"的合并（`unionUsageEntries()`），彻底消除了跨进程抹掉对方更新的窗口。
+上表 ⚠️ 行的取舍与兜底：交付历史是**可重建的派生数据**（下一次投递会覆盖，且去重集已拆分减少写放大），审计是**追加写**（两个实例的行会交错，但不会互相删除；只有"到达上限压缩"那一步会以读-改-写覆盖），workflow journal 是单实例写入的产物。用量台账已在锁内实现"镜像 ∪ 文件"的合并（`unionUsageEntries()`），彻底消除了跨进程抹掉对方更新的窗口。
 
 两条容易误判的边界：
 
