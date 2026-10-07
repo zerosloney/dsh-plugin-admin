@@ -4,7 +4,26 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
-## [Unreleased]
+## [1.27.11] - 2026-10-07
+
+### Fixed
+
+- **缓存命中步骤只进内存 journal，崩溃窗口让「缓存零成本」断代**（`lib/workflow-runs.js`）：cache-hit 的 after 条目此前不落盘——命中链中途崩溃后，下一次 resume 从盘上 journal 重付这些已付费步骤（值不会错，成本翻倍）。修复：与真实 after 步骤同预算立即 persist（每次 persist 本就整份重写 journal，成本对称）。
+- **`runs/` 里手放的杂散 `foo.json` 可列出却永远打不开**（`lib/workflow-runs.js`）：list 只按 `.json` 后缀枚举，get 走 `RUN_ID_PATTERN` 白名单——列出的 id 集与可打开的 id 集不一致，正是 journal 隔离策略要收敛的那类症状。修复：list 用同一把白名单尺子过滤。
+- **侧车写失败把已终态的运行永久钉在 orphaned**（`lib/workflow-runs.js`）：settle 的 journal 写成功而侧车写失败时，终态运行不再 persist、无从自愈——list 按 orphaned 呈现而 get 报真实终态。修复：list 对 running 侧车以 journal 仲裁一次，终态就把真相写回侧车（读路径写盘的第二个例外，与 journal 隔离同款）；真孤儿（journal 确在 running）记入每进程备忘集只裁一次，侧车优化的稳态成本不变。
+- **`subagent-admin.cli.json` 的读-改-写没有跨进程文件锁，双实例 last-writer-wins 丢后端行**（`lib/subagent-admin.js`）：本插件其余每个持久化店（patch / cron / webhook / usage / hooks）都持 `withFileLock`，通用 CLI 后端店只靠进程内队列——共享 profile 的第二实例保存的行被本实例的整文件覆写。修复：`cliUpsertGeneric` / `cliRemoveGeneric` 的受保护读、校验与写纳入同一临界区（全同步，临界区微秒级）；`docs/COMPAT.md` 的并发写边界表随动（该文件从 ⚠️ 行移入锁内清单）。
+- **符号链接的 `.md` 命令文件静默消失**（`lib/project-agents.js`）：`isFile()` 对 symlink 为 false，克隆仓库里的链接命令既不注册也无任何痕迹。修复：链接条目以可见的错误行呈现（"符号链接命令不注册"）；刻意不追随链接——目标可能在项目外，仓库内容不得借链接获得命令注册。
+
+- **`workflowAdmin/getRun` 落定路径返回 journal 重组的完整 `steps`，多步运行把整包步骤塞进一次载荷**（`lib/workflow-runs.js` + `lib/workflow-tools.js`）：活跃路径走 `summarize()`（只有 `stepCount`），run 落定一秒后同一次 `get()` 却带每步完整 prompt 与 outcome——500 步 × 8KB 即数 MB，`workflow_admin get` 整包进模型上下文，而详情视图（面板与工具的文档口径「script / result / log」）从不逐条渲染 steps。修复：磁盘路径与活跃路径同形（`summarize` + `script` + `log`），步数由 `stepCount` 承担，journal 本身仍留全量；`runSummary` 的 wait:true 摘要优先读 `stepCount`（旧 raw-steps 数组只作兼容回退）。`verify-workflow-runs` 的重组断言改钉新契约（用例数不变）。
+- **宿主 jobs 的 `cancel` 只发 abort，无视取消信号的脚本让 job 恒显 running**（`lib/workflow-runs.js`）：落定预算 + `terminate()` 收尸链只挂在 `stop()`（面板/工具/斜杠命令）这一扇门上，经 jobs UI 的取消没有兜底。修复：`cancel` 与 `stop` 汇入同一条链（同一把 runId 互斥锁），`docs/ARCHITECTURE.md` 的生命周期描述随动。
+- **工作流 `log()` / `report()` 条目无大小预算**（`lib/workflow-runs.js`）：500 条的环只限「条数」——`log('x'.repeat(1e8))` 循环可在宿主侧钉住数百 MB，且每步 persist 把整环重写进 journal。修复：单条 8K 字符预算（字符串截断带标记；`report` 的对象值超限降级为截断 JSON 预览，面板渲染等价）。
+- **`/workflow create` 的 `$TASK` 用字符串替换，任务文本里的 `$'`/`$&` 会拼接模板片段**（`lib/workflow-command.js`）：`String.replace` 的 `$` 模式语义把占位符吞掉、模板尾段被拼进任务。修复：替换函数（与本插件 `renderPromptTemplate` 的既有修法一致）。
+- **通用 CLI 后端的信任栅门可经「注册一个盘根形状的工作区」一跳放宽**（`lib/workspace-admin.js` + `lib/subagent-admin.js`）：`trustedRootsOf` 把每个已注册工作区都算作 CLI 可执行路径的信任根，而 `workspaceAdmin/create` 曾把任意已存在目录原样递给注册表——先 `create('C:\')` 再 `cliUpsertGeneric` 绝对路径即可重建 confused-deputy 链。修复：`create` 过形状栅门（`canonicalWorkspacePath`：拒绝盘根 / POSIX 根 / UNC / Win32 命名空间前缀，realpath 前后双重判定），`trustedRootsOf` 跳过 parse 根与 UNC 形状的 realpath 作信任根。残余信任面已在 `docs/ARCHITECTURE.md` §5 如实标注：官方 `workspace-controller` 同样向浏览器暴露 `create`，本栅门是收窄而非气密闭栏。
+- **内置 CLI 后端 `cliUpsert` 省略标量字段会静默重置为默认**（`lib/subagent-admin.js`）：直接调用方省略 `providerName`/`permissionMode`/`model`/`disposeGraceMs` 时被 `defaultConfig` 覆盖（env 早已是"缺席=保留"语义，标量没有）——被重置的 `providerName` 随后要么撞实例引用守卫、要么悄悄改名。修复：四个标量补齐同一 absent-means-keep 契约（面板总发全键集，浏览器行为不变）；providerName 唯一性/保留名/改名引用守卫改判合并后的最终值。
+- **通用 CLI upsert 先落盘后挂载，挂载抛错留下「RPC 失败但行已落盘」的半状态**（`lib/subagent-admin.js`）：`subprocess` 缺席时行与 journal 已写入、下次 boot 会悄悄挂上，只能靠重新 list 发现。修复：先挂载后落盘（与 `ensureProfileDependency` 的"装好再写行"同款），落盘失败把挂载回滚到与盘上一致（旧行重挂旧配置、全新行摘除）。
+- **手改补丁里重复的 legacy 子代理行要操作 N 次才清干净**（`lib/subagent-admin.js`）：`removeLegacyRow` 每次只删首个匹配顶层块。修复：循环移除全部匹配块（每轮至少消费一行，必然终止）。
+- **`npm root -g` 探测超时只杀直接子进程，Windows 上 npm→node 孙进程存活**（`lib/subagent-admin.js`）：与安装器已修的同一陷阱。修复：改 spawn + 自有 15s 预算 + `killProcessTree`，"只缓存阳性结果"的契约不变。
+- **`assertRevealablePath` 的拒绝消息把 `\\?\` 前缀写成 `\\.\?`**（`lib/workspace-path.js`）：拦截判定两种前缀都对，纯文案错。
 
 ## [1.27.10] - 2026-10-06
 
