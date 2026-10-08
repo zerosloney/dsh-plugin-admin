@@ -26,6 +26,10 @@
  *    writer's read-modify-write is a locked read-merge-replace over the union
  *    of the file and its own mirror, which is what a second dsh instance on
  *    the same home looks like (it loaded its mirror before the first wrote).
+ * 10. a live row flagged `summaryError` (a log the persistence layer could not
+ *    read, arriving with zeroed counts) counts as LIVE — it is not flagged
+ *    deleted — but its zeros never overwrite the stored totals. A real
+ *    zero-token session carries no flag and IS stored as zero.
  *
  * Run: node scripts/verify-usage-ledger.mjs
  */
@@ -260,6 +264,40 @@ await checkAsync('9. two ledgers over one file merge instead of overwriting (cro
   // The lock is released: a leftover sibling lock would make every later writer
   // wait out the fail-open budget.
   assert.equal(existsSync(path + '.dsh-admin.lock'), false, 'the cross-process lock is released')
+})
+
+check('10. a summaryError row counts as live but never zeroes the stored totals', () => {
+  // sessionAdmin.list() flags a log it could not read (Windows write-lock
+  // window, permissions, a newer session format) with `summaryError`, the row
+  // itself carrying zeroed counts. Writing it would permanently zero the
+  // session's accumulated totals — the delete path guards the same thing
+  // (recordUsageBeforeRemoval skips summaryError rows); a read must not
+  // clobber what it failed to measure. The session still counts as live, so
+  // it is not flagged deleted.
+  const stored = [{
+    id: 's-err', project: 'p', title: '', createdAt: 1,
+    input: 1500, output: 10, cacheRead: 0, cacheWrite: 0, userMsgs: 5, assistantMsgs: 2,
+    lastSeenAt: 5, deleted: false,
+  }]
+  const unreadable = [session({
+    id: 's-err', summaryError: 'windows lock',
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  })]
+  const merged = mergeUsageLedger(stored, unreadable, 900)
+  const entry = merged.entries.find(e => e.id === 's-err')
+  assert.equal(entry.input, 1500, 'the unreadable read does not clobber the accumulated totals')
+  assert.equal(entry.userMsgs, 5, 'message counts survive too')
+  assert.equal(entry.deleted, false, 'the session still counts as live — not flagged deleted')
+  assert.equal(entry.lastSeenAt, 5, 'lastSeenAt is not advanced by a read that failed to measure')
+  assert.equal(merged.changed, false, 'nothing measurable changed → no disk write')
+
+  // A real zero-token session carries NO flag: zero is a valid measurement and
+  // is stored, not skipped.
+  const realZero = mergeUsageLedger([], [session({
+    id: 's-zero', tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  })], 100)
+  assert.equal(realZero.entries[0].input, 0, 'a genuine zero is stored')
+  assert.equal(realZero.changed, true, 'and is a change worth writing')
 })
 
 rmSync(tmp, { recursive: true, force: true })

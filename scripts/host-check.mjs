@@ -2719,6 +2719,33 @@ assert.deepEqual(bundleComposingRowIds(togglePatchText), ['toggle-tool', 'toggle
   assert.ok(downText.includes('- id: nested-tool') && downText.includes('- id: nested-tool-b'), 'nested rows themselves intact')
   assert.equal(removeDisableRows(downNested.lines, ['nested-tool']).changed, false, 'enable is a no-op once clean')
 }
+// Pure layer: enable strips only the entry's OWN `disabled:` line — the same
+// indents entryDisabled() reads. A `disabled: true` nested inside the entry's
+// config payload is user data. The old filter matched ANY indent and stripped
+// one line per rescan pass, so it eventually took the payload flag too — and
+// when the payload flag came FIRST it was taken instead of the own flag,
+// leaving the row disabled on disk while the toggle reported enabled.
+{
+  const { entryDisabled } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
+  const withPayload = [
+    '- id: payload-tool',
+    '  config:',
+    '    disabled: true',
+    '  disabled: true',
+  ]
+  assert.equal(entryDisabled(withPayload), true, 'the entry reads as disabled via its OWN flag, not the payload one')
+  const down = removeDisableRows(withPayload, ['payload-tool'])
+  assert.equal(down.changed, true, 'the entry was disabled — enable acts')
+  // Line-exact: '  disabled: true' is a substring of the indented payload line.
+  assert.ok(!down.lines.includes('  disabled: true'), "the entry's OWN flag is stripped")
+  assert.ok(down.lines.includes('    disabled: true'), 'the nested config payload flag survives enable (it is user data)')
+  assert.equal(entryDisabled(down.lines), undefined, 'the read side now agrees the entry is enabled')
+  assert.equal(removeDisableRows(down.lines, ['payload-tool']).changed, false,
+    'the surviving payload flag does not make a clean enable re-strip')
+  const reUp = upsertDisableRows(down.lines, ['payload-tool'])
+  assert.equal(reUp.changed, true, 're-disabling authors the flag back')
+  assert.ok(reUp.lines.includes('    disabled: true'), 'the payload flag is still untouched after the round trip')
+}
 /* ------------- ensureProfileDependency: every operand passes the gate -------------
  * The peer loop assembles `${peer}@${peerVersion}` from an INSTALLED package's
  * own manifest (peerDependencies keys, version field) — attacker-shaped when

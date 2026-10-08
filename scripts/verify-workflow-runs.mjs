@@ -504,6 +504,47 @@ await check('a truncated final JSONL line keeps every complete step before it', 
   assert.equal(rec.stepCount, afterCount, 'get().stepCount counts exactly the surviving after-phase entries')
 })
 
+await check('a torn append is repaired before the retry appends, not glued onto', async () => {
+  // An append killed mid-line leaves a fragment with NO trailing newline. The
+  // next persist retries the same tail: gluing it onto the fragment makes the
+  // physical line `<fragment><complete JSON>` — unparseable forever, so the
+  // reader drops it AND everything after it, while persistedSteps has already
+  // advanced past them (the retry window closes permanently). The repair
+  // truncates the fragment back to the last newline first, so the retried
+  // steps land as clean lines.
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'steps-torn-retry')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({
+    script: `await agent('before')\nawait ask('block here')\nawait agent('after')\nreturn 'done'`,
+    parent: { id: 'sess-torn-retry' },
+  })
+  await waitForQuestion(id, r)
+  const file = join(home, 'workflows', 'runs', id + '.steps.jsonl')
+  const original = readFileSync(file, 'utf8')
+  assert.ok(original.trim().length > 12, 'the run already has steps on disk')
+  // Simulate the kill mid-append: a torn last line, no trailing newline.
+  writeFileSync(file, original.slice(0, original.length - 12))
+  assert.deepEqual(await r.answer(id, 'go'), { answered: true })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'completed')
+  // Every line of the final file must parse — nothing is glued onto the
+  // fragment.
+  const lines = readFileSync(file, 'utf8').split('\n').filter((l) => l.trim() !== '')
+  for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), `no glued line survives (first offender: ${line.slice(0, 60)})`)
+  const parsed = lines.map((l) => JSON.parse(l))
+  // The steps appended AFTER the corruption point are really there and
+  // readable — without the repair they would sit on the glued line and be
+  // dropped by the reader.
+  const prompts = parsed.filter((s) => s.phase === 'before').map((s) => String(s.prompt ?? ''))
+  assert.ok(prompts.some((p) => p.includes('after')), 'the step appended after the torn tail is readable as its own line')
+  // And the real read path (a fresh registry = a restart) sees them too.
+  const r2 = makeRegistry(bundle.ctx, home)
+  const rec2 = r2.get(id)
+  assert.equal(rec2.status, 'completed')
+  assert.ok(rec2.stepCount >= 1, `a fresh registry reads the repaired file (stepCount ${rec2.stepCount})`)
+})
+
 await check('a journal write failure never becomes an unhandled rejection (the host fail-louds on those)', async () => {
   const bundle = makeCtx({ slow: true })
   const home = join(tmpBase, 'persist-fail')

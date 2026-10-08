@@ -249,6 +249,24 @@ try {
     assert.equal(result.hooks.filter(h => h.enabled).length, 2)
   })
 
+  await check('hooks: saveHook with a stale id refuses instead of appending a duplicate', async () => {
+    const listed = await service.listHooks()
+    const hook = listed.hooks.find(h => h.command === 'notify.sh')
+    // An id naming no live entry means the panel's list is stale: another
+    // window edited the entry away (ids are content hashes, so the id moves
+    // with the content) or deleted it. Appending would leave a second copy of
+    // the same hook — deleteHook and setHookEnabled both refuse an unknown
+    // id, so the edit path matches them and the panel reports it.
+    await assert.rejects(
+      () => service.saveHook({ ...hook, id: 'PreToolUse/00000000', command: 'edited.sh' }),
+      /钩子不存在/,
+    )
+    const after = await service.listHooks()
+    assert.equal(after.hooks.filter(h => h.command === 'notify.sh').length, 1,
+      'the original entry is untouched — no duplicate, no edit')
+    assert.equal(after.hooks.some(h => h.command === 'edited.sh'), false, 'nothing was appended')
+  })
+
   await check('hooks: setHookEnabled(false) moves the entry to the sidecar', async () => {
     const listed = await service.listHooks()
     const hook = listed.hooks.find(h => h.enabled && h.command === 'notify.sh')

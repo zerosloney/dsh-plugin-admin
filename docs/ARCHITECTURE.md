@@ -94,7 +94,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 - **后台定时快照**：每 60 分钟扫一遍整张会话表（`usageSnapshotIntervalMs`，`0` 关闭），覆盖上次进程启动前就存在的会话。
 - **删除前快照**：本插件自己的 `deleteSession` / `closeSession` 在删日志**之前**先把该会话的用量写进台账。
 
-台账在 `$DSH_HOME/usage-ledger.json`（每会话一行，原子写 + 串行队列 + 跨进程锁；上限默认 2000 行、`usageLedgerCap` 可调，按最后见到时间淘汰）；被删会话以 `deleted: true` 留在数据里并入 KPI。空转不读日志（revision 缓存）也不写盘（无变化即跳过）；读取路径不会覆盖实时观察器掌握的数字。
+台账在 `$DSH_HOME/usage-ledger.json`（每会话一行，原子写 + 串行队列 + 跨进程锁；上限默认 2000 行、`usageLedgerCap` 可调，按最后见到时间淘汰）；被删会话以 `deleted: true` 留在数据里并入 KPI。空转不读日志（revision 缓存）也不写盘（无变化即跳过）；读取路径不会覆盖实时观察器掌握的数字，也不会覆盖它**读失败**的数字（`list()` 对打不开的日志返回带 `summaryError` 的全零行，写进台账会永久清零既有真实数字——删除路径的快照守卫同款）。
 
 > 为什么不是 `fs.watch` 盯 `$DSH_HOME/sessions`：文件监听只能告诉你「目录/文件变了」，压缩日志要重新整份解析，而且删除事件和防抖窗口会互相抢跑；`session/event` 是 append 时刻的同步火线，更准也更省。
 
