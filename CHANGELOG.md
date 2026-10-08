@@ -4,6 +4,15 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.27.12] - 2026-10-08
+
+### Fixed
+
+- **钩子编辑路径遇到陈旧 id 静默追加重复条目**（`lib/command-hook-admin.js`）：面板持有的列表可能已过期——另一窗口改掉了该条目（id 是内容 hash，内容一改 id 就跟着走）或删了它——`saveHook` 的 id 命不中既有条目时仍走追加分支，同一钩子落第二份（或把已删的钩子复活，`reloadBridge()` 随即让它生效），而删除/启停两个入口早已对未知 id 拒绝。修复：命不中即拒（`钩子不存在（可能已被其他窗口删除或修改）`），编辑路径与 `deleteHook` / `setHookEnabled` 对齐，面板据实上报而不是写第二份。回归进 `verify-command-hooks`：27 → 28 checks。
+- **插件启用会剥掉条目 config 负载里用户自己的 `disabled: true`**（`lib/plugin-admin.js` + `lib/patch-utils.js`）：`removeDisableRows` 按任意缩进匹配 `disabled: true`、每趟 rescan 削一行——条目 config 块里的 `disabled` 键（用户数据）会被一并删掉；手改文件里负载键排在前面时，被削的甚至是它而不是开关自己的标志行，面板报已启用、盘上仍禁用。读侧 `entryDisabled` 早已有缩进栅门，写侧没有。修复：抽出共享的 `entryOwnKeyIndents`（id 行缩进 +2，手改文件的 +4 形照认；更深一层即嵌套负载），读写两侧同一把尺子——只剥条目自身的标志行，深一层原样存活。回归进 `host-check`：payload 标志存活、读侧随后同意「已启用」、禁用→启用→再禁用往返稳定。
+- **读不了的会话日志以全零形状写进用量台账，永久清零既有真实数字**（`lib/usage-ledger.js`）：`sessionAdmin.list()` 对打不开的日志（Windows 写锁窗口 / 权限 / 更新的会话格式）返回带 `summaryError` 的全零行，`mergeUsageLedger` 照常 upsert——累积 token 归零，而删除路径的 `recordUsageBeforeRemoval` 早就有同款守卫（读失败即跳过整条快照，快照之后日志即删、再无恢复来源）。修复：带 `summaryError` 的行仍计为 live（不标删除），但其数字不覆盖既有条目、`lastSeenAt` 也不推进（没量到就不盖时间戳）；真正的零 token 会话不带标志、照常存零。回归进 `verify-usage-ledger`：9 → 10 checks。
+- **步骤 JSONL 的撕裂尾部让重试粘成永不可解析的物理行，重试窗口一次性永久关闭**（`lib/workflow-runs.js`）：一次在半行处被中断的追加留下**没有结尾换行**的残片，下一次 persist 把同一批步骤直接粘上去 → `<残片><完整 JSON>` 一行永远解析不过去，`readStepsFile` 从该行起整段丢弃，而 `persistedSteps` 已推进到全长——被中断的那一步连同之后所有步骤永久丢失，且再也无重试可救。修复：追加前先 `repairTornTail`——尾部没换行就截断回最后一个换行，被中断的那一步由本次重试整步重写（它本就还没标落盘，截掉不丢任何已完成步骤）。回归进 `verify-workflow-runs`：36 → 37 checks。
+
 ## [1.27.11] - 2026-10-07
 
 ### Fixed
