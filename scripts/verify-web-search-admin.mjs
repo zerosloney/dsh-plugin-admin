@@ -350,6 +350,76 @@ console.log('scenario 8 OK: setActive authors the web override row when the bund
 }
 console.log('scenario 8b OK: the web override restates the live entry config')
 
+// ---------- Scenario 8c: a bare web row (no config:) restates too ----------
+// The in-place path (`mutateWebRow`) has a branch for a `- id: web` row that
+// carries no `config:` at all: it synthesizes one. Before the fix it emitted
+// only the two panel-owned keys with a literal fetchProvider, silently
+// stripping everything else the base layer authors. The restate contract
+// must hold through this door as well.
+{
+  writeFileSync(patchPath, [
+    '# test patch',
+    '- id: web',
+    "  name: '@deepseek-ai/dsh-web'",
+    '',
+  ].join('\n'), 'utf8')
+  let bareCaptured = null
+  const bareCtx = {
+    baseUrl: ctx.baseUrl,
+    get: ctx.get,
+    effect(cb, _label) { cb.call(bareCtx); return () => {} },
+    provide(_key, svc) { bareCaptured = svc },
+    registry: {
+      entries() {
+        return [[undefined, {
+          name: 'web',
+          fibers: [{
+            entry: {
+              options: {
+                config: { searchProvider: 'deepseek-official', fetchProvider: 'http', someFutureKey: 'keep-me' },
+              },
+            },
+          }],
+        }]]
+      },
+    },
+  }
+  applyWebSearchAdmin(bareCtx)
+  const set8c = await bareCaptured.setActive('exa')
+  assert.equal(set8c.searchProvider, 'exa', 'setActive reports the new provider on the bare-row path')
+  const after8c = readFileSync(patchPath, 'utf8')
+  assert.ok(/^ {4}searchProvider: exa$/m.test(after8c), 'the synthesized config carries the new provider')
+  assert.ok(/someFutureKey: "keep-me"/.test(after8c), 'the live config is restated into the synthesized block too')
+  assert.ok(/^- id: web$/m.test(after8c), 'the bare row stays a top-level row (no insert block invented)')
+}
+console.log('scenario 8c OK: a bare web row without config restates the live entry')
+
+// ---------- Scenario 8d: an unparseable inline config refuses loudly -------
+// A `config:` value that starts with `{` but is not a single-line flow map
+// (a multi-line flow map, or garbage after the closing brace) can't have its
+// sibling keys read out, so rewriting it would silently drop fetchProvider
+// and everything else. Refuse rather than emit a two-key block.
+{
+  writeFileSync(patchPath, [
+    '# test patch',
+    '- id: web',
+    '  config: { searchProvider: exa,',
+    '    fetchProvider: http }',
+    '',
+  ].join('\n'), 'utf8')
+  let refused = null
+  try {
+    await service.setActive('perplexity')
+  } catch (error) {
+    refused = error
+  }
+  assert.ok(refused !== null, 'setActive refuses to rewrite an unparseable inline config')
+  assert.ok(/config/i.test(String(refused && refused.message)), 'the refusal names the config')
+  const after8d = readFileSync(patchPath, 'utf8')
+  assert.ok(/searchProvider: exa,/.test(after8d), 'the original inline body is untouched (no silent rewrite)')
+}
+console.log('scenario 8d OK: an unparseable inline config is refused, not silently rewritten')
+
 // ---------- Scenario 9: uninstalling the ACTIVE provider clears the id -----
 // A dangling `searchProvider` makes every search fail with
 // WEB_PROVIDER_CONFIGURED_MISSING after the restart, and the removed provider's

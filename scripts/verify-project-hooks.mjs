@@ -389,6 +389,17 @@ try {
     assert.ok(ctx.warns.some(message => message.includes('匹配器') || message.includes('matcher')))
   })
 
+  await check('match-all `*` matcher stays valid (host exempts it before compiling)', async () => {
+    writeHooks({ PreToolUse: [{ matcher: '*', hooks: [{ command: 'star.sh' }] }] })
+    bumpMtime()
+    const warnsBefore = ctx.warns.length
+    const decision = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.deepEqual(decision, { kind: 'allow' })
+    assert.equal(ctx.shell.calls.at(-1).command, 'star.sh', "'*' is match-all, not an invalid regex")
+    const fresh = ctx.warns.slice(warnsBefore).filter(message => message.includes('匹配器') || message.includes('matcher'))
+    assert.equal(fresh.length, 0, `'*' must not warn: ${JSON.stringify(fresh)}`)
+  })
+
   await check('fast path: project without config never touches the shell', async () => {
     const otherAgent = makeAgent('s2', tempRoot)
     writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'x.sh' }] }] })

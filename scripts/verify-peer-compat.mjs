@@ -8,7 +8,8 @@
  *     (packages/boot/app-boot/src/plugin-compatibility.ts): includePrerelease
  *     semantics, workspace protocols satisfied, empty/invalid fail closed —
  *     covering caret/tilde/x/comparator/alternation/hyphen forms including
- *     the 0.x caret corners (^0.0.3 = [0.0.3, 0.0.4)).
+ *     the 0.x caret corners and the -0 band-edge fences node-semver's
+ *     desugar synthesizes (^0.0.3 = [0.0.3, 0.0.4-0), >1.2 = >=1.3.0-0).
  *  3. dshPeersOf keeps only @deepseek-ai/dsh / @deepseek-ai/dsh-* peers.
  *  4. evaluateDshPeerCompat reports each incompatible peer by name.
  *  5. resolveDshRuntimeVersion honors the DSH_RUNTIME_VERSION override and
@@ -79,13 +80,23 @@ const SATISFIED = [
   ['1.2.9', '1.2.x || 3.0.0'],
   ['1.2.9', '1.2.3 - 1.4.0'],
   ['0.1.10-rc.1', '^0.1.9'],
-  ['0.2.0-rc.1', '^0.1.6'],
-  // node-semver desugars a PARTIAL version on `>` and `<=` to the band edge:
-  // `>1.2` = >=1.3.0 (the 1.2.* band excluded), `<=1.2` = <1.3.0 (the band
-  // included). The old zero-padded literal comparison admitted 1.2.5 on `>1.2`
-  // (precheck passed while the host skipped the bundle) and warned on 1.2.5
-  // for `<=1.2` (host ran it fine) — both directions pinned here.
+  // node-semver desugars a PARTIAL version on `>` and `<=` to the band edge,
+  // not to the zero-padded literal: `>1.2` = >=1.3.0-0 (the 1.2.* band
+  // excluded, its -0 edge included), `<=1.2` = <1.3.0-0 (the band included,
+  // the 1.3.0 edge not). The old zero-padded literal comparison admitted
+  // 1.2.5 on `>1.2` (precheck passed while the host skipped the bundle) and
+  // warned on 1.2.5 for `<=1.2` (host ran it fine) — both directions pinned
+  // here. These values mirror semver.satisfies(v, r, {includePrerelease: true}).
   ['1.3.0', '>1.2'],
+  ['1.3.0-rc.1', '>1.2'],
+  ['1.3.0-rc.1', '>1.2.x'],
+  ['1.2.0-rc.1', '>=1.2'],
+  ['1.2.0-rc.1', '>=1.2.x'],
+  ['1.2.0-rc.1', '^1.2'],
+  ['1.2.0-rc.1', '~1.2'],
+  ['1.2.3-rc.1', '1.2.3 - 1.4.0'],
+  ['1.4.0-rc.1', '1.2 - 1.4'],
+  ['9.9.9', '>=x'],
   ['2.0.0', '>1.2'],
   ['1.2.3', '<=1.2'],
   ['1.0.0', '<=1.2'],
@@ -110,9 +121,29 @@ const REFUSED = [
   ['1.3.0', '1.2.x'],
   ['1.4.1', '1.2.3 - 1.4.0'],
   ['0.1.9', '^0.1.10'],
+  // The desugar's exclusion/inclusion edges, pinned in the refused direction:
+  // a caret/tilde ceiling is -0-fenced (2.0.0-rc.1 misses ^1.2.3), a FULL
+  // lower bound stays unfenced (^0.1.6 keeps 0.1.6-rc.1 below it), and a
+  // fenced band edge rejects its own release. All mirror
+  // semver.satisfies(v, r, {includePrerelease: true}).
+  ['0.2.0-rc.1', '^0.1.6'],
+  ['0.0.4-rc.1', '^0.0.3'],
+  ['2.0.0-rc.1', '^1.2.3'],
+  ['0.1.6-rc.1', '^0.1.6'],
+  ['0.1.6-rc.1', '~0.1.6'],
+  ['1.3.0-rc.1', '<=1.2'],
+  ['1.3.0-0', '<=1.2'],
+  ['1.2.0-rc.1', '<1.2.x'],
+  ['1.4.1-rc.1', '1.2.3 - 1.4.0'],
   // The desugar's exclusion/inclusion edges, pinned in the refused direction.
   ['1.2.5', '>1.2'],
   ['1.3.0', '<=1.2'],
+  // A prerelease on a wildcard major is unparseable at the host (satisfies
+  // throws -> false); the all-or-nothing wildcard arm must not swallow it.
+  ['0.2.0-rc.1', '^x-beta'],
+  ['1.0.0', '>=x-beta'],
+  ['1.0.0', '<=x-beta'],
+  ['1.0.0', '=x-beta'],
 ]
 
 check('2. satisfiesDshRange mirrors the host admission rule (includePrerelease, workspace, fail closed)', () => {

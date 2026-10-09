@@ -1112,6 +1112,72 @@ delete ctx.sessionListOverride
 document.body.removeChild(dupMenu)
 document.body.removeChild(dupTree)
 
+// 10c. 复制会话 ID: a newer session whose title is a SUPERSET of the clicked
+// row's title must not shadow the exact match. list() is newest-first, so the
+// old first-match loop hit "重构-v2" (listed earlier, contains "重构") and
+// copied ITS id for a right-click on "重构" — and every id consumer
+// (delete/export/health) is exact-match, so the wrong id silently acted on
+// the wrong session with no error anywhere.
+ctx.sessionListOverride = [
+  { id: 'newer-sub', cwd: 'E:\\Demo\\v2', createdAt: 2_000, archived: false, live: false, title: '重构方案 v2', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+  { id: 'exact-id', cwd: 'E:\\Demo\\v1', createdAt: 1_000, archived: false, live: false, title: '重构方案', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+]
+const fuzzyTree = document.createElement('div')
+fuzzyTree.setAttribute('role', 'tree')
+const fuzzyRow = document.createElement('div')
+fuzzyRow.setAttribute('role', 'treeitem')
+const fuzzyAnchor = document.createElement('button')
+fuzzyAnchor.setAttribute('aria-label', '会话"重构方案"的操作')
+fuzzyAnchor.setAttribute('type', 'button')
+fuzzyRow.appendChild(fuzzyAnchor)
+fuzzyTree.appendChild(fuzzyRow)
+document.body.appendChild(fuzzyTree)
+const fuzzyMenu = document.createElement('div')
+fuzzyMenu.setAttribute('role', 'menu')
+const fuzzyViewport = document.createElement('div')
+fuzzyViewport.setAttribute('role', 'presentation')
+const fuzzyArchiveBtn = document.createElement('button')
+fuzzyArchiveBtn.setAttribute('role', 'menuitem')
+fuzzyArchiveBtn.textContent = '归档会话'
+fuzzyViewport.appendChild(fuzzyArchiveBtn)
+fuzzyMenu.appendChild(fuzzyViewport)
+await new Promise((resolve) => setTimeout(resolve, 40))
+document.body.appendChild(fuzzyMenu)
+await new Promise((resolve) => setTimeout(resolve, 60))
+// Clipboard spy so the copied id is observable (jsdom ships no Clipboard API).
+const copiedIds = []
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+Object.defineProperty(navigator, 'clipboard', {
+  value: { writeText: async (text) => { copiedIds.push(text) } },
+  configurable: true,
+})
+const copyItem = [...fuzzyMenu.querySelectorAll('button')]
+  .find((b) => b.textContent?.includes('复制会话 ID'))
+assert.ok(copyItem !== undefined, 'copy-id item injected')
+copyItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(copiedIds, ['exact-id'],
+  'copy-id copies the EXACT-title session, not the newer substring-titled one')
+// Ambiguity in the tolerant layer also refuses: two sessions whose titles
+// merely both contain the needle produce no copy and a pointing toast.
+copiedIds.length = 0
+ctx.sessionListOverride = [
+  { id: 'amb-a', cwd: 'E:\\Demo\\amb-a', createdAt: 3_000, archived: false, live: false, title: '重构方案 alpha', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+  { id: 'amb-b', cwd: 'E:\\Demo\\amb-b', createdAt: 2_000, archived: false, live: false, title: '重构方案 beta', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
+]
+copyItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(copiedIds, [], 'an ambiguous tolerant match copies nothing')
+assert.ok(document.body.textContent.includes('匹配会话'), 'ambiguity toast points at the management panel')
+if (originalClipboardDescriptor === undefined) {
+  delete navigator.clipboard
+} else {
+  Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor)
+}
+delete ctx.sessionListOverride
+document.body.removeChild(fuzzyMenu)
+document.body.removeChild(fuzzyTree)
+
 // 11. Workspace menu injection: a div[role="menu"] with workspace items
 // triggers "在资源管理器打开" injection.
 const wsMenu = document.createElement('div')
@@ -2194,4 +2260,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus, menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus (copy-id resolves the exact-title session over a newer substring-titled one + ambiguity refusal), menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

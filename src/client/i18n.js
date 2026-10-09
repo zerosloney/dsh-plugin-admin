@@ -65,6 +65,8 @@ var I18N_EN = {
   "❌ 未找到匹配的会话": "❌ No matching session found",
   "❌ 存在 ": "❌ Found ",
   " 个同名会话，无法确定要删除的目标；请在 设置 → 历史会话 中按会话 ID 删除": " sessions with the same name — target is ambiguous; delete by session ID under Settings → Session history",
+  " 个同名会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作": " sessions with the same name — target is ambiguous; use the session ID under Settings → Session history",
+  " 个匹配会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作": " matching sessions — target is ambiguous; use the session ID under Settings → Session history",
   "复制会话 ID": "Copy session ID",
   "删除会话": "Delete session",
   "🗑️ 会话已删除": "🗑️ Session deleted",

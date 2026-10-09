@@ -312,8 +312,58 @@ await check('saveSaved via RPC validates and persists', async () => {
   assert.ok(listed.some((r) => r.name === 'via-rpc'))
 })
 
-// ─── 审计（Phase F3 覆盖 workflowAdmin）────────────────────────────────────────
+// ─── runSaved 的 argsSchema 合约（第三道门）─────────────────────────────────
+// run_saved 工具与 /workflow run 斜杠命令都强制 describeArgsProblem；面板的
+// runSaved RPC 此前跳过它，而面板的 🚀 按钮恒发空 args，一份声明了 required
+// 的保存库从这里启动时只会到脚本内部才以一个含义不明的失败收场。
+await check('runSaved RPC enforces the saved argsSchema like the tool and command', async () => {
+  const home = join(tmpBase, 'argschema')
+  const fakeAgent = { id: 'sess-1' }
+  const ctx = {
+    baseUrl: home,
+    get: (key) => {
+      if (key === 'agents') return { get: (id) => (id === 'sess-1' ? fakeAgent : undefined) }
+      if (key === 'subagents') return {
+        start: async () => ({
+          result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] }),
+          dispose: async () => {},
+        }),
+      }
+      if (key === 'jobs') return { start: (spec) => { spec.run().done.catch(() => {}); return 'job-1' } }
+      return undefined
+    },
+    effect: (fn) => fn(),
+    provide: () => {},
+    logger: { warn() {} },
+  }
+  const holder = {}
+  ctx.provide = (key, s) => { holder[key] = s }
+  applyWorkflowAdmin(ctx, { enqueue, dshHome: home })
 
+  const saved = await holder.workflowAdmin.saveSaved({
+    name: 'needs-file', scope: 'global',
+    script: 'return await agent(`file=${args.file}`)',
+    argsSchema: { type: 'object', required: ['file'], properties: { file: { type: 'string' } } },
+  })
+  assert.equal(saved.ok, true, 'the record saves')
+
+  const empty = await holder.workflowAdmin.runSaved({ name: 'needs-file', parentSessionId: 'sess-1' })
+  assert.equal(empty.id, null, 'empty args do not start the run')
+  assert.match(empty.error, /args do not satisfy/, 'the refusal names the argsSchema problem')
+
+  const wrongType = await holder.workflowAdmin.runSaved({
+    name: 'needs-file', parentSessionId: 'sess-1', args: { file: 42 },
+  })
+  assert.equal(wrongType.id, null, 'a wrong-typed arg does not start the run either')
+  assert.match(wrongType.error, /args do not satisfy/)
+
+  const good = await holder.workflowAdmin.runSaved({
+    name: 'needs-file', parentSessionId: 'sess-1', args: { file: 'a.txt' },
+  })
+  assert.ok(good.id, 'satisfying args start the run')
+})
+
+// ─── 审计（Phase F3 覆盖 workflowAdmin）────────────────────────────────────────
 await check('workflowAuditOk reads each verb result by its own fields', () => {
   // 成功形态
   assert.equal(workflowAuditOk({ id: 'run-1', status: 'running', diagnostics: [] }), true)

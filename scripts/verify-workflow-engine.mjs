@@ -247,6 +247,27 @@ await checkAsync('failed agent degrades to null, run continues', async () => {
   assert.ok(logs.some((l) => l.kind === 'agent-incomplete' || l.kind === 'step-error'))
 })
 
+check('stepFingerprint never throws on an exotic payload (BigInt / cycle), and stays distinct', () => {
+  // 该函数的不变量（同文件 canonicalJson 的注释）：「a fingerprint must never
+  // turn a script's own bigint into a crash」。opts 槽早由 canonicalJson 兜住，
+  // payload 槽此前直接 JSON.stringify，BigInt 与循环引用会让它抛——函数在
+  // makeAgentCall 里于 try **之外**被调用，抛出即违反 facade 的「失败返回 null」
+  // 契约。今天 realm 边界会先拒绝不可序列化的 facade 参数，这一层是**不变量
+  // 兜底**而非已触发路径：键仍唯一（落进降级槽），同输入仍稳定。
+  const bigIntFp = stepFingerprint(1, 'agent', { count: 10n }, {})
+  const plainFp = stepFingerprint(1, 'agent', 'plain', {})
+  assert.equal(typeof bigIntFp, 'string', 'a BigInt payload fingerprints without throwing')
+  assert.notEqual(bigIntFp, plainFp, 'a BigInt payload still fingerprints apart from a plain one')
+  assert.equal(stepFingerprint(1, 'agent', { count: 10n }, {}), bigIntFp, 'and it is stable across calls')
+  const circular = { a: 1 }
+  circular.loop = circular
+  assert.equal(typeof stepFingerprint(1, 'agent', circular, {}), 'string', 'a circular payload fingerprints without throwing')
+  assert.notEqual(stepFingerprint(1, 'agent', circular, {}), plainFp, 'a circular payload is distinct from a plain one')
+  // The string fast path and ordinary objects are unchanged.
+  assert.equal(stepFingerprint(1, 'agent', 'plain', {}), stepFingerprint(1, 'agent', 'plain', {}))
+  assert.notEqual(stepFingerprint(1, 'agent', { a: 1 }, {}), stepFingerprint(1, 'agent', { a: 2 }, {}))
+})
+
 await checkAsync('unserializable log()/phase() args degrade to placeholders, the run survives (they used to crash the worker)', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()

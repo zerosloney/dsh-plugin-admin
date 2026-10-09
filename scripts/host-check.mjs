@@ -752,6 +752,27 @@ for (const uncSpec of ['\\\\nas\\share\\pkg', '//nas/share/pkg']) {
 }
 assert.equal(shouldIgnoreScripts('\\\\nas\\share\\pkg', 'local-only'), true, 'local-only: a UNC share does not run scripts')
 assert.equal(shouldIgnoreScripts('//nas/share/pkg', 'local-only'), true, 'local-only: the // spelling neither')
+// The protocol spellings of the same UNC shapes classify like the bare ones
+// above: measured pre-fix, the `link|file:` prefix check short-circuited
+// isLocalInstallSpec to "local", so registry-only let a caller-chosen SMB
+// host through and local-only ran the prepare script that share declares.
+for (const protocolUnc of ['file://nas/share/evil', 'link://nas/share/evil']) {
+  assert.equal(isRegistryInstallSpec(protocolUnc), false, `${protocolUnc} is not a registry package`)
+  assert.throws(
+    () => assertInstallSpecAllowed(protocolUnc, 'registry-only'),
+    /registry-only' refuses/,
+    `${protocolUnc} is a remote share and is refused under registry-only`,
+  )
+  assert.equal(shouldIgnoreScripts(protocolUnc, 'local-only'), true, `local-only: the ${protocolUnc} spelling of a UNC share does not run scripts`)
+}
+// Drive-letter `file:` forms stay local: WHATWG folds the `C:` authority and
+// `localhost` into an empty hostname (measured on this Node), so these name the
+// operator's own machine, not a remote share.
+for (const driveFileSpec of ['file:///C:/pkg', 'file://C:/pkg']) {
+  assert.equal(isRegistryInstallSpec(driveFileSpec), false, `${driveFileSpec} is not a registry package`)
+  assert.doesNotThrow(() => assertInstallSpecAllowed(driveFileSpec, 'registry-only'), `the operator's own drive path ${driveFileSpec} is still permitted`)
+  assert.equal(shouldIgnoreScripts(driveFileSpec, 'local-only'), false, `local-only: the drive-letter form ${driveFileSpec} may build`)
+}
 
 for (const remoteSpec of ['git+https://host/repo.git', 'git+https://host/repo.git#semver:^1.0.0', 'github:user/repo', 'user/repo', 'https://host/pkg.tgz', 'git+ssh://git@host/repo.git', 'foo@git+https://github.com/evil/repo.git', 'foo@github:user/repo', 'foo@user/repo', 'foo@https://host/pkg.tgz', 'git@github.com:evil/repo.git']) {
   assert.equal(isRegistryInstallSpec(remoteSpec), false, `${remoteSpec} is not a registry package`)
@@ -1767,6 +1788,46 @@ await assert.rejects(
   () => mcp.upsert({ id: 'mcp-bad-args-http', config: { transport: 'streamable-http', serverName: 'badargshttp', url: 'http://x/mcp', args: ['x'] } }),
   /unknown fields for streamable-http/, 'stdio-only field rejected on http transport',
 )
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-cmdquote', config: { transport: 'stdio', serverName: 'badcmdquote', command: 'a" & calc', args: ['-y'] } }),
+  /command must not contain double quotes when args is non-empty/, 'quote in command with non-empty args rejected (cmd.exe has no \\" escape)',
+)
+// An inline command line keeps its quotes: they belong to the user's own
+// parsing (splitCommandLine) and must not trip the args-path gate.
+await mcp.upsert({ id: 'mcp-inline-quoted', config: { transport: 'stdio', serverName: 'inline-quoted', command: '"my tool" --flag' } })
+assert.ok(
+  (await mcp.list()).entries.some(e => e.id === 'mcp-inline-quoted'),
+  'inline command with quotes (no args) still accepted',
+)
+await mcp.remove('mcp-inline-quoted')
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-maxattempts0', config: { transport: 'stdio', serverName: 'badmaxattempts0', command: 'npx', reconnect: { maxAttempts: 0 } } }),
+  /maxAttempts must be a positive integer/, 'maxAttempts: 0 rejected (dsh schema min is 1, would only fail at boot)',
+)
+await assert.rejects(
+  () => mcp.upsert({ id: 'mcp-bad-maxbytes0', config: { transport: 'stdio', serverName: 'badmaxbytes0', command: 'npx', maxInstructionBytes: 0 } }),
+  /maxInstructionBytes must be a positive integer/, 'maxInstructionBytes: 0 rejected (dsh schema min is 1)',
+)
+// …and the positive side: maxAttempts: 1 passes the tightened bound, and the
+// host-recognized maxInstructionBytes survives the list → edit → re-save
+// round-trip instead of being stripped as an unknown field.
+await mcp.upsert({
+  id: 'mcp-maxbytes',
+  config: { transport: 'stdio', serverName: 'maxbytes', command: 'npx', maxInstructionBytes: 4096, reconnect: { maxAttempts: 1 } },
+})
+assert.equal(
+  (await mcp.list()).entries.find(e => e.id === 'mcp-maxbytes')?.config.maxInstructionBytes, 4096,
+  'maxInstructionBytes round-trips through list',
+)
+await mcp.upsert({
+  id: 'mcp-maxbytes',
+  config: { transport: 'stdio', serverName: 'maxbytes', command: 'npx', maxInstructionBytes: 4096, reconnect: { maxAttempts: 1 } },
+})
+assert.ok(
+  /maxInstructionBytes: 4096/.test(readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8')),
+  're-saving an entry keeps maxInstructionBytes in the patch file',
+)
+await mcp.remove('mcp-maxbytes')
 // The final patch file stays a valid YAML list.
 const patchText = readFileSync(join(mcpProfile, 'cordis.patch.yml'), 'utf8')
 assert.ok(patchText.includes('mcp-github'), 'patch file retains the entry id')
@@ -2870,6 +2931,47 @@ rmSync(npmrcProfile, { recursive: true, force: true })
 const defaultRegistry = resolveRegistry(join(here, '..'))
 assert.ok(typeof defaultRegistry === 'string' && defaultRegistry.startsWith('https://'), 'registry resolution returns a usable URL: ' + defaultRegistry)
 
+// reconcileBundles: bundle detection must NOT depend on the package exporting
+// `./package.json`. dsh's own plugin templates (preset/agent-preset
+// skills/cordis-plugin-development templates/decoration|templates/mcp) ship
+// `dsh.bundle.patch` with an `exports` map that omits it, and the host resolves
+// bundles by directory probing for exactly that reason (app-boot profile.ts
+// packageDirFromAnchor: "without depending on the package exporting
+// './package.json' (require.resolve would need that)"). Plugin-side detection
+// via require.resolve('<name>/package.json') threw ERR_PACKAGE_PATH_NOT_EXPORTED
+// for those packages, so declaresBundle returned false and the prune loop
+// EXCISED a still-installed live bundle from dsh.profile.bundles on the next
+// panel write (and the join loop never added it on install).
+{
+  const { reconcileBundles } = await import(new URL('../lib/plugin-admin.js', import.meta.url).href)
+  const probeProfile = join(here, '../.host-check-tmp/bundle-export-profile')
+  rmSync(probeProfile, { recursive: true, force: true })
+  mkdirSync(join(probeProfile, 'node_modules'), { recursive: true })
+  const writeBundlePkg = (name) => {
+    const dir = join(probeProfile, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name, version: '1.0.0', type: 'module',
+      // exports map deliberately omits "./package.json" — the template shape.
+      exports: { '.': './index.js' },
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }, null, 2), 'utf8')
+  }
+  writeBundlePkg('dsh-hidden-exports')
+  writeBundlePkg('dsh-hidden-join')
+  writeFileSync(join(probeProfile, 'package.json'), JSON.stringify({
+    dependencies: { 'dsh-hidden-exports': '^1.0.0', 'dsh-hidden-join': '^1.0.0' },
+    dsh: { profile: { bundles: ['dsh-hidden-exports'] } },
+  }, null, 2), 'utf8')
+  reconcileBundles(probeProfile)
+  const reconciled = JSON.parse(readFileSync(join(probeProfile, 'package.json'), 'utf8'))
+  assert.ok(reconciled.dsh.profile.bundles.includes('dsh-hidden-exports'),
+    'a bundle whose exports omits ./package.json is NOT pruned from dsh.profile.bundles')
+  assert.ok(reconciled.dsh.profile.bundles.includes('dsh-hidden-join'),
+    'the join loop adds such a bundle when it is a dependency but not yet listed')
+  rmSync(probeProfile, { recursive: true, force: true })
+}
+
 // ---------------------------------------------------------------------------
 // Regression vectors for the review-fix pure helpers: semver prerelease
 // ordering, YAML inline-comment stripping, the frontmatter closing delimiter,
@@ -3081,4 +3183,4 @@ delete process.env.DSH_HOME
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger; reconcileBundles keeps bundles whose exports omit ./package.json (prune loop does not excise them, join loop still adds them')

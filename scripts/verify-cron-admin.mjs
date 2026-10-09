@@ -386,6 +386,63 @@ try {
 }
 
 /* ========================================================================== */
+/*            Post-teardown continuation: the RPC-in-queue re-arm            */
+/* ========================================================================== */
+
+// upsert/toggle 的 RPC 体跑在共享串行队列上（index.js 的一个 enqueue 实例，
+// 队列里也排 pnpm 安装这种慢操作）。插件在队列体之前卸销时，体仍然会跑：
+// 修前 startWatch() 重建一个没人再关的 fs.watch，rearmAll() 为每个 enabled
+// 任务重新 setTimeout——旧闭包的 cron 动作在插件已卸载后继续执行（94ff880
+// 修的是 watch 回调那条续延路，这是 RPC 续延这条路）。两处现在都栅在
+// cronDisposed 上。可观测量是 setTimeout：模块用的是全局，体在卸载后跑时
+// 不该再武装任何 timer。
+check('a queued RPC body landing after teardown re-arms nothing (startWatch / rearmAll are gated on cronDisposed)', async () => {
+  const zombieHome = mkdtempSync(join(tmpdir(), 'cron-zombie-'))
+  const zombieStorage = join(zombieHome, 'cron-tasks.json')
+  let releaseQueue
+  const parked = new Promise((resolve) => { releaseQueue = resolve })
+  const zombieDisposers = []
+  const zombieCtx = {
+    baseUrl: 'http://127.0.0.1:1',
+    logger: { info() {}, warn() {}, error() {} },
+    get: (key) => (key === 'agents'
+      ? { get: (id) => (id === 'session-live' ? { id } : undefined), list: () => [{ id: 'session-live' }] }
+      : undefined),
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') zombieDisposers.push(d); return d },
+    inject: undefined,
+    provide: (key, service) => { zombieCtx.provided ??= {}; zombieCtx.provided[key] = service },
+  }
+  applyCronAdmin(zombieCtx, { enqueue: (op) => parked.then(op), settings: { cronTasksPath: zombieStorage } })
+  const zombieService = zombieCtx.provided.cronAdmin
+  assert.ok(zombieService, 'zombie suite: cronAdmin provided')
+
+  // Queue an upsert; its body has NOT run (the queue is parked on release).
+  const upsertLanded = zombieService.upsert(validSteer())
+
+  // Unload the plugin BEFORE the body gets its turn.
+  for (const dispose of zombieDisposers) {
+    try { dispose() } catch { /* async disposers settle later */ }
+  }
+
+  // Now release the queue: the body runs post-teardown. Count the timers it
+  // arms — the module's setTimeout is the global, so a wrapper sees every one.
+  let timersArmed = 0
+  const originalSetTimeout = globalThis.setTimeout
+  globalThis.setTimeout = function (...args) { timersArmed += 1; return originalSetTimeout.apply(globalThis, args) }
+  try {
+    releaseQueue()
+    await upsertLanded
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+  }
+  assert.equal(timersArmed, 0,
+    'a queued upsert landing after teardown arms no timers (rearmAll is gated on disposal)')
+  assert.equal((await zombieService.list()).tasks.length, 1,
+    'the write itself still landed (the guard covers re-arming, not the store mutation)')
+  rmSync(zombieHome, { recursive: true, force: true })
+})
+
+/* ========================================================================== */
 /*                        Scheduler: actual timer fire                        */
 /* ========================================================================== */
 

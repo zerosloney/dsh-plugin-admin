@@ -65,6 +65,16 @@ await check('redaction covers hyphenated keys AND secret-looking VALUES under be
   assert.ok(urlUserinfo.includes('https://'), 'the scheme/host stay readable')
 })
 
+await check('redaction covers the passphrase and pwd key spellings (but not look-alikes)', () => {
+  // Two more key spellings that hold secrets in the wild; their values used to
+  // reach the trail in clear text whenever they matched no secret SHAPE.
+  const summary = summarizeArgs([{ passphrase: 'hunter2-passphrase', user_pwd: 'hunter2-pwd', pwdir: '/srv/static' }])
+  assert.ok(!summary.includes('hunter2-passphrase'), 'a passphrase key is redacted: ' + summary)
+  assert.ok(!summary.includes('hunter2-pwd'), 'a snake_cased pwd key is redacted: ' + summary)
+  assert.ok(summary.includes(REDACTED), 'redaction is visible, not silent')
+  assert.ok(summary.includes('/srv/static'), 'pwd does not swallow unrelated keys like pwdir')
+})
+
 await check('the audit file is created private (0600) where the filesystem has modes', async () => {
   const privateFile = join(dir, 'private-audit.jsonl')
   const log = createAuditLog({ path: privateFile, now: () => 1 })
@@ -213,6 +223,45 @@ await check('a failing trail write never changes the action it records', async (
   )
 })
 
+// A swallowed write failure used to leave ZERO diagnostics: a full disk or an
+// unwritable auditLogPath silently emptied the trail while every privileged
+// action kept succeeding. The recorder may carry a `warn` channel (wired from
+// createAuditLog's `logger` option), throttled to one line per failure streak.
+await check('a failing trail write warns once per streak and re-arms after a success', async () => {
+  const warnings = []
+  let failing = true
+  // A fake recorder stands in so the streak can HEAL mid-check, which no real
+  // broken path can do; `warn` has the shape createAuditLog wires.
+  const recorder = {
+    warn: (message) => warnings.push(message),
+    record: async () => { if (failing) throw new Error('ENOSPC: no space left on device') },
+  }
+  const service = { upsert: async (entry) => ({ ok: true, entry }) }
+  auditService(service, 'cronAdmin', recorder)
+  await service.upsert({ id: 'a' })
+  await service.upsert({ id: 'b' })
+  assert.equal(warnings.length, 1, 'a failure streak warns once, not once per action')
+  assert.match(warnings[0], /audit log write failed/, 'the warning names the failure')
+  failing = false
+  await service.upsert({ id: 'c' })
+  failing = true
+  await service.upsert({ id: 'd' })
+  assert.equal(warnings.length, 2, 'a successful write re-arms the warning for the next streak')
+})
+
+await check('createAuditLog wires the logger through for a real broken path', async () => {
+  // A path under a FILE cannot be created: the write fails for real, the
+  // action still resolves, and the warning surfaces exactly once.
+  const warnings = []
+  const broken = createAuditLog({ path: join(file, 'under-a-file.jsonl'), logger: { warn: (message) => warnings.push(message) } })
+  const service = { upsert: async () => ({ ok: true }) }
+  auditService(service, 'cronAdmin', broken)
+  assert.deepEqual(await service.upsert({ id: 'x' }), { ok: true }, 'the action still resolves when the trail cannot be written')
+  await service.upsert({ id: 'y' })
+  assert.equal(warnings.length, 1, 'the real write failure surfaces once through the logger')
+  assert.match(warnings[0], /audit log write failed/, 'the warning names the failure')
+})
+
 await check('the recorder creates a missing parent directory instead of failing every action', async () => {
   const nested = join(dir, 'nested', 'deeper', 'audit.jsonl')
   const log = createAuditLog({ path: nested })
@@ -262,4 +311,4 @@ await check('a namespace without a table row fails loud instead of wrapping noth
 
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-audit-log OK: ' + results.length + ' checks (recording, redaction, compaction, resilience, coverage)')
+console.log('verify-audit-log OK: ' + results.length + ' checks (recording, redaction, compaction, resilience, diagnostics, coverage)')

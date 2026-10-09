@@ -478,21 +478,37 @@ function setupMenuInjection(call, refreshSessions) {
       /** @param {(session: any) => void} cb */
       function resolveSessionFuzzy(cb) {
         fetchSessions(function (sessions) {
-          var match = null
           var nt = norm(title)
+          // 分两层匹配，且精确层优先：list() 按创建时间倒序（session-admin
+          // 的 list 新的在前），旧实现「遍历到第一个命中就 break」会让一个
+          // 更新的、标题只是**包含**目标名的会话（"A-refactor" 对 "A"）排在
+          // 精确匹配之前被选中，复制出去的 id 属于别的会话——而复制出来的
+          // id 正是删除/导出这些操作的输入，消费端全是精确匹配，错了不会报
+          // 错，只会操作到别的会话上。
+          var exact = []
           for (var i = 0; i < sessions.length; i++) {
-            var s = sessions[i]
-            var st = norm(s.title)
-            if (st === nt) { match = s; break }
-            // substring both ways (skip too-short needles)
-            if (nt.length > 3 && st.indexOf(nt) !== -1) { match = s; break }
-            if (st.length > 3 && nt.indexOf(st) !== -1) { match = s; break }
-            // fall back to cwd basename match
-            var cwdBase = s.cwd ? s.cwd.replace(/\\/g, '/').split('/').pop() : ''
-            if (cwdBase && (cwdBase === nt || nt.indexOf(cwdBase) !== -1 || cwdBase.indexOf(nt) !== -1)) { match = s; break }
+            if (norm(sessions[i].title) === nt) exact.push(sessions[i])
           }
-          if (match === null) { showToast('error', dshT('❌ 未找到匹配的会话')); return }
-          cb(match)
+          if (exact.length === 1) { cb(exact[0]); return }
+          if (exact.length > 1) {
+            showToast('error', dshT('❌ 存在 ') + String(exact.length) + dshT(' 个同名会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作'))
+            return
+          }
+          // 容错层（容忍 aria-label 被 `…` 截断的标题）：把所有候选都收齐，
+          // 唯一才动手，零个或多个都响亮失败——和删除会话（resolveSessionExact）
+          // 同样的安全姿态。
+          var tolerant = []
+          for (var j = 0; j < sessions.length; j++) {
+            var s = sessions[j]
+            var st = norm(s.title)
+            if (nt.length > 3 && st.indexOf(nt) !== -1) { tolerant.push(s); continue }
+            if (st.length > 3 && nt.indexOf(st) !== -1) { tolerant.push(s); continue }
+            var cwdBase = s.cwd ? s.cwd.replace(/\\/g, '/').split('/').pop() : ''
+            if (cwdBase && (cwdBase === nt || nt.indexOf(cwdBase) !== -1 || cwdBase.indexOf(nt) !== -1)) { tolerant.push(s) }
+          }
+          if (tolerant.length === 1) { cb(tolerant[0]); return }
+          if (tolerant.length === 0) { showToast('error', dshT('❌ 未找到匹配的会话')); return }
+          showToast('error', dshT('❌ 存在 ') + String(tolerant.length) + dshT(' 个匹配会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作'))
         })
       }
 
