@@ -4,6 +4,14 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [Unreleased]
+
+### Changed
+
+- **适配 dsh master 的两处 seam 迁移**（早预警落地，支持基线 0.2.0-rc.1 / 下限 0.1.7-rc.2 行为零变化）：
+  - **webhook 包迁址 `packages/webhook/webhook` → `packages/experimental/webhook`**：`register()/dispatch()` 泛型方法与 `MessageSourceMap.webhook`（kind/provider/source/deliveryId/ruleId/form）逐成员未变，插件运行时零改动；`integration-check` 的探针运行器支持跨 checkout 布局的候选文件列表（新路径优先、旧路径回退），两个 webhook 探针改挂双路径。
+  - **`subagents` 服务表面重构**：master 的 `SubagentRuntime` 移除公开的位置签名 `start(name, request)`，改为激活管理器 `startActivation(spec)`（provider/label/信号/delivery 提升进 spec）。`lib/workflow-engine.js` 的 `runAgent` 改为按成员存在性 duck-type 双形态——旧宿主照走 `start(name, request)`；新宿主走 `startActivation({ provider, label: 'workflow agent step', request, signal, delivery: 'caller' })`（`delivery: 'caller'` 让结果只返回给工作流、不进父会话模型流；Activation 的 `{ result, dispose }` 与旧 SubagentRun 在消费成员上同构，下游零改动）。两个表面都不存在时 fail-loud。`subagent-admin` 依赖的 `registerProvider/getProvider/list/interrupt/prompt` 在 master 上形状未变，实测无需适配。`subagents.start` seam 探针改为双形态取一（`startActivation` 文本或旧位置签名文本）。
+
 ## [1.27.14] - 2026-10-11
 
 ### Fixed

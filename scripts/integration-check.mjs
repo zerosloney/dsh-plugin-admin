@@ -214,7 +214,9 @@ const PROBES = [
   },
   {
     id: 'webhook source extension',
-    file: 'packages/webhook/webhook/src/types.ts',
+    // dsh main moved the webhook package to experimental/ (0.2.x keeps the old
+    // layout); the CONTRACT members are unchanged across both.
+    files: ['packages/experimental/webhook/src/types.ts', 'packages/webhook/webhook/src/types.ts'],
     checks: [
       ["MessageSourceMap webhook member (kind/provider/source/deliveryId/ruleId/form 'notice')", t => has("readonly kind: 'webhook'", "readonly form: 'notice'", 'readonly deliveryId', 'readonly ruleId')(blockOf(t, "declare module '@deepseek-ai/dsh-llm'"))],
     ],
@@ -228,7 +230,7 @@ const PROBES = [
   },
   {
     id: 'webhookRuntime seam',
-    file: 'packages/webhook/webhook/src/index.ts',
+    files: ['packages/experimental/webhook/src/index.ts', 'packages/webhook/webhook/src/index.ts'],
     checks: [
       ['register()/dispatch() exist (generic methods)', t => /\sregister[<(]/.test(t) && /\sdispatch[<(]/.test(t)],
     ],
@@ -505,9 +507,15 @@ const PROBES = [
     id: 'subagents.start seam (workflow engine)',
     file: 'packages/subagent/subagent/src/index.ts',
     checks: [
-      // workflow-engine spawns children through this exact shape; a signature
-      // drift here silently breaks every workflow agent() call.
-      ['start takes the provider name positionally: start(name, request)', t => t.includes('async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>')],
+      // workflow-engine spawns children through this surface; a signature
+      // drift here silently breaks every workflow agent() call. TWO shapes
+      // across supported hosts: dsh main replaced the public positional
+      // start() with the activation manager (`startActivation(spec:
+      // SubagentActivationSpec)` — the plugin duck-types that when present,
+      // see lib/workflow-engine.js runAgent), while ≤ 0.2.1.x exposes the
+      // positional `start(name, request)` the engine calls directly. Either
+      // satisfies the seam.
+      ['start surface: activation manager (dsh main) or positional start(name, request) (≤ 0.2.1)', t => t.includes('startActivation(spec: SubagentActivationSpec)') || t.includes('async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>')],
     ],
   },
   {
@@ -766,11 +774,23 @@ const PROBES = [
 const failures = []
 let passed = 0
 for (const probe of PROBES) {
-  const text = probe.file.endsWith('.yml')
-    ? readSource(probe.file)
-    : readSource(probe.file)
+  // `files` (when present) is an ordered candidate list across checkout
+  // layouts: upstream moves packages between releases (webhook →
+  // experimental/webhook on main), and the probe targets the CONTRACT, not
+  // one path. First existing candidate wins; `file` stays the single-path form.
+  const candidates = probe.files ?? [probe.file]
+  let text = null
+  let usedFile = null
+  for (const candidate of candidates) {
+    const source = readSource(candidate)
+    if (source !== null) {
+      text = source
+      usedFile = candidate
+      break
+    }
+  }
   if (text === null) {
-    failures.push(`${probe.id} — FILE NOT FOUND: ${probe.file} (checkout layout changed?)`)
+    failures.push(`${probe.id} — FILE NOT FOUND: ${candidates.join(' | ')} (checkout layout changed?)`)
     continue
   }
   for (const [description, check] of probe.checks) {
@@ -783,7 +803,7 @@ for (const probe of PROBES) {
     if (ok) {
       passed++
     } else {
-      failures.push(`${probe.id} — ${description}\n    at ${probe.file}`)
+      failures.push(`${probe.id} — ${description}\n    at ${usedFile}`)
     }
   }
 }
