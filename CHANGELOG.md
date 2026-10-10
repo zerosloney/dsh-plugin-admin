@@ -40,6 +40,7 @@
 - **sessions 面板的列表加载无乱序守卫；workspaces 批量取消归档逐项失败静默吞掉**（`src/client/panels/sessions.js` + `workspaces.js`）：慢的旧 `sessionAdmin/list` 后到会覆盖新列表（把刚删的会话又画回来）；批量失败与成功同样推进、无汇总。修复：`listSeq` 序号守卫（同文件 searchSeq 模式）；批量收集失败、结束汇总报错（照 sessions 批删的 failures 惯例，双语词条补齐，verify-i18n 奇偶 896↔896 保持）。
 - **web-search 横幅内嵌 markdown 星号以字面渲染；MCP playground 的迟到应答无 alive 守卫**（`src/client/panels/web-search.js` + `i18n.js` + `panels/mcp.js`）：面板无 markdown 渲染层，`**` 原样出现（中英词条同步去星号）；playground 执行工具的 `.then` 缺 `alive.current` 守卫（与同文件 reloadMcp/testMcpEntry 纪律不一），`renderMcpSection` → `renderMcpPlayground` 参数链穿透。
 - **web-search `saveConfig` 省略 `expectedRevision` 即绕过乐观锁**（`lib/web-search-admin.js`）：与宿主 settings API 语义一致（宿主同样可省）、面板恒带值——注释如实化该缺口而非改契约。
+- **workspacePath 闸门的 UNC/namespace 前置检查在 POSIX 上是死代码，发布管道（Release 工作流）自 v1.27.9 起一直红、npm 停在 1.27.8**（`lib/workspace-path.js`）：`canonicalWorkspacePath` 在 `resolve()` **之后**判 UNC——POSIX 的 `path.resolve('//host/share')` 把双前导斜杠折叠成 `/host/share`，`isUncPath(absolute)` 在 Linux 上永远扑空，`verify-workflow-tools` 的 outbound-SMB 守卫用例在 ubuntu CI 上自该闸门落地起就失败（`Release` 的 publish job 先跑全量门禁，失败即不发布——1.27.9–1.27.13 只有 git tag、从未到达 npm；Windows 上 resolve 保留 `\\`，本地全绿掩盖了它）。修复：形状判定按**调用方原始拼写**先行（纯字符串操作，跨平台确定；`/?/`、`//` 与 `\\` 拼写都在触碰文件系统之前拒绝），resolved 形态仍保留复检——win32 上 `//host/share` 会 resolve 成裸拼写不显示的 `\\` UNC。测试的第三条断言同步修正其错误前提（`/?/...` 以斜杠开头在 POSIX 本就是绝对路径，正确拒绝是 namespace 而非"非绝对"）。
 - 仓库卫生：根目录 14 个 `tmp-*` 调试残留清除（gitignore 早有规则，防 `git add -A` 误提交的教训文件）。
 
 ## [1.27.13] - 2026-10-09

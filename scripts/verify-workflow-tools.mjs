@@ -303,7 +303,11 @@ await check('the workspace gate refuses UNC / namespace paths BEFORE resolution 
   )
   assert.throws(
     () => canonicalWorkspacePath(process.platform === 'win32' ? '\\\\?\\C:\\temp\\proj' : '/?/C:/temp/proj'),
-    process.platform === 'win32' ? /namespace prefix/ : /must be an absolute path/,
+    // The POSIX branch used to expect /must be an absolute path/ — a wrong
+    // premise: `/?/...` starts with a slash, so it IS POSIX-absolute, and the
+    // gate's namespace check (judged on the caller's spelling since the
+    // leading-`//` resolve-collapse fix) fires before the fs sees it.
+    /namespace prefix/,
     'Win32 namespace prefix refused before the fs sees it',
   )
   // A real local directory still canonicalizes — the gate narrows the shapes,
