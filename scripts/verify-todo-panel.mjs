@@ -282,7 +282,10 @@ await checkAsync('fileStats caches per session within the TTL window', async () 
 
 await checkAsync('fileStats returns zeroes for sessions without a git workspace', async () => {
   const none = await sessionAdmin.fileStats('nope')
-  assert.deepEqual(none, { files: 0, added: 0, removed: 0, branch: null, changed: [], error: null })
+  // `missing: true` marks a session the persistence layer no longer knows
+  // (deleted mid-poll): a poll that cannot see the session must not read as
+  // "clean tree" — same honesty rule as the error branch.
+  assert.deepEqual(none, { files: 0, added: 0, removed: 0, branch: null, changed: [], error: null, missing: true })
   // A workspace with no cwd is "nothing to examine", NOT a failure: error must
   // stay null so the dock can tell the two apart.
   assert.equal(none.error, null, 'no workspace is not an error')
@@ -431,7 +434,7 @@ await checkAsync('gitDiff returns the workspace diff and flags nothing when smal
   assert.ok(out.diff.includes('TWO'), 'diff carries the change body')
   assert.equal(out.truncated, false)
   const none = await exportAdmin.gitDiff('ghost')
-  assert.deepEqual(none, { diff: '', truncated: false, error: null }, 'unknown session → empty, not error')
+  assert.deepEqual(none, { diff: '', truncated: false, error: null, missing: true }, 'unknown session → empty, not error (missing flags the vanished session)')
   assert.equal(out.error, null, 'a readable repo reports no error')
 })
 
@@ -539,10 +542,12 @@ check('foldHealthReport folds tools/turn-ends/retries', () => {
     { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { cause: 'user' } } } },
     { type: 'tool/call', data: { callId: 'c1', name: 'read', arguments: '{}' } },
-    { type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'c1' }] }, error: { name: 'FsError', code: 'FS_NOT_FOUND' } } },
+    // Real host shape (llm/llm message.ts): toolCallId is a TOP-LEVEL member of
+    // ToolResultMessage, set to the same block.id `tool/call` reports as callId.
+    { type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'boom' }] }, error: { name: 'FsError', code: 'FS_NOT_FOUND' } } },
     { type: 'assistant/attempt', data: { stream: [] } },
     { type: 'tool/call', data: { callId: 'c2', name: 'edit', arguments: '{}' } },
-    { type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'c2' }] } } },
+    { type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'c2', content: [{ type: 'text', text: 'ok' }] } } },
   ]
   const r = foldHealthReport(events)
   assert.equal(r.turns, 2)
@@ -555,7 +560,7 @@ check('foldHealthReport folds tools/turn-ends/retries', () => {
   assert.equal(byName.get('edit').errors, 0)
   assert.equal(r.topErrors[0].code, 'FS_NOT_FOUND')
   assert.ok(healthSummaryLine(r).includes('2 个 turn'))
-  assert.ok(healthSummaryLine(r).includes('1 次重试'))
+  assert.ok(healthSummaryLine(r).includes('1 次尝试'))
 })
 
 /* ============================ Browser half ============================ */

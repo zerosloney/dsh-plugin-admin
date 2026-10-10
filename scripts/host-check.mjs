@@ -1873,8 +1873,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 await mcp.upsert({ id: 'mcp-echo', config: { transport: 'stdio', serverName: 'echo', command: process.execPath, args: [echoServerPath] } })
 const echoCall = await mcp.callTool('mcp-echo', 'echo', { msg: 'ping' })
 assert.equal(echoCall.ok, true, 'echo tools/call succeeds: ' + (echoCall.ok ? '' : String(echoCall.error)))
-assert.equal(echoCall.value.isError, false, 'echo result is not flagged as an error')
-assert.equal(echoCall.value.text, 'echo:{"msg":"ping"}', 'echo result carries the call arguments')
+assert.equal(echoCall.toolCall.isError, false, 'echo result is not flagged as an error')
+assert.equal(echoCall.toolCall.text, 'echo:{"msg":"ping"}', 'echo result carries the call arguments')
 const unknownToolCall = await mcp.callTool('mcp-echo', 'nope', {})
 assert.equal(unknownToolCall.ok, false, 'unknown tool surfaces as ok:false')
 assert.match(unknownToolCall.error, /not offered/, 'unknown tool error names the offering')
@@ -2879,8 +2879,11 @@ assert.equal(toggleApplied.state, 'applied', 'disable authored')
 assert.deepEqual(toggleApplied.rows, ['toggle-tool', 'toggle-tool-extra'])
 const togglePatchPath = join(updateProfile, 'cordis.patch.yml')
 const togglePatchAfter = readFileSync(togglePatchPath, 'utf8')
-assert.ok(togglePatchAfter.includes('- id: toggle-tool\n  disabled: true'), 'disable row authored')
-assert.ok(togglePatchAfter.includes('- id: toggle-tool-extra\n  disabled: true'), 'second row disabled')
+// Ids are written JSON.stringify-quoted (overlay-admin's canonical shape):
+// the id text comes from an installed bundle's own patch, and a raw `x: y`
+// / `*z` id would break the boot-critical YAML.
+assert.ok(togglePatchAfter.includes('- id: "toggle-tool"\n  disabled: true'), 'disable row authored')
+assert.ok(togglePatchAfter.includes('- id: "toggle-tool-extra"\n  disabled: true'), 'second row disabled')
 const toggleListAfter = await ua.list()
 assert.equal(toggleListAfter.plugins.find((p) => p.name === 'dsh-toggle-tool').disabled, true, 'list reports disabled')
 // Idempotent: a second disable is a present no-op (file untouched).

@@ -235,6 +235,11 @@ export function SessionsSection(props) {
   // Search sequence guard: a slow older search must not overwrite a newer
   // one's hits when both are in flight.
   var searchSeq = useRef(0)
+  // Same discipline for the list itself: a slow sessionAdmin/list landing
+  // after a fresher one (actSession's reload racing a manual refresh) must
+  // not paint the older snapshot back — e.g. resurfacing a just-deleted
+  // session until the next refresh.
+  var listSeq = useRef(0)
 
   /**
    * Merge a partial state patch into the section state.
@@ -249,9 +254,10 @@ export function SessionsSection(props) {
   var callRemote = props.call
 
   function reloadSessions() {
+    var seq = ++listSeq.current
     patchSession({ busy: true, error: '' })
     callRemote('sessionAdmin/list', {}).then(function (result) {
-      if (!alive.current) return
+      if (!alive.current || seq !== listSeq.current) return
       if (result.ok) {
         patchSession({
           busy: false,
@@ -262,7 +268,7 @@ export function SessionsSection(props) {
         patchSession({ busy: false, error: dshT('加载会话失败：') + messageOf(result.error) })
       }
     }, function (failure) {
-      if (!alive.current) return
+      if (!alive.current || seq !== listSeq.current) return
       patchSession({ busy: false, error: dshT('调用失败：') + messageOf(failure) })
     })
   }

@@ -52,9 +52,14 @@ for (const match of src.matchAll(/^ {2}("(?:[^"\\]|\\.)*"): (""|"(?:[^"\\]|\\.)*
 }
 assert.ok(dict.size > 800, `I18N_EN entries parsed (found ${dict.size})`)
 
-// -- 3. the two exempt classes ----------------------------------------------
+// -- 3. the exempt classes ----------------------------------------------------
+// The CSS selector probes are GONE: the menu injection picks its aria-label
+// selector by currentLanguage() directly (a CSS selector is not copy, and a
+// future dictionary entry with the same text used to be able to silently
+// break the injection). Pin the count at 0 so a reintroduction of dshT'd
+// selectors fails HERE instead of shipping as a dictionary miss.
 const selectorProbes = [...callSites].filter((key) => key.startsWith('button['))
-assert.equal(selectorProbes.length, 2, 'exactly the 2 known CSS selector probes may lack entries')
+assert.equal(selectorProbes.length, 0, 'CSS selectors must not ride dshT (menu injection picks by currentLanguage)')
 
 // Nav-icon keys: single-quoted zh keys of the label-keyed dictionary.
 const iconKeys = new Set()
@@ -127,6 +132,12 @@ const ALLOWED_BARE_CJK = [
   // these would break the dock's icon detection.
   { text: '归档会话', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
   { text: '删除', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
+  // Menu-injection aria-label selectors (impl.js): same class as the DOM
+  // probes above — they match the HOST's rendered zh aria-labels. The
+  // language branch is explicit (currentLanguage()), so the Chinese inside
+  // is a selector operand, not copy to translate.
+  { file: 'impl.js', text: 'button[aria-label*="会话" i][aria-label*="操作" i]', why: '宿主 aria-label 选择器探针（按 currentLanguage 显式分支）' },
+  { file: 'impl.js', text: 'button[aria-label*="工作区" i][aria-label*="操作" i]', why: '宿主 aria-label 选择器探针（按 currentLanguage 显式分支）' },
   // Host-side log lines are not UI chrome; zh logs are the file's convention.
   { text: '官方已覆盖，让位面板：', why: '宿主日志文案，非界面 chrome' },
   // The language picker shows each language in its own name, like 'English'.

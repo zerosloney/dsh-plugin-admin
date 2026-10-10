@@ -274,17 +274,26 @@ export function WorkspacesSection(props) {
     if (state.archivedSessionIds.length === 0 || state.bulkUnarchiveBusy) return
     var ids = state.archivedSessionIds.slice()
     patch({ bulkUnarchiveBusy: true })
+    var failures = /** @type {string[]} */ ([])
     var step = function (/** @type {number} */ i) {
       if (i >= ids.length || !alive.current) {
         if (alive.current) {
           patch({ bulkUnarchiveBusy: false })
+          if (failures.length > 0) {
+            // 批量与批删同款：逐项失败必须有汇总——旧实现失败与成功同样推进，
+            // 转圈结束看起来像成功，残留的归档项毫无提示。
+            patch({ error: dshT('批量取消归档完成，') + String(failures.length) + dshT(' 项失败：') + failures[0] })
+          }
           reload()
         }
         return
       }
       call('workspaceAdmin/unarchiveSession', { sessionId: ids[i] }).then(function () {
         step(i + 1)
-      }, function () { step(i + 1) })
+      }, function (failure) {
+        failures.push(messageOf(failure))
+        step(i + 1)
+      })
     }
     step(0)
   }

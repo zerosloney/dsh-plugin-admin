@@ -371,10 +371,18 @@ function setupMenuInjection(call, refreshSessions) {
    * aria-label is: 会话"<title>"的操作 (zh) / Session "<title>" actions (en).
    * Extracting from the DOM keeps the injection synchronous — no RPC needed
    * just to show the button, so the menu can't close before it appears.
+   *
+   * The selector picks by the UI's CURRENT language (currentLanguage()), not
+   * through dshT: a CSS selector is not copy — piping it through the
+   * dictionary made the injection silently break if anyone ever "translated"
+   * that key (dshT returns unknown keys verbatim, so tests could not catch
+   * the collision either).
    */
   /** @param {any} row - the treeitem DOM element. */
   function sessionTitleFromRow(row) {
-    var btn = row.querySelector(dshT('button[aria-label*="会话" i][aria-label*="操作" i], button[aria-label*="session" i][aria-label*="actions" i]'))
+    var btn = row.querySelector(currentLanguage() === 'en'
+      ? 'button[aria-label*="session" i][aria-label*="actions" i]'
+      : 'button[aria-label*="会话" i][aria-label*="操作" i]')
     if (btn === null) return null
     var label = btn.getAttribute('aria-label') || ''
     // zh: 会话"xxx"的操作 → strip 会话"/"的操作
@@ -394,12 +402,14 @@ function setupMenuInjection(call, refreshSessions) {
     var allRows = document.querySelectorAll('[role="treeitem"]')
     if (allRows.length === 0) return null
     var rows = []
+    // Only rows that contain a session/workspace action button (selector by
+    // current language — see sessionTitleFromRow above for why this must not
+    // ride dshT).
+    var actionable = currentLanguage() === 'en'
+      ? 'button[aria-label*="session" i][aria-label*="actions" i], button[aria-label*="workspace" i][aria-label*="actions" i]'
+      : 'button[aria-label*="会话" i][aria-label*="操作" i], button[aria-label*="工作区" i][aria-label*="操作" i]'
     for (var i = 0; i < allRows.length; i++) {
-      var r = allRows[i]
-      // Only rows that contain a session/workspace action button
-      if (r.querySelector(dshT('button[aria-label*="会话" i][aria-label*="操作" i], button[aria-label*="工作区" i][aria-label*="操作" i], button[aria-label*="session" i][aria-label*="actions" i], button[aria-label*="workspace" i][aria-label*="actions" i]'))) {
-        rows.push(r)
-      }
+      if (allRows[i].querySelector(actionable)) rows.push(allRows[i])
     }
     if (rows.length === 0) return null
 

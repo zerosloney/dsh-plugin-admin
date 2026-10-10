@@ -247,7 +247,7 @@ await check('each write uses its own temp path and leaves none behind', async ()
     [],
     'no temp file survives a completed write',
   )
-  assert.equal(readFileSync(target, 'utf8'), '# three\n', 'the last write won')
+  assert.equal(readFileSync(target, 'utf8'), '# three\n[]\n', 'the last write won (comment-only lines ride above the [] the host requires)')
 })
 
 await check('the patch and its rolling backup are created owner-only', async () => {

@@ -314,8 +314,11 @@ export function updateCheckNote(map, checkedCount) {
  * @param {McpPlayground} pg - the open bench: { entryId, serverName, tools, toolRequired, tool, argsText, busy, result, error }.
  * @param {(partial: Record<string, any>) => void} patch - merge into the bench.
  * @param {(method: string, args: Record<string, any>) => Promise<any>} callRemote - the RPC seam.
+ * @param {{ current: boolean }} [aliveRef] - the section's liveness ref; when
+ *   given, a late RPC answer after unmount is dropped (same discipline as
+ *   reloadMcp/testMcpEntry).
  */
-export function renderMcpPlayground(pg, patch, callRemote) {
+export function renderMcpPlayground(pg, patch, callRemote, aliveRef) {
   // Required params of the selected tool (from the probe's inputSchema
   // extraction); empty when unknown or the tool declares none.
   var requiredList = pg.toolRequired
@@ -390,9 +393,12 @@ export function renderMcpPlayground(pg, patch, callRemote) {
             }
             patch({ busy: true, result: null, error: null })
             callRemote('mcpAdmin/callTool', { id: pg.entryId, tool: pg.tool, args: parsed }).then(function (result) {
+              // 与同文件 reloadMcp/testMcpEntry 的纪律一致：卸载后的迟到应答不落 patch。
+              if (aliveRef !== undefined && !aliveRef.current) return
               if (result.ok) patch({ busy: false, result: result.value })
               else patch({ busy: false, error: messageOf(result.error) })
             }, function (failure) {
+              if (aliveRef !== undefined && !aliveRef.current) return
               patch({ busy: false, error: messageOf(failure) })
             })
           },
@@ -806,7 +812,7 @@ export function McpSection(props) {
   kit.mount(reloadMcp)
 
   return createElement('div', { 'data-dsh-admin-section': '', className: mView.mcpEditorOpen ? 'mcp-editor-open' : '' },
-    renderMcpSection(mView, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote))
+    renderMcpSection(mView, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote, alive))
 }
 
 /**
@@ -826,8 +832,10 @@ export function McpSection(props) {
  * @param {(id: string) => void} testMcpEntry - run one connectivity probe.
  * @param {(entry: McpListEntry) => void} openMcpPlayground - open the invocation bench for a row.
  * @param {(method: string, args: Record<string, any>) => Promise<any>} callRemote - the RPC seam.
+ * @param {{ current: boolean }} [aliveRef] - the section's liveness ref, forwarded
+ *   to the playground so a late tools/call answer after unmount is dropped.
  */
-export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote) {
+export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, reloadMcp, openMcpEditor, closeMcpEditor, saveMcpDraft, removeMcpEntry, testMcpEntry, openMcpPlayground, callRemote, aliveRef) {
   var children = []
   var header = createElement('div', { className: 'group-header', key: 'mcp-header', style: { marginTop: 0 } },
     createElement('span', { className: 'group-title', key: 't' }, dshT('🔌 MCP 配置')),
@@ -1152,7 +1160,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
   // MCP playground: pick a tool from the last probe's list, paste JSON
   // arguments, run it for real, and read the normalized result.
   if (view.mcpPlayground !== null && !view.mcpEditorOpen) {
-    children.push(renderMcpPlayground(view.mcpPlayground, patchPlayground, callRemote))
+    children.push(renderMcpPlayground(view.mcpPlayground, patchPlayground, callRemote, aliveRef))
   }
 
   return createElement('div', { key: 'mcp-section', style: { display: 'flex', flexDirection: 'column', gap: '10px' } }, children)

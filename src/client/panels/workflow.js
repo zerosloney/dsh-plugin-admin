@@ -293,8 +293,11 @@ export function WorkflowSection(props) {
     patch({ savedBusy: true, savedError: '' })
     call('workflowAdmin/saveSaved', { spec: ed }).then(function (res) {
       if (!alive.current) return
-      if (res.ok) { patch({ savedBusy: false, savedEditor: null }); showToast('success', dshT('💾 已保存：') + ed.name); reload() }
-      else patch({ savedBusy: false, savedError: messageOf(res.error) })
+      // 网关把宿主返回包在 { ok, value | error } 里；写路径一律先解包再读业务字段
+      // （服务端 saveSaved 的 { ok: false, error } 是业务层失败，传输层恒 ok:true）。
+      var r = res && res.ok ? res.value : null
+      if (r && r.ok) { patch({ savedBusy: false, savedEditor: null }); showToast('success', dshT('💾 已保存：') + ed.name); reload() }
+      else patch({ savedBusy: false, savedError: (r && r.error) || (res && res.error ? messageOf(res.error) : '') || dshT('未知错误') })
     }, function (e) {
       if (!alive.current) return
       patch({ savedBusy: false, savedError: messageOf(e) })
@@ -307,8 +310,10 @@ export function WorkflowSection(props) {
     call('workflowAdmin/deleteSaved', { spec: { name: name, scope: scope } }).then(function (res) {
       runActionBusy.current = false
       if (!alive.current) return
-      if (res.ok) { patch({ confirmDelete: null }); showToast('success', dshT('🗑 已删除：') + name); reload() }
-      else showToast('error', messageOf(res.error))
+      // 同 saveSaved：先解网关信封再读业务层 ok（删除失败/不存在时业务层 ok:false）。
+      var r = res && res.ok ? res.value : null
+      if (r && r.ok) { patch({ confirmDelete: null }); showToast('success', dshT('🗑 已删除：') + name); reload() }
+      else showToast('error', dshT('❌ 删除失败：') + ((r && r.error) || (res && res.error ? messageOf(res.error) : '') || dshT('未知错误')))
     }, function (e) {
       runActionBusy.current = false
       showToast('error', dshT('❌ 删除失败：') + messageOf(e))

@@ -289,7 +289,8 @@ export function WebSearchSection(props) {
   var elements = []
   elements.push(createElement('div', { className: 'hint', key: 'restart-banner',
     style: { background: 'var(--dsw-alias-bg-layer-2)', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4))' } },
-    dshT('🔁 切换 provider / 安装 / 卸载 后需**重启 dsh** 生效；⚙ 配置里带 settings 命名空间的 provider 保存后即时生效，写 cordis 行的需重启'),
+    // 纯文本渲染（本面板无 markdown 层）：不写 ** 标记，星号会以字面出现。
+    dshT('🔁 切换 provider / 安装 / 卸载 后需重启 dsh 生效；⚙ 配置里带 settings 命名空间的 provider 保存后即时生效，写 cordis 行的需重启'),
   ))
   if (state.busy) {
     elements.push(createElement('div', { className: 'busy-banner', key: 'busy' },

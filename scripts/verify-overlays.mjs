@@ -310,8 +310,8 @@ await checkAsync('writePatch keeps the replaced revision in the .bak beside the 
   writePatch(patchPath, ['# first'])
   assert.ok(!existsSync(patchPath + PATCH_BACKUP_SUFFIX), 'the first write has no previous revision to keep')
   writePatch(patchPath, ['# second'])
-  assert.equal(readFileSync(patchPath + PATCH_BACKUP_SUFFIX, 'utf8'), '# first\n', 'backup holds the revision the write replaced')
-  assert.equal(readFileSync(patchPath, 'utf8'), '# second\n', 'the patch holds the new revision')
+  assert.equal(readFileSync(patchPath + PATCH_BACKUP_SUFFIX, 'utf8'), '# first\n[]\n', 'backup holds the revision the write replaced (comment-only text is normalized to a valid empty sequence)')
+  assert.equal(readFileSync(patchPath, 'utf8'), '# second\n[]\n', 'the patch holds the new revision (comment-only lines ride above the [] the host requires)')
 })
 
 console.log(results.join('\n'))
