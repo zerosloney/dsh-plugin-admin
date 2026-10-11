@@ -16,6 +16,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { sep } from 'node:path'
 import {
   compileScript,
   createSemaphore,
@@ -519,6 +520,72 @@ await checkAsync('a non-confining executor runs with no sandbox policy service',
   const result = await facade.shell('echo hi')
   assert.equal(result.exitCode, 0)
   assert.ok(!('sandboxPolicy' in ctx.get('shell')._specs().at(-1)), 'no policy field is fabricated for a non-confining executor')
+})
+
+await checkAsync('shell() workdir defaults to the parent session cwd (bash-tool parity)', async () => {
+  // tool-bash 的 resolveWorkdir：缺省 workdir 落会话 header cwd，而不是留给
+  // 执行器默认（部署 config cwd / process.cwd）——否则脚本会在 dsh 进程目录
+  // 拿到「真实的」错误数据。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { facade } = createRunner({
+    ctx, parent: { session: { header: { cwd: '/session-cwd' } } },
+    signal: controller.signal, semaphore: createSemaphore(1),
+  })
+  await facade.shell('git status')
+  assert.equal(ctx.get('shell')._specs().at(-1).workdir, '/session-cwd', 'the default workdir is the session cwd')
+})
+
+await checkAsync('shell() expands a relative workdir against the session cwd, verbatim', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { facade } = createRunner({
+    ctx, parent: { session: { header: { cwd: '/session-cwd' } } },
+    signal: controller.signal, semaphore: createSemaphore(1),
+  })
+  await facade.shell('ls', { workdir: 'sub/dir' })
+  // 原样拼接（sep 连接），不走 path.join 归一——执行器与围栏看到同一份字面
+  // 路径，与 tool-bash 同款。
+  assert.equal(ctx.get('shell')._specs().at(-1).workdir, `/session-cwd${sep}sub/dir`)
+})
+
+await checkAsync('shell() passes an explicit absolute workdir through untouched', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { facade } = createRunner({
+    ctx, parent: { session: { header: { cwd: '/session-cwd' } } },
+    signal: controller.signal, semaphore: createSemaphore(1),
+  })
+  await facade.shell('ls', { workdir: '/elsewhere' })
+  assert.equal(ctx.get('shell')._specs().at(-1).workdir, '/elsewhere')
+})
+
+await checkAsync('shell() prefers the sandbox fence root over the header cwd', async () => {
+  // tool-bash：policyWorkspaceRoot ?? headerCwd——围栏根与会话 cwd 不同时，
+  // workdir 与围栏边界必须是同一个身份。
+  const { ctx } = mockCtx({
+    sandboxMode: 'workspace-write',
+    sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: '/fence-root' }) },
+  })
+  const controller = new AbortController()
+  const { facade } = createRunner({
+    ctx, parent: { session: { header: { cwd: '/session-cwd' } } },
+    signal: controller.signal, semaphore: createSemaphore(1),
+  })
+  await facade.shell('git status')
+  const spec = ctx.get('shell')._specs().at(-1)
+  assert.equal(spec.workdir, '/fence-root', 'the fence root wins')
+  await facade.shell('ls', { workdir: 'sub' })
+  assert.equal(ctx.get('shell')._specs().at(-1).workdir, `/fence-root${sep}sub`, 'relative workdir resolves against the fence root')
+})
+
+await checkAsync('shell() fabricates no workdir when the parent carries neither session nor cwd', async () => {
+  // 无围栏 + 无会话 cwd（eval 之外的裸桩形状）：保持旧行为，留给执行器默认。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { facade } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  await facade.shell('echo hi')
+  assert.ok(!('workdir' in ctx.get('shell')._specs().at(-1)), 'no workdir field is fabricated')
 })
 
 await checkAsync('require / import are blocked in sandbox', async () => {

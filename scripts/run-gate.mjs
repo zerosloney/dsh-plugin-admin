@@ -56,6 +56,7 @@ const STEPS = [
   { name: 'verify-cron-admin', desc: 'cron parse/arm/fire semantics, storage envelope, early-wake + two-process races', cmd: [node, 'scripts/verify-cron-admin.mjs'] },
   { name: 'verify-cron-panel', desc: 'automation panel in jsdom: cron tab list/toggle/editor', cmd: [node, 'scripts/verify-cron-panel.mjs'] },
   { name: 'verify-overlays', desc: 'runtime overlay enable: patch-row match/insert semantics', cmd: [node, 'scripts/verify-overlays.mjs'] },
+  { name: 'verify-mcp-admin', desc: 'mcpAdmin remove/list: boot-critical patch shape on removal (empty-sequence normalization, siblings, audit)', cmd: [node, 'scripts/verify-mcp-admin.mjs'] },
   { name: 'verify-peer-compat', desc: 'install peer-compatibility preflight: semver parse + dsh range', cmd: [node, 'scripts/verify-peer-compat.mjs'] },
   { name: 'verify-workspace-admin', desc: 'workspaceAdmin RPC: no-registry hint + CRUD round-trips', cmd: [node, 'scripts/verify-workspace-admin.mjs'] },
   { name: 'verify-skills-admin', desc: 'skills listing: three-scope merge, strict read-only', cmd: [node, 'scripts/verify-skills-admin.mjs'] },

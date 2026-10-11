@@ -949,6 +949,94 @@ await check('a shell step that TIMED OUT is not cached — amend re-runs it', as
   assert.equal(shellCalls, 2, 'the timed-out step re-ran instead of replaying the timeout from cache')
 })
 
+await check('an outcome over the step-field budget degrades on disk and is never replayed from cache — amend re-runs it', async () => {
+  let agentCalls = 0
+  const bundle = makeCtx()
+  bundle.ctx.get = (key) => {
+    if (key === 'subagents') {
+      return {
+        start: async (_name, request) => {
+          agentCalls += 1
+          // 第一次调用产出超预算报告（> 8192 字符），续跑产出短值——若降级
+          // 预览被回放，脚本拿到的会是 8197 字符的残片而不是 fresh 短值。
+          const text = agentCalls === 1 ? 'x'.repeat(9000) : 'fresh-short'
+          return {
+            result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text }] }),
+            dispose: async () => {},
+          }
+        },
+      }
+    }
+    return undefined
+  }
+  const home = join(tmpBase, 'oversized-outcome-cache')
+  const r = makeRegistry(bundle.ctx, home)
+  const script = `const a = await agent('big report')\nreturn a.length`
+  const { id } = await r.start({ script, parent: { id: 'sess-oversize' } })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'completed')
+  assert.equal(agentCalls, 1)
+  assert.equal(rec.result, 9000, 'the live value is the full report')
+
+  // 落盘投影：该步骤的 after 条目降级为截断预览并带旗标。
+  const dir = join(home, 'workflows', 'runs')
+  const stepLines = readFileSync(join(dir, id + '.steps.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  const after = stepLines.find((s) => s.phase === 'after' && s.kind === 'agent')
+  assert.ok(after, 'the agent step has an after entry')
+  assert.equal(after.outcomeTruncated, true, 'the degraded entry carries the flag')
+  assert.equal(after.outcome.length, 8197, 'the persisted outcome is the exact truncated preview (budget + marker)')
+
+  // amend 同脚本：降级条目必须被跳过——回放截断预览是给错值，重跑才是
+  // 「多花调用」。
+  const res2 = await r.amend(id, script, { parent: { id: 'sess-oversize' } })
+  const rec2 = await runToDone(res2, r)
+  assert.equal(rec2.status, 'completed')
+  assert.equal(agentCalls, 2, 'the degraded step re-ran instead of replaying the truncated preview')
+  assert.equal(rec2.result, 'fresh-short'.length, 'the amended run got the fresh value, not the preview')
+})
+
+await check('a small outcome still hits the cache (the budget guard does not over-trigger)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'small-outcome-cache')
+  const r = makeRegistry(bundle.ctx, home)
+  const script = `const a = await agent('small')\nreturn a`
+  const { id } = await r.start({ script, parent: { id: 'sess-small' } })
+  await runToDone({ id }, r)
+  const callsBefore = bundle.agentCalls()
+  const res2 = await r.amend(id, script, { parent: { id: 'sess-small' } })
+  const rec2 = await runToDone(res2, r)
+  assert.equal(rec2.status, 'completed')
+  assert.equal(bundle.agentCalls() - callsBefore, 0, 'a small outcome still hits the cache')
+  assert.equal(rec2.result, 'result:small')
+})
+
+await check('a LEGACY degraded preview (pre-flag journal shape) is still not cached', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'legacy-degraded-cache')
+  const r = makeRegistry(bundle.ctx, home)
+  const script = `const a = await agent('legacy')\nreturn a`
+  const { id } = await r.start({ script, parent: { id: 'sess-legacy' } })
+  await runToDone({ id }, r)
+  // 手工把 after 条目改写成旧格式（截断预览形状、无 outcomeTruncated 旗标），
+  // 模拟旗标引入之前落盘的 journal——精确长度 + 截断标记的启发式应识别它。
+  const dir = join(home, 'workflows', 'runs')
+  const stepsPath = join(dir, id + '.steps.jsonl')
+  const lines = readFileSync(stepsPath, 'utf8').trim().split('\n').filter(Boolean)
+  const rewritten = lines.map((l) => {
+    const s = JSON.parse(l)
+    if (s.phase !== 'after') return l
+    s.outcome = 'y'.repeat(8192) + '…[截断]'
+    return JSON.stringify(s)
+  })
+  writeFileSync(stepsPath, rewritten.join('\n') + '\n')
+  const callsBefore = bundle.agentCalls()
+  const res2 = await r.amend(id, script, { parent: { id: 'sess-legacy' } })
+  const rec2 = await runToDone(res2, r)
+  assert.equal(rec2.status, 'completed')
+  assert.equal(bundle.agentCalls() - callsBefore, 1, 'the legacy degraded step re-ran instead of replaying the preview')
+  assert.equal(rec2.result, 'result:legacy', 'the amended run got the fresh value')
+})
+
 // ─── 清理 ─────────────────────────────────────────────────────────────────────
 
 rmSync(tmpBase, { recursive: true, force: true })

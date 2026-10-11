@@ -4,7 +4,13 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
-## [Unreleased]
+## [1.27.15] - 2026-10-11
+
+### Fixed
+
+- **`mcpAdmin/remove` 删光最后一个 MCP 条目把 cordis.patch.yml 写成裸换行，宿主下次启动即拒**（`lib/mcp-admin.js`）：remove 的 mutate 回调把残行 `.join('\n').trimEnd() + '\n'` 成**字符串**返回，而 `writePatchHoldingLock` 只对**数组**走 `patchLinesToText` 的空表归一——全仓唯一绕过该兜底的写路径。新 profile 上「面板添加一个 server → 删除 → 重启」即可复现：盘上 patch 变 `"\n"`，`yaml.load` 得 undefined，宿主按 boot-critical 契约抛「must be a top-level YAML array」拒绝启动，RPC 本身却返回 `ok:true`。修复：返回 lines 数组交给 `patchLinesToText`（与 setEnabled/overlay/web-search 全部写路径对齐）——空表归一为 `[]`（注释保留其上），正常内容逐字节不变。新 `verify-mcp-admin.mjs` 盯落盘字节：0 → 6 checks（删光→`[]`、带头注释→`# x\n[]`、同块/异块兄弟存活、拒绝写不留字节、审计留痕）；此前 mcp-admin 宿主半没有任何 verify 脚本覆盖。
+- **workflow 的 amend/resume 把「截断降级后的产物」当真值回放给脚本**（`lib/workflow-runs.js`）：步骤落盘对超 8192 字符的 outcome 做降级投影（对象折成截断 JSON 预览字符串），而降级发生在入列时、内存与 JSONL 同源——amend/resume 的缓存表恰从这些降级条目构建，命中后原样回放。三类后果：agent 步骤的长报告回放残片；shell 结果对象降级成字符串后 `result.exitCode` 变 `undefined`，控制流静默走偏；`timedOut` 嗅探要求对象形状，超帽的超时 shell 步骤被当成功值缓存（与「缓存住超时会让续跑永远回放那个超时」的既有意图相反）。违反缓存的方向承诺（「多花调用，不给错值」）。修复：`journalOutcome` 把降级判定改为「值 + 旗标」双返回，降级条目带 `outcomeTruncated` 落盘，缓存加载把它与 null/超时同列（瞬时失败语义，重跑）；旗标引入前的旧 journal 按「精确长度（8197）+ 截断标记」启发式识别（误判代价只是一次重跑，绝不是错值）。`verify-workflow-runs`：37 → 40 checks（超帽 outcome 落盘带旗标且 amend 重跑拿新值、小产物仍命中缓存、旧格式残片不回放）。
+- **workflow `shell()` 缺省 workdir 落在 dsh 进程目录而非会话工作区**（`lib/workflow-engine.js`）：缺省时 spec 不带 workdir，执行器默认链 `config cwd ?? process.cwd()` 兜底——脚本写 `shell('git status')` 会在部署启动目录拿到「真实的」错误数据，相对 `workdir` 也按进程 cwd 解析；官方 bash 工具（`tool-bash` 的 `resolveWorkdir`）总是显式落会话工作区。修复：与官方工具同款解析——围栏根（`sandboxPolicy.workspaceRoot`）优先、其次会话 `header.cwd`，缺省落之；相对 `workdir` 相对它原样展开（`sep` 拼接不归一，执行器与围栏看到同一份字面路径）；两者皆缺（无围栏 + 无会话 cwd）维持旧行为不造假字段。步骤缓存键不受影响（键材料仍是显式 opts）。`verify-workflow-engine`：58 → 63 checks（缺省落会话 cwd、相对展开、绝对透传、围栏根优先、无据可依不造假字段）。
 
 ### Changed
 
