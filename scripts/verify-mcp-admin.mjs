@@ -22,6 +22,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 const { applyMcpAdmin } = await import(new URL('../lib/mcp-admin.js', import.meta.url).href)
 const { createAuditLog } = await import(new URL('../lib/audit-log.js', import.meta.url).href)
+const { validateMcpConfig } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
 
 let failures = 0
 async function check(name, fn) {
@@ -152,6 +153,44 @@ await check('remove leaves an audit row', async () => {
   } finally {
     fx.cleanup()
   }
+})
+
+await check('write boundary: control characters (newline = cmd.exe command separator) are refused in args and command', async () => {
+  // The .cmd-shim injection vector the quote gate missed: cmd.exe is a
+  // LINE-oriented parser, so a \n inside an args entry acts as a command
+  // separator inside the /d /s /c wrapper — no quote, no %, both earlier
+  // gates pass. validateMcpConfig is the write boundary every persisted row
+  // crosses, so the refusal here keeps a hostile config off the disk (and
+  // the real dsh-mcp-client launch, which wraps the same way).
+  assert.throws(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', args: ['-y', 'pkg\ncalc.exe'] }),
+    /must not contain control characters/,
+    'a newline in an args entry is refused',
+  )
+  assert.throws(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', args: ['-y', 'pkg\r-x'] }),
+    /must not contain control characters/,
+    'a carriage return in an args entry is refused',
+  )
+  // Inline command (args empty): splitCommandLine keeps a newline as token
+  // CONTENT, so it rides into the wrapper through escapeCmdArg's quoting —
+  // gated regardless of args.
+  assert.throws(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx -y pkg\ncalc.exe' }),
+    /must not contain control characters/,
+    'a newline in an inline command is refused',
+  )
+  // env values are environment-block material, not command-line material: a
+  // newline there is odd but not an injection vector, so the gate stays off
+  // that map (scoped exactly to the surfaces that cross the cmd.exe line).
+  assert.doesNotThrow(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', args: ['-y', 'pkg'], env: { KEY: 'a\nb' } }),
+    'env values are not gated (no command-line path)',
+  )
+  // Clean configs still pass: the gate cannot misfire on real argv tokens.
+  validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', args: ['-y', 'pkg-name@^1.2'] })
+  validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx -y pkg-name' })
+  validateMcpConfig({ transport: 'streamable-http', serverName: 's', url: 'https://example.com/mcp' })
 })
 
 if (failures > 0) {

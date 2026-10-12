@@ -70,6 +70,30 @@ await check('assertStoreReadable throws a typed error for newer and unmigratable
   assert.doesNotThrow(() => assertStoreReadable({ status: 'ok', version: 2, supported: 2 }, 'x'))
 })
 
+await check('a migration returning nothing is a broken migration, not an empty one', () => {
+  // The old form kept the OLD data but still marked the step applied — the
+  // result stamped `version: current` onto the stale shape, and the next save
+  // wrote the misinterpreted data back. A null/undefined migrate result must
+  // be a dead end the caller refuses loudly.
+  const broken = readStore({ version: 1, entries: [{ id: 'a' }] }, {
+    current: 2,
+    migrations: [{ from: 1, to: 2, migrate: () => null }],
+  })
+  assert.equal(broken.status, 'unmigratable', 'a null migration result refuses instead of faking success')
+  assert.match(String(broken.reason), /1→2/, 'the dead step is named in the reason')
+  assert.equal(broken.data.version, 1, 'the raw file is reported untouched (never re-stamped)')
+  const noReturn = readStore({ version: 1 }, {
+    current: 2,
+    migrations: [{ from: 1, to: 2, migrate: () => undefined }],
+  })
+  assert.equal(noReturn.status, 'unmigratable', 'undefined behaves like null')
+  assert.throws(
+    () => assertStoreReadable(broken, '损坏的存储'),
+    (error) => error instanceof StoreVersionError,
+    'the dead end walks the loud refusal path callers already branch on',
+  )
+})
+
 await check('the usage ledger refuses a file from a newer plugin', () => {
   const ledger = join(dir, 'usage-ledger.json')
   writeFileSync(ledger, JSON.stringify({ version: 99, entries: [{ sessionId: 's', input: 1, output: 2 }] }))

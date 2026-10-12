@@ -107,6 +107,23 @@ await check('delete removes the right scope', async () => {
   assert.equal(lib.getSaved('gone', ws).scope, 'global')
 })
 
+await check('saveSaved refuses a garbage scope instead of silently writing global', async () => {
+  const home = join(tmpBase, 'f')
+  const lib = createWorkflowLibrary({ dshHome: home, enqueue })
+  await lib.saveSaved({ name: 'keep', scope: 'global', script: 'original' })
+  // '非 project 一律写全局' 的改道曾把 'gloabl'/'Global' 等拼写错误静默落到
+  // **全局同名位置**，覆盖旧记录——改道方向必须 fail-loud（deleteSaved 同款栅门）。
+  await assert.rejects(
+    () => lib.saveSaved({ name: 'keep', scope: 'gloabl', script: 'overwrite!' }),
+    /scope must be 'global' or 'project'/,
+    'a typo scope is refused, not rerouted',
+  )
+  assert.equal(lib.getSaved('keep').script, 'original', 'the global record survived untouched')
+  // undefined 沿用全局默认，照常可写。
+  await lib.saveSaved({ name: 'defaulted', script: 'ok' })
+  assert.equal(lib.getSaved('defaulted').scope, 'global', 'undefined scope still defaults to global')
+})
+
 await check('invalid name rejected', async () => {
   const home = join(tmpBase, 'f')
   const lib = createWorkflowLibrary({ dshHome: home, enqueue })

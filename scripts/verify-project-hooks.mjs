@@ -29,6 +29,9 @@
  *     not unlock session one;
  * 12. trust gate: an unconfirmed session's SessionStart hooks are captured
  *     without asking and replayed right after the in-turn confirmation;
+ * 12b. trust gate: a SessionStart-ONLY project still gets its ask — the
+ *     empty-group in-turn branch fires the ask for the pending capture (the
+ *     capture used to wait for a confirmation no trigger would ever make);
  * 13. trust gate: absent approval service fails closed with one warning;
  * 14. trust gate: disposing a session drops its decisions (a resumed session
  *     id re-asks);
@@ -581,6 +584,40 @@ try {
     assert.equal(approval.requests.length, 1, 'one ask covers the session')
     const injected = ssAgent.injected.map(message => message.content?.[0]?.text)
     assert.ok(injected.includes('replayed boot ctx'), 'replayed SessionStart context lands')
+  })
+
+  await check('trust gate: a SessionStart-only project still gets its ask from an in-turn trigger (the capture no longer waits forever)', async () => {
+    const shell = makeShell()
+    const approval = makeApproval(['allowed-once'])
+    const onlyCtx = makeStubCtx(shell, approval)
+    applyProjectHooks(onlyCtx, {})
+    const onlyAgent = makeAgent('ss-only', projectDir)
+    // SessionStart is the project's ONLY configured event: SessionStart itself
+    // fires with canAsk=false (capture only), and every in-turn event of this
+    // project finds an empty group for its own event. That combination used to
+    // return before any ask — the capture waited for a confirmation no trigger
+    // would ever make and the log promised a replay that never came.
+    writeHooks({ SessionStart: [{ hooks: [{ command: 'boot-only.sh' }] }] })
+    onlyCtx.listeners.get('agent/session-start')({ agent: onlyAgent, source: 'startup' })
+    await sleep(80)
+    assert.equal(shell.calls.length, 0, 'captured, not run')
+    assert.equal(approval.requests.length, 0, 'no ask outside an open turn')
+
+    // An in-turn trigger of the SAME project (pre-step, whose own event has no
+    // groups) is the ask's last chance: the empty-group branch now fires the
+    // ask, and the gate's own settled handler drains the capture on allow.
+    shell.queue({ exitCode: 0, stdout: { text: '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"late boot ctx"}}' }, stderr: { text: '' } })
+    const downstream = await onlyCtx.listeners.get('agent/pre-step')(
+      { agent: onlyAgent, messages: [{ content: [{ type: 'text', text: 'hi' }] }], signal: signalOf() },
+      async () => ({ kind: 'enter', messages: [] }),
+    )
+    assert.equal(downstream.kind, 'enter', 'the event itself has no hooks, the pipeline proceeds')
+    await sleep(80)
+    assert.equal(approval.requests.length, 1, 'the empty-group trigger asked for the project')
+    const commands = shell.calls.map(call => call.command)
+    assert.ok(commands.includes('boot-only.sh'), 'the captured SessionStart drained after the kick ask')
+    const injected = onlyAgent.injected.map(message => message.content?.[0]?.text)
+    assert.ok(injected.includes('late boot ctx'), 'drained SessionStart context lands')
   })
 
   await check('trust gate: disposing a session drops its decisions (a resumed id re-asks)', async () => {

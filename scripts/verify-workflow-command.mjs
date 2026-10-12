@@ -225,6 +225,35 @@ await check('unknown subcommand returns usage', async () => {
   assert.equal(upper.kind, 'success', 'subcommands are case-insensitive')
 })
 
+await check('library reads degrade on a dead cwd, but the fallback never masks the first error', async () => {
+  const commands = makeCommands()
+  // 项目级读取抛（cwd 中途被删的形状），全局读取照常：降级必须保住。
+  const deadCwd = {
+    listSaved: (cwd) => { if (cwd) throw new Error('cwd does not exist'); return [{ name: 'g', scope: 'global', description: '' }] },
+    getSaved: (name, cwd) => { if (cwd) throw new Error('cwd does not exist'); return name === 'g' ? { name: 'g', scope: 'global', script: 'return 1' } : null },
+  }
+  const { ctx } = makeCtx({ commands })
+  applyWorkflowCommand(ctx, { registry: fakeRegistry(), library: deadCwd })
+  const degraded = await commands.registered[0].handler(inv('run g'))
+  assert.equal(degraded.kind, 'success', 'the global fallback still runs the entry')
+  assert.match(degraded.text, /（全局）/)
+
+  // 双侧都失败（如坏 name 的形状断言两侧同抛）：抛出的是**第一现场**错误，
+  // 不是 fallback 的回声。
+  const bothThrow = {
+    listSaved: (cwd) => { throw new Error(cwd ? 'cwd does not exist' : 'library dir unreadable') },
+    getSaved: (name, cwd) => { throw new Error(cwd ? 'cwd does not exist' : 'library dir unreadable') },
+  }
+  const commands2 = makeCommands()
+  const { ctx: ctx2 } = makeCtx({ commands: commands2 })
+  applyWorkflowCommand(ctx2, { registry: fakeRegistry(), library: bothThrow })
+  await assert.rejects(
+    () => commands2.registered[0].handler(inv('run ../evil')),
+    /cwd does not exist/,
+    'the project-scope error (the first one) wins over the fallback echo',
+  )
+})
+
 // ─── 结果 ─────────────────────────────────────────────────────────────────────
 
 if (failures > 0) {

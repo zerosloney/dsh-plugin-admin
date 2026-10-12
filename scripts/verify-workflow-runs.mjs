@@ -680,6 +680,37 @@ await check('traversal-shaped runIds read as absent, not as arbitrary files', as
   await assert.rejects(() => r.resume('..\\..\\secret'), /not found/, 'resume refuses traversal id')
 })
 
+await check('amend judges run existence BEFORE a foreign owner claim (resume order)', async () => {
+  // 次序钉死：记录已不存在而 claim 文件残留时，"run not found" 才是事实——
+  // 先查 claim 会把不存在的 run 报成"正在别处执行"，id 拼错和真在跑就无法区分。
+  const { spawn } = await import('node:child_process')
+  const home = join(tmpBase, 'owner-order')
+  const runsDir = join(home, 'workflows', 'runs')
+  mkdirSync(runsDir, { recursive: true })
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  try {
+    // 残留 claim（活 pid、非本进程）+ 无记录 → not found。
+    writeFileSync(join(runsDir, 'wf_1_owner.owner'), JSON.stringify({ pid: sleeper.pid, at: Date.now() }), 'utf8')
+    const r = makeRegistry(ctxBundle.ctx, home)
+    await assert.rejects(
+      () => r.amend('wf_1_owner', 'return 1', { parent: { id: 'sess-owner' } }),
+      /run not found/,
+      'a stale claim over a missing record reports the record, not a phantom executor',
+    )
+    // 对照：记录确实存在（终态）+ 活的他人 claim → 这时才是 owner 拒绝。
+    writeFileSync(join(runsDir, 'wf_1_owner.json'), JSON.stringify({
+      id: 'wf_1_owner', status: 'stopped', script: 'return 1', args: {}, steps: [], log: [], updatedAt: 1,
+    }), 'utf8')
+    await assert.rejects(
+      () => r.amend('wf_1_owner', 'return 2', { parent: { id: 'sess-owner' } }),
+      /another dsh process/,
+      'a live foreign claim over an EXISTING run is still refused',
+    )
+  } finally {
+    sleeper.kill()
+  }
+})
+
 await check('stop reaps an abort-ignoring script at the budget (settles, not hung); amend proceeds on the first try', async () => {
   const home = join(tmpBase, 'stop-hang')
   const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
@@ -1035,6 +1066,57 @@ await check('a LEGACY degraded preview (pre-flag journal shape) is still not cac
   assert.equal(rec2.status, 'completed')
   assert.equal(bundle.agentCalls() - callsBefore, 1, 'the legacy degraded step re-ran instead of replaying the preview')
   assert.equal(rec2.result, 'result:legacy', 'the amended run got the fresh value')
+})
+
+// ─── P4c：步数总量帽 / 步骤字段帽 ─────────────────────────────────────────────
+
+await check('steps cap recycles a runaway ACTIVE loop (the idle watchdog only covers idle runs)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'cap')
+  const r = makeRegistry(bundle.ctx, home, { maxRunSteps: 3, stopSettleTimeoutMs: 2_000 })
+  const { id } = await r.start({
+    // done 永不翻转的编排死循环——每步都是看门狗的活动信号，空闲回收永远
+    // 不触发；步数总量帽是这类失控的唯一兜底（resume 起新一代计数是泄压阀）。
+    script: `
+      while (true) { await agent('loop') }
+      return 'never'
+    `,
+    parent: { id: 'sess-cap' },
+  })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'stopped', `expected the steps cap to recycle the run, got ${rec.status}`)
+  assert.ok(rec.log.some((l) => l.kind === 'steps-cap'), 'the journal carries the steps-cap line')
+  assert.ok(bundle.agentCalls() <= 5, `agent calls stayed bounded, got ${bundle.agentCalls()}`)
+})
+
+await check('step opts field is capped (prompt/outcome were; opts rode through at bridge budget)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'opts')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({
+    script: `
+      const a = await agent({ prompt: 'p', junk: 'x'.repeat(100_000) })
+      const b = await agent('small', { note: 'tiny' })
+      return 'ok'
+    `,
+    parent: { id: 'sess-opts' },
+  })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'completed')
+  // get() 的投影不携带 steps（只回 journal 的 script/result/log）——步骤形状
+  // 与既有用例同一读法：直读步骤 JSONL。
+  const stepsPath = join(home, 'workflows', 'runs', id + '.steps.jsonl')
+  const afters = readFileSync(stepsPath, 'utf8').trim().split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((s) => s.phase === 'after')
+  const big = afters.find((s) => s.site === 1)
+  assert.ok(big, 'the object-form step is journaled')
+  assert.equal(typeof big.opts, 'string', 'the oversized opts degraded to a truncated preview string')
+  assert.ok(big.opts.endsWith('…[截断]'), 'the preview carries the honest truncation marker')
+  assert.ok(big.opts.length <= 8_192 + '…[截断]'.length, `the preview respects the per-field budget, got ${big.opts.length}`)
+  const small = afters.find((s) => s.site === 2)
+  assert.ok(small, 'the second step is journaled')
+  assert.deepEqual(small.opts, { note: 'tiny' }, 'a within-budget opts rides through unchanged')
 })
 
 // ─── 清理 ─────────────────────────────────────────────────────────────────────

@@ -26,7 +26,8 @@
  * Run: node scripts/host-check.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -1205,13 +1206,112 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
   assert.equal(cliList.sessions.length, 1, 'CLI list() still returns the sessions')
   assert.equal(cliList.sessions[0].workspaceId, null, 'no registry → sessions are ungrouped')
   assert.deepEqual(cliList.workspaces, [], 'no registry → no workspace groups')
-  // archive/unarchive report the missing registry instead of a TypeError.
+  // archive/unarchive report the missing registry instead of a TypeError — and
+  // unarchive no longer PRETENDS success over a set nothing touched: the
+  // explicit gesture fails loud like archive does.
   await assert.rejects(
     () => cliCtx.provided.sessionAdmin.archive('cli-session'),
     /未挂载 dsh-workspace/,
     'archive reports the missing registry',
   )
-  await cliCtx.provided.sessionAdmin.unarchive('cli-session')
+  await assert.rejects(
+    () => cliCtx.provided.sessionAdmin.unarchive('cli-session'),
+    /未挂载 dsh-workspace/,
+    'unarchive refuses a missing registry instead of faking success',
+  )
+}
+
+
+/* ------------ git baseline normalization (unborn HEAD) ------------
+ * `git diff HEAD` exits 128 on a fresh repo (no commit yet): the copy-diff
+ * used to report a git FAILURE for real staged work, and the stats fold lost
+ * its ±counts. The baseline is now HEAD, or the empty tree when HEAD is
+ * unborn — both readers see the staged truth. Skipped where git is absent.
+ */
+{
+  const { spawnSync } = await import('node:child_process')
+  const gitOk = spawnSync('git', ['--version']).status === 0
+  if (!gitOk) {
+    console.log('  (skip: git not available — the unborn-HEAD baseline case cannot be exercised)')
+  } else {
+    const repo = mkdtempSync(join(tmpdir(), 'host-check-unborn-'))
+    const git = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' })
+    try {
+      git('init', '-q')
+      git('config', 'user.email', 't@local')
+      git('config', 'user.name', 't')
+      writeFileSync(join(repo, 'new.txt'), 'hello\n', 'utf8')
+      git('add', '.')   // staged but NO commit → HEAD is unborn
+      let sessionSvc = null
+      await apply({
+        baseUrl: pathToFileURL(join(here, '..')).href,
+        logger: { info: () => {}, warn: () => {}, error: () => {} },
+        provided: {},
+        provide: (key, service) => { if (key === 'sessionAdmin') sessionSvc = service },
+        effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+        get: () => undefined,
+        on: () => () => {},
+        typert: { register: () => () => {} },
+        sessionPersistence: {
+          list: async () => [{ header: { id: 'unborn', cwd: repo, createdAt: 1 }, revision: 'r' }],
+          stat: async () => ({ header: { id: 'unborn', cwd: repo, createdAt: 1 }, revision: 'r' }),
+          open: async () => ({ read: async () => [], close: async () => {} }),
+        },
+      })
+      assert.ok(sessionSvc !== null, 'sessionAdmin mounted for the unborn-HEAD scenario')
+      const stats = await sessionSvc.fileStats('unborn')
+      assert.equal(stats.error, null, `an unborn HEAD is not a git failure (got: ${stats.error})`)
+      assert.ok(stats.files >= 1, 'the staged file is counted')
+      assert.equal(stats.missing, false)
+      const diff = await sessionSvc.gitDiff('unborn')
+      assert.equal(diff.error, null, `gitDiff reports no error on an unborn HEAD (got: ${diff.error})`)
+      assert.ok(diff.diff.includes('new.txt'), 'the staged file\'s diff is real content, not an empty string')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }
+}
+
+
+/* ------------ an exactly-at-cap export is NOT mislabeled truncated ------------
+ * The reader fetched `cap` events and `length >= cap` decided the flag, so a
+ * log with EXACTLY cap events was stamped 已截断 (banner + filename + health
+ * summary) while nothing was missing. The reader now fetches cap+1 and only a
+ * genuine overflow sets the flag. Mounted with a small cap to keep the fake
+ * log tiny.
+ */
+{
+  const mkEvents = (n) => Array.from({ length: n }, (_, i) => ({ type: 'session/user', data: { text: `m${i}` } }))
+  const mountWith = async (events) => {
+    let provided = null
+    await apply({
+      baseUrl: pathToFileURL(join(here, '..')).href,
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      provided: {},
+      provide: function (key, service) { if (key === 'sessionAdmin') provided = service },
+      effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+      get: () => undefined,
+      on: () => () => {},
+      typert: { register: () => () => {} },
+      sessionPersistence: {
+        list: async () => [{ header: { id: 'cap', createdAt: 1 }, revision: 'r' }],
+        stat: async () => ({ header: { id: 'cap', createdAt: 1 }, revision: 'r' }),
+        open: async () => ({ read: async (_from, limit) => events.slice(0, limit), close: async () => {} }),
+      },
+    }, { sessionExportEventCap: 3 })
+    return provided
+  }
+  const atCap = await mountWith(mkEvents(3))
+  assert.ok(atCap !== null, 'sessionAdmin mounted (at-cap scenario)')
+  const exactExport = await atCap.exportSession('cap')
+  assert.equal(exactExport.truncated, false, 'exactly cap events reads as COMPLETE')
+  assert.ok(!exactExport.markdown.includes('内容已截断'), 'no truncation banner on a complete log')
+  const overCap = await mountWith(mkEvents(4))
+  const cutExport = await overCap.exportSession('cap')
+  assert.equal(cutExport.truncated, true, 'cap+1 events reads as truncated')
+  assert.ok(cutExport.markdown.includes('内容已截断'), 'the banner stamps a real cut')
+  const health = await overCap.healthReport('cap')
+  assert.ok(health.summary.includes('已截断'), 'the health summary carries the same flag')
 }
 
 

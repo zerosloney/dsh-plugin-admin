@@ -86,6 +86,25 @@ await check('stdout is capped, the exit code and the stderr tail are reported', 
   assert.match(failing.stderrTail, /boom: bad thing/, 'the reason is preserved for the caller')
 })
 
+await check('a multi-byte UTF-8 sequence split across stdout chunks survives intact', async () => {
+  // '测' is E6 B5 8B. The child writes the FIRST TWO bytes, yields so the pipe
+  // delivers them as their own chunk, then the tail: per-chunk toString() (the
+  // old `text += chunk`) decoded the orphan partial sequence into U+FFFD
+  // mojibake; StringDecoder holds it until the continuation arrives.
+  const script = [
+    "const out = process.stdout;",
+    "out.write(Buffer.from([0xE6, 0xB5]));",
+    "setTimeout(() => { out.write(Buffer.from([0x8B])); out.end('!'); }, 50);",
+  ].join('\n')
+  const outcome = await withBudget(
+    runCommandCaptured(process.execPath, ['-e', script], { timeoutMs: 10_000 }),
+    8_000,
+    'the split-sequence child',
+  )
+  assert.equal(outcome.code, 0, 'clean exit')
+  assert.equal(outcome.stdout, '测!', 'the split CJK sequence decodes as one character')
+})
+
 await check('a timeout and a missing binary both resolve instead of throwing', async () => {
   const timedOut = await runCommandCaptured(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { timeoutMs: 300 })
   assert.equal(timedOut.code, null, 'a killed-by-timeout child resolves with a null code')

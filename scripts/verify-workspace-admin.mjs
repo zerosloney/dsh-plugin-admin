@@ -618,4 +618,33 @@ assert.equal(renamed.workspace.title, 'Two Renamed', 'a fresh unique title is ap
 assert.equal(renameRegistry.get(renameA.id).title, 'One', 'the other workspace is untouched')
 console.log('scenario 7 OK: rename refuses a duplicate title and allows self/no-op renames')
 
+// --- Scenario 8: every registry/workspace verb guards a missing method ------
+// unarchiveSession was the only verb with an existence guard; the other nine
+// surfaced as a bare `TypeError: ... is not a function` when a dsh release
+// renamed or dropped one. All of them now refuse with the same
+// incompatible-surface message, named once in callVerb.
+{
+  // canonicalWorkspacePath wants an absolute path that exists — the directory
+  // this script lives in is real on every platform.
+  const existingDir = new URL('.', import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '')
+  const noCreate = { list: () => [], get: () => undefined, archivedSessionIds: [] }
+  const noCreateSvc = mountHost({ workspaceRegistry: noCreate })
+  await assert.rejects(
+    () => noCreateSvc.create(existingDir, undefined),
+    /缺少 create\(\) — dsh 版本变了？/,
+    'a registry without create() names the incompatible verb',
+  )
+  const noSetTitle = new FakeRegistry()
+  const wsForRename = await noSetTitle.create(existingDir, 'Three')
+  // Simulate an older host whose Workspace shape lacks the verb.
+  wsForRename.setTitle = undefined
+  const noSetTitleSvc = mountHost({ workspaceRegistry: noSetTitle })
+  await assert.rejects(
+    () => noSetTitleSvc.rename(wsForRename.id, 'Renamed'),
+    /缺少 setTitle\(\) — dsh 版本变了？/,
+    'a workspace without setTitle() names the incompatible verb',
+  )
+  console.log('scenario 8 OK: missing registry/workspace verbs refuse with a named error')
+}
+
 console.log('verify-workspace-admin OK: all Workspace administration scenarios passed')

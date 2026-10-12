@@ -745,5 +745,29 @@ assert.ok(after19.includes('apiKeyEnv: EXA_API_KEY'), 'the block still carries i
 assert.ok(!/^- id: web-search-exa$/m.test(after19), 'the legacy bare row is gone')
 console.log('scenario 19 OK: install() carries a legacy row config into the compliant row')
 
+// ---------- Scenario 20: the pointer rewrite stays inside the config block --
+// The block-scalar replace loop used to scan the WHOLE row span: a deeper
+// `searchProvider:` key in a LATER sub-block of the web row (some other
+// mapping's key) got rewritten instead of the row's pointer. The scan now
+// stops at the config block's boundary — the pointer is inserted (absent)
+// and the nested key is untouched.
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  '  config:',
+  '    fetchProvider: http',
+  '  probes:',
+  '    searchProvider: keep-me-nested',
+  '',
+].join('\n'), 'utf8')
+await service.setActive('exa')
+const after20 = readFileSync(patchPath, 'utf8')
+assert.ok(/^ {4}searchProvider: exa$/m.test(after20), 'the row pointer is inserted at the config child indent')
+assert.ok(after20.includes('searchProvider: keep-me-nested'), 'the deeper nested key is NOT rewritten')
+assert.ok(new RegExp('^ {4}searchProvider: exa$', 'm').test(after20)
+  && !/^ {6}searchProvider: exa$/m.test(after20), 'the nested key kept its own value and indent')
+console.log('scenario 20 OK: the searchProvider rewrite is bounded to the config block')
+
 rmSync(tmpRoot, { recursive: true, force: true })
 console.log('verify-web-search-admin OK: all Web Search administration scenarios passed')

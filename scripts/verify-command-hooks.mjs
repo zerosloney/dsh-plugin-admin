@@ -294,6 +294,27 @@ try {
     await assert.rejects(() => service.deleteHook('PreToolUse/00000000'), /钩子不存在/)
   })
 
+  await check('hooks: a torn enable/disable migration self-heals on the next mutation', async () => {
+    // 崩溃卡在两次原子写之间（或两阶段保存出现前的旧库）会把同一条钩子留在
+    // 两侧：bridge 只跑 hooks.json，保留 disabled 孪本会面板显示两次、并让
+    // 用户以为它已停用。下一次锁内变更先摘掉 disabled 孪本。
+    writeFileSync(hooksPath, JSON.stringify({
+      PostToolUse: [{ matcher: '', hooks: [{ command: 'twin.sh' }] }],
+    }), 'utf8')
+    writeFileSync(disabledPath, JSON.stringify({
+      entries: [{ event: 'PostToolUse', matcher: '', command: 'twin.sh' }],
+    }), 'utf8')
+    const torn = await service.listHooks()
+    assert.equal(torn.hooks.filter(h => h.command === 'twin.sh').length, 2, 'the torn state really shows twice')
+    const listed = await service.listHooks()
+    const activeTwin = listed.hooks.find(h => h.command === 'twin.sh' && h.enabled)
+    await service.deleteHook(activeTwin.id)
+    const healed = await service.listHooks()
+    assert.equal(healed.hooks.filter(h => h.command === 'twin.sh').length, 0,
+      'the disabled twin did not survive the mutation — both copies gone')
+    assert.equal(existsSync(disabledPath), false, 'the emptied sidecar is removed, not left as an empty twin holder')
+  })
+
   await check('hooks: bridge detection rides the registry; hot-restart through Fiber.update', async () => {
     const fiberUpdates = []
     // Installed + patch row present but not composed in this process → the

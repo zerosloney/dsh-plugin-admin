@@ -24,6 +24,7 @@ import {
   createRunner,
   evalSnippet,
   looksLikeTs,
+  firstTsFeature,
 } from '../lib/workflow-engine.js'
 import { jsonSafeValue } from '../lib/workflow-realm-shared.js'
 
@@ -287,6 +288,42 @@ await checkAsync('unserializable log()/phase() args degrade to placeholders, the
   const phaseLine = logs.find((l) => l.kind === 'phase')
   assert.match(String(logLine?.message), /<unserializable log message:/, 'the log line carries the placeholder')
   assert.match(String(phaseLine?.title), /<unserializable phase title:/, 'the phase line carries the placeholder')
+})
+
+await checkAsync('over-budget log/phase/report degrade to a note instead of crashing the worker; contract members still reject per-call', async () => {
+  // 序列化抛错的降级只兜「不能建串」；「建串成功但超桥帽」曾是同一承诺的漏网
+  // 半边——worker invoke 对超帽 reject，而 log/phase/report 的调用点几乎不会
+  // await，rejection 成 worker unhandledRejection，整个运行报废成
+  // "workflow worker crashed"。降级后占位文本（恒小于帽）照常过桥投递。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const logs = []
+  const { run } = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+    onLog: (e) => logs.push(e),
+  })
+  const { code } = await compileScript(`
+    log('x'.repeat(5_000_000))
+    phase('y'.repeat(5_000_000))
+    report('k'.repeat(5_000_000), 'v')
+    return 'survived'
+  `)
+  const value = await run(code, {})
+  assert.equal(value, 'survived', 'the run completes instead of dying as "worker crashed"')
+  const logLine = logs.find((l) => l.kind === 'log')
+  const phaseLine = logs.find((l) => l.kind === 'phase')
+  const reportLine = logs.find((l) => l.kind === 'report')
+  assert.match(String(logLine?.message), /超出桥预算/, 'the log note crossed the bridge')
+  assert.match(String(phaseLine?.title), /超出桥预算/, 'the phase note crossed the bridge')
+  assert.match(String(reportLine?.key), /^k/, 'the report key survives truncated to 256 chars')
+  assert.match(String(reportLine?.value), /超出桥预算/, 'the report value carries the note')
+  // 契约成员（agent）超帽照旧 per-call reject：脚本 await 处拿到一次干净失败，
+  // 而不是占位成功值。
+  const rejectRunner = createRunner({
+    ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1),
+  })
+  const { code: rejectCode } = await compileScript(`await agent('p'.repeat(5_000_000)); return 'no'`)
+  await assert.rejects(() => rejectRunner.run(rejectCode, {}), /exceed the 4M-char bridge budget/)
 })
 
 await checkAsync('site numbers follow script appearance order even when parallel leaves saturate the per-run limit', async () => {
@@ -1054,6 +1091,29 @@ check('looksLikeTs gates the esbuild-missing fallback (TS refused, plain JS wrap
   ]) {
     assert.equal(looksLikeTs(falsePositive), true, 'known false positive: ' + JSON.stringify(falsePositive))
   }
+})
+
+check('firstTsFeature names WHERE the first TypeScript-looking construct is', () => {
+  // The esbuild-missing diagnostic used to say only "looks like TS" — the author
+  // had to re-run the heuristics by eye to find the offending line. The line
+  // number answers to the USER'S script (the wrapScript prefix is not counted).
+  const feature = firstTsFeature('const a = 1\nconst rows: Row[] = []\nreturn rows')
+  assert.ok(feature !== null, 'the annotated line is found')
+  assert.equal(feature.line, 2, '1-based line of the first construct')
+  assert.equal(feature.snippet, 'const rows: Row[] = []', 'the offending line text is quoted')
+  // The EARLIEST match wins when several patterns hit.
+  const multi = firstTsFeature('return x\ninterface Job { id: string }')
+  assert.equal(multi?.line, 2, 'line of the earliest hit, not the last pattern')
+  // Plain JS: null (the degraded wrap path).
+  assert.equal(firstTsFeature('return await agent("audit")'), null, 'plain JS reports nothing')
+  // The compileScript degraded diagnostic itself carries the location: force the
+  // fallback by simulating the heuristic on the same body it would judge.
+  const body = 'const a = 1\nconst n: number = 2'
+  assert.match(
+    `line ${firstTsFeature(body).line}: ${firstTsFeature(body).snippet}`,
+    /line 2: const n: number = 2/,
+    'the diagnostic material names the construct',
+  )
 })
 
 // ─── 结果 ─────────────────────────────────────────────────────────────────────

@@ -397,6 +397,71 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
   }
 })
 
+/* 7b ── journal corruption redaction + interrupt verb guard */
+await check('apply(): a corrupt journal line never leaks its bytes; interrupt guards the verb', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-corrupt-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-test' }))
+    writeFileSync(join(dir, 'cordis.patch.yml'), BASE_PATCH)
+    const registered = { provided: null, warns: [] }
+    const liveChild = {
+      id: 'child-running',
+      status: 'running',
+      session: {
+        header: { origin: 'subagent', parentSession: 'parent-session', delegationDepth: 2 },
+        snapshotEvents: () => [{ type: 'subagent/descriptor', data: { label: 'x', provider: 'spawn', mode: 'continuable' } }],
+      },
+    }
+    const ctx = {
+      baseUrl: dir,
+      logger: { warn: (message) => registered.warns.push(message) },
+      provide: (key, service) => { registered.provided = { key, service } },
+      effect: (fn) => { fn() },
+      tools: { schemas: () => [], get: () => undefined },
+      // 无 interrupt / prompt：老宿主形状，两个动词都必须报版本而不是 TypeError。
+      subagents: {
+        list: () => ['spawn'],
+        getProvider: (name) => PROVIDERS.get(name),
+      },
+      get: (key) => key === 'agents' ? {
+        list: () => [liveChild],
+        get: (id) => (id === liveChild.id ? liveChild : undefined),
+      } : undefined,
+    }
+    applySubagentAdmin(ctx)
+    const service = registered.provided.service
+
+    // journal 里塞一条半写入的损坏行：其字节内容带着 env 明文（写侧 mask 只
+    // 保护解析成功的记录）。history() 的损坏分支只报形状（字节数），永不外发原文。
+    const secretLine = '{"at":"2026-01-01T00:00:00.000Z","action":"cli-update","id":"be1","entry":{"kind":"generic","backend":{"env":{"API_KEY":"sk-leak-me-please"}}'
+    writeFileSync(join(dir, 'subagent-admin.history.jsonl'), [
+      JSON.stringify({ at: '2026-01-01T00:00:01.000Z', action: 'create', id: 'ok1' }),
+      secretLine,
+    ].join('\n') + '\n', 'utf8')
+    const history = await service.history({ limit: 10 })
+    const corrupt = history.records.find((record) => record.action === 'corrupt')
+    assert.ok(corrupt, 'the corrupt line is reported, not silently dropped')
+    assert.ok(!JSON.stringify(history.records).includes('sk-leak-me-please'),
+      'the corrupt line\'s raw bytes (env values included) never reach the payload')
+    assert.match(corrupt.id, /无法解析的行/, 'the marker names the shape, with the byte count')
+
+    // runtimeInterrupt 在 descriptor 预检全过之后仍然守动词：老宿主上不再
+    // 裸抛 `is not a function`，与 runtimePrompt 的版本报错同型。
+    await assert.rejects(
+      () => service.runtimeInterrupt('child-running', 'parent-session'),
+      /不支持 interrupt/,
+      'an older host without interrupt() gets the version message',
+    )
+    await assert.rejects(
+      () => service.runtimePrompt({ childId: 'child-running', parentSessionId: 'parent-session', text: 'x' }),
+      /不支持 prompt/,
+      'the prompt guard stays symmetric',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 /* 7b ── collectProviders keeps agentOptions: the mounted gate must fire */
 await check('mounted upsert rejects agentOptions for a backend that declares agentOptions:false', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-plugin-admin-sa-gate-'))
