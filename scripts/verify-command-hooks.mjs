@@ -627,6 +627,44 @@ try {
     assert.equal(result.action, 'row-removed')
   })
 
+  await check('bridge: remove of the only row keeps the patch bootable (empty sequence, comments kept)', async () => {
+    // The bridge row is the ordinary sole content of a fresh profile's
+    // cordis.patch.yml (dsh's own bundle selection writes the profile
+    // manifest, not this file). Dropping it must leave a document the host
+    // still boots: yaml.load answers undefined for "\n" or comment-only text,
+    // and dsh's parsePatchList then refuses the whole profile. The mutate
+    // callback must return LINES so patchLinesToText normalizes the empty
+    // remainder to `[]` (same contract verify-mcp-admin pins for the sibling
+    // mcpAdmin/remove fix in v1.27.15).
+    const cases = [
+      ['bare bridge row', `- insert:\n    - id: hooks-claude-code\n      name: '@deepseek-ai/dsh-hooks-claude-code'\n`, '[]\n'],
+      ['bridge row under a header comment', `# my hooks\n- insert:\n    - id: hooks-claude-code\n      name: '@deepseek-ai/dsh-hooks-claude-code'\n`, '# my hooks\n[]\n'],
+    ]
+    for (const [label, before, expected] of cases) {
+      writeFileSync(patchPath, before, 'utf8')
+      const stub = makeStubCtx(profileDir)
+      applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) })
+      const svc = stub.provided.get('commandHookAdmin')
+      const result = await svc.bridgeRemove()
+      assert.equal(result.rowsRemoved, 1, `${label}: one row removed`)
+      const after = readFileSync(patchPath, 'utf8')
+      assert.equal(after, expected, `${label}: patch stays a bootable YAML sequence`)
+    }
+  })
+
+  await check('codex bridge: remove of the only row keeps the patch bootable', async () => {
+    // Mirror of the Claude-Code bridge case for the Codex sibling bridge, whose
+    // removal drops its own `- insert:` row shape (codexBridgeRemove). The
+    // block matcher keys on the package name, so the config line is incidental.
+    writeFileSync(patchPath, `- insert:\n    - id: hooks-codex\n      name: '@deepseek-ai/dsh-hooks-codex'\n`, 'utf8')
+    const stub = makeStubCtx(profileDir)
+    applyCommandHookAdmin(stub.ctx, { runPnpm: makeStubPnpm(profileDir, []) })
+    const svc = stub.provided.get('commandHookAdmin')
+    const result = await svc.codexBridgeRemove()
+    assert.equal(result.rowsRemoved, 1, 'one row removed')
+    assert.equal(readFileSync(patchPath, 'utf8'), '[]\n', 'patch stays a bootable YAML sequence')
+  })
+
   await check('hooks: malformed stores degrade the list and block writes until healed', async () => {
     const originalHooks = readFileSync(hooksPath, 'utf8')
     const originalDisabled = existsSync(disabledPath) ? readFileSync(disabledPath, 'utf8') : null

@@ -801,6 +801,98 @@ await check('two concurrent amends start exactly one derived run', async () => {
   await r.stop(derived, 'cleanup')
 })
 
+// 跨实例缺口：源 run 一旦落定，它自己的 owner claim 在 settle 的 finally 里被
+// 删，而派生它的 run 的声明只写在自己名下——共享 DSH_HOME 的第二个实例对源 id
+// 做的三道检查（无活句柄、无本进程派生、无声明）全部放行，同一份 journal 被两
+// 个实例各跑一份。修复：派生 run 把整条派生链一并声明。两个 registry 同进程
+// 跑，声明里的 pid 恒等于本进程，所以用子进程 pid 覆写声明文件来模拟「第一个
+// 实例是另一个 dsh 进程」——读侧只认文件内容。
+await check('a derived run claims its terminal source, so a second instance cannot resume it', async () => {
+  const { spawn } = await import('node:child_process')
+  const home = join(tmpBase, 'chain-source')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r1 = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  try {
+    const source = await r1.start({ script: 'return 1', parent: { id: 'sess-chain' } })
+    await r1.join(source.id)
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'a settled run leaves no claim of its own')
+
+    // resume 沿用旧脚本会秒退，amend 才能把派生 run 换成挂着不结束的脚本。
+    const derived = await r1.amend(source.id, 'await new Promise(() => {})', { parent: { id: 'sess-chain' } })
+    assert.ok(derived.id, 'amend of the terminal source starts a derived run')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(existsSync(join(runsDir, `${derived.id}.owner`)), true, 'the derived run claims itself')
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), true, 'the derived run ALSO claims its settled source')
+
+    for (const id of [source.id, derived.id]) {
+      writeFileSync(join(runsDir, `${id}.owner`), JSON.stringify({ pid: sleeper.pid, at: Date.now() }), 'utf8')
+    }
+    const r2 = makeRegistry(ctxBundle.ctx, home)
+    await assert.rejects(
+      () => r2.resume(source.id, { parent: { id: 'sess-chain-2' } }),
+      /another dsh process/,
+      'the second instance cannot resume the source the first is still deriving from',
+    )
+    await assert.rejects(
+      () => r2.amend(source.id, 'return 0', { parent: { id: 'sess-chain-2' } }),
+      /another dsh process/,
+      'amend hits the same chain claim',
+    )
+
+    // 派生 run 落定 → 链上声明全撤 → 第二个实例的 resume 放行（无误拒残留）。
+    await r1.stop(derived.id, 'cleanup')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'settling the derived run releases the source')
+    const reopened = await r2.resume(source.id, { parent: { id: 'sess-chain-2' } })
+    assert.ok(reopened.id, 'once the chain claim is gone the source is resumable again')
+    await r2.join(reopened.id)
+  } finally {
+    sleeper.kill()
+  }
+})
+
+await check('the chain claim covers grandparents: a second instance cannot resume any settled ancestor', async () => {
+  const { spawn } = await import('node:child_process')
+  const home = join(tmpBase, 'chain-grandparent')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r1 = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  try {
+    const a = await r1.start({ script: 'return 1', parent: { id: 'sess-gp' } })
+    await r1.join(a.id)
+    // a（终态）→ b（挂着）→ c（挂着）：c 的派生链回溯到 a。
+    const b = await r1.amend(a.id, 'await new Promise(() => {})', { parent: { id: 'sess-gp' } })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    const c = await r1.amend(b.id, 'await new Promise(() => {})', { parent: { id: 'sess-gp' } })
+    assert.ok(c.id, 'amend of the active derived run starts a grandchild')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    for (const id of [a.id, b.id, c.id]) {
+      assert.equal(existsSync(join(runsDir, `${id}.owner`)), true, `${id} is claimed by the running grandchild`)
+      writeFileSync(join(runsDir, `${id}.owner`), JSON.stringify({ pid: sleeper.pid, at: Date.now() }), 'utf8')
+    }
+    const r2 = makeRegistry(ctxBundle.ctx, home)
+    await assert.rejects(
+      () => r2.resume(a.id, { parent: { id: 'sess-gp-2' } }),
+      /another dsh process/,
+      'the grandparent is protected',
+    )
+    await assert.rejects(
+      () => r2.resume(b.id, { parent: { id: 'sess-gp-2' } }),
+      /another dsh process/,
+      'the parent is protected too',
+    )
+
+    await r1.stop(c.id, 'cleanup')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const id of [a.id, b.id, c.id]) {
+      assert.equal(existsSync(join(runsDir, `${id}.owner`)), false, `settling the grandchild releases the whole chain (${id})`)
+    }
+  } finally {
+    sleeper.kill()
+  }
+})
+
 // ─── P4b：ask / answer 提问链路 ───────────────────────────────────────────────
 
 // The settle-budget timer must be CLEARED when `handle.done` wins the race.

@@ -311,6 +311,42 @@ await checkAsync('fileStats reports a git failure instead of zeroes-as-clean', a
   assert.equal(clean.error, null, 'a readable workspace reports no error')
 })
 
+// The registry's members drift across dsh versions (this plugin already
+// recorded `unarchiveSession` missing on 0.1.5-rc.2), so list() must not let a
+// bad member — null, a primitive, or a non-array `sessionIds` — throw a
+// TypeError out of the panel's core read path, and the well-formed member's
+// grouping must survive alongside it.
+await checkAsync('list degrades a malformed registry member to ungrouped', async () => {
+  const goodRegistry = fileCtx.workspaceRegistry
+  fileCtx.workspaceRegistry = {
+    ...goodRegistry,
+    list: () => [
+      null,
+      'a primitive member',
+      { id: 'ws-good', title: 'Good', path: '/good', sessionIds: ['git-session'] },
+      { id: 'ws-no-sessionIds' },
+      { id: 'ws-wrong-type', sessionIds: 'not-an-array' },
+    ],
+  }
+  try {
+    const result = await sessionAdmin.list()
+    const grouped = result.sessions.find((s) => s.id === 'git-session')
+    assert.equal(grouped?.workspaceId, 'ws-good', 'the well-formed member still groups its session')
+    assert.equal(grouped?.workspaceTitle, 'Good')
+    const ungrouped = result.sessions.find((s) => s.id === 'plain-session')
+    assert.equal(ungrouped?.workspaceId, null, 'a session no member lists stays ungrouped')
+    // The payload projection tolerates the same drift: null/primitive members
+    // are dropped, objects without a usable sessionIds still display.
+    assert.deepEqual(
+      result.workspaces.map((w) => w.workspaceId),
+      ['ws-good', 'ws-no-sessionIds', 'ws-wrong-type'],
+      'malformed members are projected as far as they can be, never as holes',
+    )
+  } finally {
+    fileCtx.workspaceRegistry = goodRegistry
+  }
+})
+
 await checkAsync('gitDiff reports a clean tree as an empty diff WITH error: null', async () => {
   // A fresh temp dir per run: reusing one under .host-check-tmp made the fixture
   // depend on what a previous run left behind (a second `commit` finds nothing
