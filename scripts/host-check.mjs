@@ -502,8 +502,13 @@ assert.deepEqual(nextState?.archivedSessionIds, ['session-stays'],
     },
   }
   apply(goneCtx)
-  await goneCtx.provided.sessionAdmin.deleteSession('session-log-gone')
+  // The degradation receipt must survive to the RPC return value: the delete
+  // succeeds, but `degraded` names the skipped cross-process guard instead of
+  // leaving the warn in the host log as the only witness.
+  const goneReceipt = await goneCtx.provided.sessionAdmin.deleteSession('session-log-gone')
   assert.ok(!existsSync(dir), 'the log-gone path still removes the directory')
+  assert.equal(typeof goneReceipt.degraded, 'string', 'the log-gone delete reports a degraded reason')
+  assert.ok(goneReceipt.degraded.includes('cross-process guard'), 'the degraded reason names the skipped guard')
 }
 
 // Boundary safety for sessionAdmin.list(): typert gateway rejects results
@@ -1675,7 +1680,7 @@ assert.deepEqual(
 )
 assert.ok(!existsSync(idempotentDir), 'the log directory is removed exactly once and stays gone')
 const repeatDelete = await idempotentAdmin.deleteSession('session-idempotent')
-assert.deepEqual(repeatDelete, { deleted: 'session-idempotent' }, 'a later repeat delete still reports success')
+assert.deepEqual(repeatDelete, { deleted: 'session-idempotent', degraded: null }, 'a later repeat delete still reports success (degraded null = normally guarded)')
 // The layout-drift case must STILL fail loud — idempotence must not swallow it.
 const driftHeader = { id: 'session-drift-bytes', cwd: 'E:/nowhere', createdAt: 1 }
 const driftCtx = {

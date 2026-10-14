@@ -893,6 +893,52 @@ await check('the chain claim covers grandparents: a second instance cannot resum
   }
 })
 
+// 时序缺口：跨实例 owner claim 若照旧等到 settle 才写，而 amend/resume 的检查
+// 与真正执行之间隔着 start 的编译（esbuild 冷启动可达秒级），第二个实例能在
+// 编译窗口内通过同样的检查，同一份 journal 被两实例各跑一份。修复后声明在
+// 通过检查之后、编译之前落盘。resumeInner 的同步前缀（检查→写声明）在互斥锁
+// 的门后一个微任务内跑完，而 compileScript（动态 import + esbuild IPC）至少
+// 还要再等一个微任务——下面的窗口断言因此是确定性的，不是竞态赌博。
+await check('the owner claim is written BEFORE the compile window, not at settle', async () => {
+  const home = join(tmpBase, 'claim-timing')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  const source = await r.start({ script: 'return 1', parent: { id: 'sess-timing' } })
+  await r.join(source.id)
+  assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'a settled run leaves no claim of its own')
+
+  const pending = r.resume(source.id, { parent: { id: 'sess-timing' } })
+  await Promise.resolve()
+  assert.equal(
+    existsSync(join(runsDir, `${source.id}.owner`)),
+    true,
+    'the claim is already on disk while compile is still in flight (no double-run window)',
+  )
+  const resumed = await pending
+  await runToDone(resumed, r)
+  assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'settling releases the claim again')
+})
+
+// 撤销配对：预写声明之后 start 可能以诊断拒绝收场（返回 id:null，没有 handle、
+// settle 的 finally 无从撤销）——此时调用口必须就地回滚，否则崩溃残留式的
+// claim 会把这台实例自己后续的 resume/amend 也挡住。
+await check('a compile-rejected resume/amend rolls back the claims it pre-wrote', async () => {
+  const home = join(tmpBase, 'claim-compile-reject')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r = makeRegistry(ctxBundle.ctx, home)
+  // 手写一个终态 journal，脚本本身过不了编译（esbuild 语法诊断）。
+  writeFileSync(join(runsDir, 'wf_1_broken.json'), JSON.stringify({
+    id: 'wf_1_broken', status: 'stopped', script: 'return ((((', args: {}, steps: [], log: [], updatedAt: 1,
+  }), 'utf8')
+  const resumed = await r.resume('wf_1_broken', { parent: { id: 'sess-broken' } })
+  assert.equal(resumed.id, null, 'the broken script is rejected by compile diagnostics')
+  assert.equal(existsSync(join(runsDir, 'wf_1_broken.owner')), false, 'the pre-written claim is rolled back on the diagnostics path')
+
+  const amended = await r.amend('wf_1_broken', 'return ((((', { parent: { id: 'sess-broken' } })
+  assert.equal(amended.id, null, 'amend hits the same diagnostics path')
+  assert.equal(existsSync(join(runsDir, 'wf_1_broken.owner')), false, 'amend rolls its claim back too')
+})
+
 // ─── P4b：ask / answer 提问链路 ───────────────────────────────────────────────
 
 // The settle-budget timer must be CLEARED when `handle.done` wins the race.

@@ -280,6 +280,18 @@ var SETTINGS_NAV_ICONS = {
 
 var SETTINGS_NAV_ICON_MARK = 'data-dsh-admin-nav-icon'
 
+// Anti-stacking guards for the two body-level observers below. Their disposers
+// only run through ctx.effect teardown; a host hot-reload that re-runs apply()
+// without disposing the previous instance would otherwise install another
+// observer per apply, so every DOM mutation triggers N repaints/injections.
+// Each setup disconnects the SAME setup's previously installed observer before
+// observing again (keeping the count at one), and the disposer clears the
+// module ref only while it still points at its own observer.
+/** @type {MutationObserver|null} */
+var activeNavIconObserver = null
+/** @type {MutationObserver|null} */
+var activeMenuObserver = null
+
 /** Build one 16×16 outline SVG carrying the official navIcon css class. */
 /** @param {string} label - the nav row's label (the table key).
  * @param {string} template - the SVG path markup to inline. */
@@ -343,10 +355,18 @@ function setupSettingsNavIcons() {
       }
     }
   }
+  // Idempotence: drop the previous instance's observer (a re-run apply() whose
+  // old disposer never fired) before installing this one — see the comment on
+  // activeNavIconObserver above.
+  if (activeNavIconObserver !== null) activeNavIconObserver.disconnect()
   var observer = new MutationObserver(repaint)
   observer.observe(document.body, { childList: true, subtree: true })
+  activeNavIconObserver = observer
   repaint()
-  return function () { observer.disconnect() }
+  return function () {
+    observer.disconnect()
+    if (activeNavIconObserver === observer) activeNavIconObserver = null
+  }
 }
 
 /* ========================================================================== */
@@ -557,7 +577,12 @@ function setupMenuInjection(call, refreshSessions) {
           var method = match.live ? 'sessionAdmin/closeSession' : 'sessionAdmin/deleteSession'
           call(method, { sessionId: match.id }).then(function (result) {
             if (result && result.ok) {
-              showToast('success', dshT('🗑️ 会话已删除'))
+              // Same honest receipt as the panel's delete: a non-null
+              // `degraded` means a guard (the cross-process write lease) was
+              // skipped — surface it instead of the plain success toast.
+              var degraded = result.value && typeof result.value.degraded === 'string' ? result.value.degraded : ''
+              if (degraded !== '') showToast('info', dshT('⚠️ 会话已删除，但跨进程护栏未生效：') + degraded)
+              else showToast('success', dshT('🗑️ 会话已删除'))
               // Nudge the sidebar so the removed session vanishes now
               // instead of lingering in 未分组 until reload.
               if (refreshSessions) refreshSessions()
@@ -647,6 +672,9 @@ function setupMenuInjection(call, refreshSessions) {
     viewport.appendChild(btn)
   }
 
+  // Same anti-stacking guard as setupSettingsNavIcons: a re-run apply() whose
+  // previous disposer never fired would stack one more observer per apply.
+  if (activeMenuObserver !== null) activeMenuObserver.disconnect()
   var observer = new MutationObserver(function (mutations) {
     for (var i = 0; i < mutations.length; i++) {
       var added = mutations[i].addedNodes
@@ -666,9 +694,11 @@ function setupMenuInjection(call, refreshSessions) {
   })
 
   observer.observe(document.body, { childList: true, subtree: true })
+  activeMenuObserver = observer
 
   return function () {
     observer.disconnect()
+    if (activeMenuObserver === observer) activeMenuObserver = null
   }
 }
 

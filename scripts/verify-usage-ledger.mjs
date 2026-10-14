@@ -263,7 +263,7 @@ await checkAsync('9. two ledgers over one file merge instead of overwriting (cro
   assert.deepEqual(b.entries().map(e => e.id).sort(), ['s-a', 's-b'], 'the second writer sees the union afterwards')
   // The lock is released: a leftover sibling lock would make every later writer
   // wait out the fail-open budget.
-  assert.equal(existsSync(path + '.dsh-admin.lock'), false, 'the cross-process lock is released')
+  assert.equal(existsSync(path + '.lock'), false, 'the cross-process lock is released')
 })
 
 check('10. a summaryError row counts as live but never zeroes the stored totals', () => {

@@ -108,8 +108,12 @@ await check('a multi-byte UTF-8 sequence split across stdout chunks survives int
 await check('a timeout and a missing binary both resolve instead of throwing', async () => {
   const timedOut = await runCommandCaptured(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { timeoutMs: 300 })
   assert.equal(timedOut.code, null, 'a killed-by-timeout child resolves with a null code')
+  assert.equal(timedOut.timedOut, true, 'the kill is attributed: timedOut is true (used to resolve as failed:false)')
+  const clean = await runCommandCaptured(process.execPath, ['-e', 'process.exit(0)'])
+  assert.equal(clean.timedOut, false, 'a clean close reports timedOut: false')
   const missing = await runCommandCaptured('definitely-not-a-real-binary-xyz', [])
   assert.equal(missing.failed, true, 'a spawn failure is reported as failed')
+  assert.equal(missing.timedOut, false, 'a spawn failure is not a timeout')
   assert.equal(missing.code, null)
 })
 

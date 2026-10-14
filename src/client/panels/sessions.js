@@ -287,6 +287,12 @@ export function SessionsSection(props) {
         // sessions service) so a deleted session disappears immediately
         // instead of lingering until reload.
         if ((method === 'deleteSession' || method === 'closeSession') && props.refreshSessions) props.refreshSessions()
+        // Honest receipt: the delete succeeded, but the host reports a guard
+        // was skipped on the way (e.g. the cross-process write lease could
+        // not be taken) — say so instead of letting the host log be the only
+        // witness. A normal delete (degraded null/absent) stays silent.
+        var degraded = result.value && typeof result.value.degraded === 'string' ? result.value.degraded : ''
+        if (degraded !== '') showToast('info', dshT('⚠️ 会话已删除，但跨进程护栏未生效：') + degraded)
         return reloadSessions()
       }
       patchSession({ busy: false, error: dshT('操作失败：') + messageOf(result.error) })

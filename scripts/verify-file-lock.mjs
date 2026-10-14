@@ -3,10 +3,14 @@
  * Cross-process write lock (Phase F1) contract check.
  *
  * The lock guards the profile patch against two dsh instances on one profile.
- * What must hold: a normal write leaves no lock behind, a stale lock (old mtime
- * or a dead owner) is reclaimed, a live foreign lock makes the writer wait but
- * never refuses the write (fail-open — the atomic rename still protects the
- * file), and the critical section's return value survives.
+ * What must hold: a normal write leaves no lock behind, a lock whose owner is
+ * proven dead (or a leftover naming this process) is taken over, an UNREADABLE
+ * record is waited for and never deleted, a live foreign lock makes the writer
+ * wait but never refuses the write (fail-open — the atomic rename still protects
+ * the file), and the critical section's return value survives.
+ *
+ * The lock is `<file>.lock` holding `<pid>\n`, the same shape as the host's
+ * @deepseek-ai/dsh-atomic-write lock, so the two agree on who holds a file.
  *
  * Two boundaries are pinned deliberately, because both used to fail SILENTLY:
  * an owner that exists but refuses to be signalled (EPERM) must never have its
@@ -18,7 +22,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // `mutatePatch` is deliberately NOT imported here: the cross-process check below
@@ -44,13 +48,17 @@ const dir = mkdtempSync(join(tmpdir(), 'dsh-admin-lock-'))
 process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ } })
 const target = join(dir, 'cordis.patch.yml')
 writeFileSync(target, '# original\n', 'utf8')
-const lockPath = target + '.dsh-admin.lock'
+const lockPath = target + '.lock'
+
+/** Read the lock the way the writer does: `<pid>\n`, or null when not that shape. */
+const readOwner = (path) => {
+  try { return /^\d+\n$/.test(readFileSync(path, 'utf8')) ? Number(readFileSync(path, 'utf8').trim()) : null } catch { return null }
+}
 
 await check('a normal critical section runs, returns its value and drops the lock', async () => {
   const value = withFileLock(target, () => {
     assert.ok(existsSync(lockPath), 'the lock exists while the section runs')
-    const held = JSON.parse(readFileSync(lockPath, 'utf8'))
-    assert.equal(held.pid, process.pid, 'the lock names its owner')
+    assert.equal(readOwner(lockPath), process.pid, 'the lock is `<pid>\\n` naming its owner')
     writeFileSync(target, '# edited\n', 'utf8')
     return 42
   })
@@ -59,20 +67,43 @@ await check('a normal critical section runs, returns its value and drops the loc
   assert.equal(readFileSync(target, 'utf8'), '# edited\n', 'the write landed')
 })
 
-await check('a stale lock is reclaimed instead of wedging the profile', async () => {
-  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, at: 0 }), 'utf8')
-  const old = new Date(Date.now() - 60_000)
-  utimesSync(lockPath, old, old)   // older than the 30s stale window
+await check('a leftover lock from THIS process is taken over (crash or pid reuse)', async () => {
+  // A lock naming our own pid while we are not registered as holding it can only
+  // be a leftover: this process died mid-section before unlinking, or the pid was
+  // reused after an earlier instance did. The old code refused to steal from its
+  // own pid and waited the whole budget out every time; the host's lock cannot
+  // express this case at all (it has no in-process holder set), so this is the
+  // one place this module is stricter than the host.
+  writeFileSync(lockPath, process.pid + '\n', 'utf8')
+  const started = Date.now()
   const value = withFileLock(target, () => 'ran')
-  assert.equal(value, 'ran', 'the writer did not wait for a stale lock')
-  assert.ok(!existsSync(lockPath), 'the reclaimed lock is gone afterwards')
+  assert.equal(value, 'ran', 'the writer did not wait on its own leftover lock')
+  assert.ok(Date.now() - started < 1000, 'it was taken over, not waited out')
+  assert.ok(!existsSync(lockPath), 'the taken-over lock is gone afterwards')
 })
 
 await check('a dead owner\'s lock is reclaimed, a live foreign one is not stolen', async () => {
   // pid 2^31-1 is not a real process on any platform we run on.
-  writeFileSync(lockPath, JSON.stringify({ pid: 2147483647, at: Date.now() }), 'utf8')
+  writeFileSync(lockPath, 2147483647 + '\n', 'utf8')
   assert.equal(withFileLock(target, () => 'ok'), 'ok', 'a dead owner\'s lock does not block')
   assert.ok(!existsSync(lockPath), 'and it is cleaned up')
+})
+
+await check('an unreadable record is WAITED for, never deleted', async () => {
+  // The host waits on any lock it cannot parse rather than taking it over, and
+  // this module matches that: the old JSON record shape (`{"pid":…}`), a pid out
+  // of a real process's range, and a half-written record between create and write
+  // are all reasons a lock may be unreadable, and all of them must outlive a
+  // writer that cannot prove the owner dead. Deleting would race a concurrent
+  // creator and put two writers inside at once.
+  writeFileSync(lockPath, '{"pid": 1234}\n', 'utf8')
+  const started = Date.now()
+  const value = withFileLock(target, () => 'wrote-anyway')
+  const waited = Date.now() - started
+  assert.equal(value, 'wrote-anyway', 'fail-open still writes after the budget')
+  assert.ok(waited >= 2500, 'the unreadable lock was waited on, not deleted (waited ' + waited + 'ms)')
+  assert.ok(existsSync(lockPath), 'the lock file survived: nobody may delete an unreadable record')
+  rmSync(lockPath, { force: true })
 })
 
 await check('a live owner we may not signal (EPERM) is alive, not dead — its lock is never stolen', () => {
@@ -103,7 +134,7 @@ await check('a live owner we may not signal (EPERM) is alive, not dead — its l
     console.log('   (no EPERM pid on this host — behavioural half skipped)')
     return
   }
-  writeFileSync(lockPath, JSON.stringify({ pid: foreign, at: Date.now() }), 'utf8')
+  writeFileSync(lockPath, foreign + '\n', 'utf8')
   const value = withFileLock(target, () => 'wrote-anyway')
   assert.equal(value, 'wrote-anyway', 'EPERM is not a refusal: fail-open still writes')
   assert.ok(existsSync(lockPath), "the live owner's lock file was NOT unlinked (pid " + foreign + ')')
@@ -113,7 +144,7 @@ await check('a live owner we may not signal (EPERM) is alive, not dead — its l
 await check('a live foreign lock delays the write but never refuses it (fail-open)', async () => {
   // The parent process is definitively alive and is not us: a lock that must
   // be waited on (unlike a dead pid, which the previous check reclaims).
-  writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, at: Date.now() }), 'utf8')
+  writeFileSync(lockPath, process.ppid + '\n', 'utf8')
   const started = Date.now()
   const value = withFileLock(target, () => 'wrote-anyway')
   const waited = Date.now() - started
@@ -132,9 +163,9 @@ await check('the lock is REENTRANT: a nested call neither stalls nor releases ea
   // outer section still needs.
   const target = join(dir, 'reentrant.patch.yml')
   writeFileSync(target, '# seed\n', 'utf8')
-  const lockPath = target + '.dsh-admin.lock'
+  const lockPath = target + '.lock'
   const other = join(dir, 'reentrant-other.patch.yml')
-  const otherLock = other + '.dsh-admin.lock'
+  const otherLock = other + '.lock'
   const seen = []
   const started = Date.now()
   const value = withFileLock(target, () => {
@@ -143,7 +174,7 @@ await check('the lock is REENTRANT: a nested call neither stalls nor releases ea
     const inner = withFileLock(target, () => {
       seen.push('inner-entered-while-outer-held')
       assert.ok(existsSync(lockPath), "the outer's lock file is still on disk inside the nested section")
-      assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).pid, process.pid, 'and still names one owner')
+      assert.equal(readOwner(lockPath), process.pid, 'and still names one owner')
       // A DIFFERENT file is ordinary contention, not reentrancy: it takes the
       // normal path and gets its own lock immediately (nothing holds it).
       const cross = withFileLock(other, () => {
@@ -177,7 +208,7 @@ await check('a throwing section releases the lock AND clears its reentrancy gran
   // process — every later call would early-return and never take a lock at all.
   const target = join(dir, 'reentrant-throw.patch.yml')
   writeFileSync(target, '# seed\n', 'utf8')
-  const lockPath = target + '.dsh-admin.lock'
+  const lockPath = target + '.lock'
   const attempt = (fn) => {
     try { withFileLock(target, fn); return null } catch (error) { return error }
   }
@@ -278,7 +309,7 @@ await check('lock contention is read from every code Windows actually reports', 
   // EEXIST is the documented one, but Windows reports EPERM/EACCES/EBUSY while
   // another process creates or deletes the lock file. Tolerating only EEXIST let
   // those escape as an uncaught exception from withFileLock — the windows-latest /
-  // Node 22 leg went red with `path: '…cron-tasks.json.dsh-admin.lock'`.
+  // Node 22 leg went red with `path: '…cron-tasks.json.lock'`.
   for (const code of ['EEXIST', 'EPERM', 'EACCES', 'EBUSY']) {
     assert.equal(isLockContention(Object.assign(new Error(code), { code })), true, code + ' means contention')
   }
@@ -373,7 +404,7 @@ await check('crash residue: a DEAD writer temp is swept, live-pid and foreign fi
 await check('reentrancy survives a differently-SPELLED path to the same file', () => {
   const target = join(dir, 'spelling.patch.yml')
   writeFileSync(target, '# seed' + String.fromCharCode(10), 'utf8')
-  const lockPath = target + '.dsh-admin.lock'
+  const lockPath = target + '.lock'
   const convoluted = join(dir, 'sub', '..', 'spelling.patch.yml')
   const started = Date.now()
   withFileLock(target, () => {
@@ -404,4 +435,4 @@ await check('a failed atomicRename reaps its own temp (no orphan residue)', () =
 
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, stale reclaim, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, leftover takeover, dead owner, unreadable record, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply)')

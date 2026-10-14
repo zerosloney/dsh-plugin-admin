@@ -70,6 +70,7 @@ var I18N_EN = {
   "复制会话 ID": "Copy session ID",
   "删除会话": "Delete session",
   "🗑️ 会话已删除": "🗑️ Session deleted",
+  "⚠️ 会话已删除，但跨进程护栏未生效：": "⚠️ Session deleted, but the cross-process guard was skipped: ",
   "❌ 删除会话失败：": "❌ Failed to delete the session: ",
   "⚠️ 再点一次确认删除（在线会话将先关停）": "⚠️ Click again to confirm deletion (live sessions are closed first)",
   "在资源管理器打开": "Open in file manager",

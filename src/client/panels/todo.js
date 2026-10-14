@@ -335,13 +335,20 @@ export function TodoAdminDock(props) {
   var call = props.call
 
   useEffect(function () {
-    if (!show || typeof sessionId !== 'string') return undefined
+    // The purge below must run even while the dock is hidden: gated on `show`
+    // it let the PREVIOUS session's timestamps linger in the module Map for
+    // the whole hidden stretch. But while hidden, the empty/absent list is
+    // NOT evidence that the current session's active step ended, so the
+    // same-session pass is skipped — only entries from OTHER sessions drop.
+    if (typeof sessionId !== 'string') return undefined
     var keyPrefix = sessionId + '\u0000'
     /** @type {string[]} */
     var actives = []
-    for (var i = 0; i < list.length; i++) {
-      var item = list[i] || {}
-      if (item.status === 'in_progress' && typeof item.content === 'string') actives.push(item.content)
+    if (show) {
+      for (var i = 0; i < list.length; i++) {
+        var item = list[i] || {}
+        if (item.status === 'in_progress' && typeof item.content === 'string') actives.push(item.content)
+      }
     }
     var now = Date.now()
     var addedNew = false
@@ -356,6 +363,7 @@ export function TodoAdminDock(props) {
     var stale = []
     todoActiveSince.forEach(function (v, k) {
       if (k.indexOf(keyPrefix) === 0) {
+        if (!show) return // hidden: no list is not proof the step ended — keep
         if (actives.indexOf(k.slice(keyPrefix.length)) === -1) stale.push(k)
       } else {
         // Another session's entry: it would otherwise live until the page

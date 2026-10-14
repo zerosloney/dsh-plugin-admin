@@ -65,6 +65,25 @@ await check('redaction covers hyphenated keys AND secret-looking VALUES under be
   assert.ok(urlUserinfo.includes('https://'), 'the scheme/host stay readable')
 })
 
+await check('redaction covers header-list arrays AND Basic-auth credentials', () => {
+  // Two shapes that used to slip through the two-channel promise:
+  //  1. an ARRAY of {name, value} pairs (how MCP header lists and GitLab CI
+  //     variables are spelled): the elements recursed WITHOUT their parent key,
+  //     and inside each element the key name is `value` — not sensitive — while
+  //     the credential's identity lives in `name`, so the secret rode through;
+  //  2. `Authorization: Basic <base64>` — same tier as Bearer, the payload IS
+  //     the credential.
+  const pair = summarizeArgs([{ headers: [{ name: 'X-Api-Key', value: 'live-pair-array-secret' }] }])
+  assert.ok(!pair.includes('live-pair-array-secret'), 'a {name, value} pair hides the value when name is sensitive: ' + pair)
+  const ciVar = summarizeArgs([{ variables: [{ key: 'DEPLOY_TOKEN', value: 'live-ci-variable-secret' }] }])
+  assert.ok(!ciVar.includes('live-ci-variable-secret'), 'the {key, value} spelling is covered too: ' + ciVar)
+  const benign = summarizeArgs([{ headers: [{ name: 'Accept', value: 'application/json' }] }])
+  assert.ok(benign.includes('application/json'), 'a benign pair keeps its value (no over-redaction): ' + benign)
+  const basic = summarizeArgs([{ command: 'curl -H "Authorization: Basic dXNlcjpwYXNzd29yZDEyMzQ=" https://example.test' }])
+  assert.ok(!basic.includes('dXNlcjpwYXNzd29yZDEyMzQ'), 'a Basic-auth credential inside a command is redacted: ' + basic)
+  assert.ok(basic.includes(REDACTED), 'redaction is visible, not silent: ' + basic)
+})
+
 await check('redaction covers the passphrase and pwd key spellings (but not look-alikes)', () => {
   // Two more key spellings that hold secrets in the wild; their values used to
   // reach the trail in clear text whenever they matched no secret SHAPE.
