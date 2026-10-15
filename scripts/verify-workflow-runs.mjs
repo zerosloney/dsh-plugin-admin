@@ -840,13 +840,23 @@ await check('a derived run claims its terminal source, so a second instance cann
       'amend hits the same chain claim',
     )
 
-    // 派生 run 落定 → 链上声明全撤 → 第二个实例的 resume 放行（无误拒残留）。
+    // 派生 run 落定，但链上声明已被"另一实例"（sleeper）名下的记录覆盖——
+    // 撤销纪律不删别人的**活**声明（无条件 unlink 会删掉接管者的保护、把双跑
+    // 放大成三跑）：文件留下，由接管者落定时自行清理，或操作者按拒绝信息
+    // 点名的路径手删。
     await r1.stop(derived.id, 'cleanup')
     await new Promise((resolve) => setTimeout(resolve, 100))
-    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'settling the derived run releases the source')
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), true, 'a foreign LIVE claim survives another instance\'s settle (no third-run amplifier)')
+    assert.equal(existsSync(join(runsDir, `${derived.id}.owner`)), true, '…the derived id too')
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner.lock`)), false, 'the claim lock is released after the settle')
+    // 手工 override（拒绝信息点名的路径）：确认另一实例已不在后删除声明文件，
+    // 源恢复可续跑。
+    rmSync(join(runsDir, `${source.id}.owner`), { force: true })
+    rmSync(join(runsDir, `${derived.id}.owner`), { force: true })
     const reopened = await r2.resume(source.id, { parent: { id: 'sess-chain-2' } })
     assert.ok(reopened.id, 'once the chain claim is gone the source is resumable again')
     await r2.join(reopened.id)
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'resuming cleaned up its own claim chain')
   } finally {
     sleeper.kill()
   }
@@ -886,7 +896,12 @@ await check('the chain claim covers grandparents: a second instance cannot resum
     await r1.stop(c.id, 'cleanup')
     await new Promise((resolve) => setTimeout(resolve, 100))
     for (const id of [a.id, b.id, c.id]) {
-      assert.equal(existsSync(join(runsDir, `${id}.owner`)), false, `settling the grandchild releases the whole chain (${id})`)
+      // 覆写成 sleeper 名下的活声明后，落定**不删**别人的声明（三跑放大器
+      // 缺口已闭合）；手删即恢复。
+      assert.equal(existsSync(join(runsDir, `${id}.owner`)), true, `a foreign live claim survives the settle (${id})`)
+    }
+    for (const id of [a.id, b.id, c.id]) {
+      rmSync(join(runsDir, `${id}.owner`), { force: true })
     }
   } finally {
     sleeper.kill()
@@ -917,6 +932,47 @@ await check('the owner claim is written BEFORE the compile window, not at settle
   const resumed = await pending
   await runToDone(resumed, r)
   assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, 'settling releases the claim again')
+})
+
+// 检查/写入/撤销三步共用的跨进程锁（TOCTOU 闭合）的可观察面：claim 文件是
+// 原子写的完整 JSON（裸 writeFileSync 的撕裂残留会被读方按"无声明"放行，
+// 静默失去保护）；拒绝路径上锁文件不残留（抛错即释放）；撕裂声明可被下一
+// 次 resume 放行并被原子写覆写，落定时整链清理。
+await check('the claim file is atomic JSON, no lock residue, and a torn claim heals', async () => {
+  const { spawn } = await import('node:child_process')
+  const home = join(tmpBase, 'claim-shape')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 120 })
+  const source = await r.start({ script: 'return 1', parent: { id: 'sess-shape' } })
+  await r.join(source.id)
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  try {
+    // 拒绝路径：活的外来声明 + 终态记录 → owner 拒绝，且锁文件不残留。
+    writeFileSync(join(runsDir, `${source.id}.owner`), JSON.stringify({ pid: sleeper.pid, at: Date.now() }), 'utf8')
+    await assert.rejects(
+      () => r.resume(source.id, { parent: { id: 'sess-shape' } }),
+      /another dsh process/,
+    )
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner.lock`)), false, 'a refused resume releases the claim lock')
+    // 撕裂声明不是活声明：读不出来按"无声明"放行（fail-open，与旧版一致）。
+    writeFileSync(join(runsDir, `${source.id}.owner`), '{"pid": 12', 'utf8')
+    const hang = await r.amend(source.id, 'await new Promise(() => {})', { parent: { id: 'sess-shape' } })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    // 声明写入是 temp+rename 原子 JSON：撕裂残留已被覆写成完整对象。
+    const claim = JSON.parse(readFileSync(join(runsDir, `${hang.id}.owner`), 'utf8'))
+    assert.equal(claim.pid, process.pid, 'the claim names this process (crash residue is decidable)')
+    assert.ok(typeof claim.at === 'number', 'the claim carries its write time')
+    assert.equal(JSON.parse(readFileSync(join(runsDir, `${source.id}.owner`), 'utf8')).pid, process.pid, 'the torn source claim was replaced atomically too')
+    // 再撕一次派生 id 的声明：落定按"非活声明"清掉，整链不留垃圾。
+    writeFileSync(join(runsDir, `${hang.id}.owner`), '{"pid": 12', 'utf8')
+    await r.stop(hang.id, 'cleanup')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(existsSync(join(runsDir, `${hang.id}.owner`)), false, 'the settle cleans the whole claim chain')
+    assert.equal(existsSync(join(runsDir, `${source.id}.owner`)), false, '…the source included')
+    assert.equal(existsSync(join(runsDir, `${hang.id}.owner.lock`)), false, 'and no lock residue is left behind')
+  } finally {
+    sleeper.kill()
+  }
 })
 
 // 撤销配对：预写声明之后 start 可能以诊断拒绝收场（返回 id:null，没有 handle、

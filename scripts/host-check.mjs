@@ -641,11 +641,11 @@ let registryOnlyMounted = false
 assert.equal(registryOnlyMounted, true, 'the registry-only mount ran')
 // The default mount is NOT asserted through install() here: it would have to
 // reach pnpm (and the network) to show the absence of a policy refusal, and the
-// unit block above already pins that `allow` passes the same spec through.
-// What IS asserted is that the default mount resolves to 'allow' at all — if a
-// future change flipped the default, every profile's install behaviour would
-// change silently.
-assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the mounted default is still allow')
+// unit block above already pins that `registry-only` passes registry/local
+// specs through. What IS asserted is that the default mount resolves to
+// 'registry-only' at all — if a future change flipped the default, every
+// profile's install behaviour would change silently.
+assert.equal(resolvePluginConfig({}).installScripts, 'registry-only', 'the mounted default is registry-only')
 
 /* --------------- win32 caret escaping for the cmd.exe shell ---------------
  * pnpm runs through cmd.exe on Windows, which treats `^` as its escape
@@ -812,9 +812,11 @@ assert.equal(
   false,
   'a bare trailing @ is not a registry spec (it is malformed, not a range)',
 )
-// The DEFAULT is unchanged — an existing profile must not change behaviour
-// underneath an upgrade — and all four states validate at the mount boundary.
-assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the default installScripts policy is unchanged')
+// The DEFAULT is `registry-only` since v1.27.19: a browser-reachable install
+// RPC no longer builds arbitrary remote repos' prepare scripts under the
+// operator's environment; `allow` is the explicit opt-out. All four states
+// validate at the mount boundary.
+assert.equal(resolvePluginConfig({}).installScripts, 'registry-only', 'the default installScripts policy is registry-only')
 for (const state of ['allow', 'registry-only', 'local-only', 'deny']) {
   assert.equal(resolvePluginConfig({ installScripts: state }).installScripts, state, `installScripts: '${state}' is accepted`)
 }
@@ -3177,7 +3179,7 @@ try {
   // `installScripts` rides the same fail-loud contract: a typo must not silently
   // leave a policy at its default, because this one decides whether a
   // dependency's prepare script runs on the operator's machine.
-  assert.equal(resolvePluginConfig({}).installScripts, 'allow', 'the default matches `dsh plugin add` behaviour')
+  assert.equal(resolvePluginConfig({}).installScripts, 'registry-only', 'the default refuses remote specs before pnpm starts')
   for (const value of ['deny', 'local-only', 'allow']) {
     assert.equal(resolvePluginConfig({ installScripts: value }).installScripts, value, value + ' is accepted')
   }

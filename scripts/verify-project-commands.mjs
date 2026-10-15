@@ -129,6 +129,11 @@ try {
     assert.equal(parsed.body, 'body line')
     assert.equal(parseCommandFrontmatter('no fence'), undefined)
     assert.equal(parseCommandFrontmatter('---\nunterminated'), undefined)
+    // BOM'd 文件（会写 BOM 的编辑器产物）：首行是 `\uFEFF---`，不过精确分隔符
+    // 判定会把整条命令读成"无 frontmatter"。
+    const bommed = parseCommandFrontmatter('\uFEFF---\ndescription: bom\n---\nbody')
+    assert.equal(bommed.data.description, 'bom', 'a leading BOM is stripped before the fence test')
+    assert.equal(bommed.body, 'body')
   })
 
   await check('resolveProjectRoot: walks up to .git, falls back to cwd', () => {

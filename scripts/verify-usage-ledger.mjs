@@ -246,9 +246,11 @@ await checkAsync('9. two ledgers over one file merge instead of overwriting (cro
   const mirror = [{ id: 's-mirror', input: 9, lastSeenAt: 2, deleted: false }]
   const union = unionUsageEntries(disk, mirror)
   assert.deepEqual(union.map(e => e.id).sort(), ['s-disk', 's-mirror'], 'the union keeps rows only one side knows')
-  // Same id on both sides → the in-process mirror wins (it is derived from the
-  // file plus in-process reads, so it is the fresher row).
-  assert.equal(unionUsageEntries([{ id: 'x', input: 1 }], [{ id: 'x', input: 2 }])[0].input, 2, 'mirror wins a conflict')
+  // Same id on both sides → counters max-join (the larger measurement wins
+  // regardless of which side wrote later); attribution/recency follow the
+  // mirror when it is the fresher row (pinned in check 11).
+  assert.equal(unionUsageEntries([{ id: 'x', input: 1 }], [{ id: 'x', input: 2 }])[0].input, 2, 'the larger counter wins the join')
+  assert.deepEqual(unionUsageEntries([{ id: 'x', input: 5 }], [{ id: 'x', input: 2 }])[0].input, 5, 'a staler mirror cannot shrink a stored counter')
   assert.deepEqual(unionUsageEntries(undefined, undefined), [], 'an unreadable side contributes nothing')
 
   const path = join(tmp, 'shared.json')
@@ -298,6 +300,50 @@ check('10. a summaryError row counts as live but never zeroes the stored totals'
   })], 100)
   assert.equal(realZero.entries[0].input, 0, 'a genuine zero is stored')
   assert.equal(realZero.changed, true, 'and is a change worth writing')
+})
+
+check('11. a stale live read cannot regress a stored row (monotonic counters)', () => {
+  // The S1 race, in merge terms: the pre-delete snapshot F (the LARGER
+  // numbers, an older write) lands; the background sweep's list() was taken
+  // BEFORE the delete and merges AFTER it — smaller numbers, fresher stamp.
+  // Overwriting by write recency used to regress a deleted session's final
+  // numbers, with no log left to re-read them from. The six counters are
+  // cumulative per session id (the log only grows; folds are prefix folds), so
+  // the per-field max is the sound join: a smaller incoming row is a STALE
+  // measurement, never a correction.
+  const final = [{
+    id: 's-gone', project: 'p', title: 't', createdAt: 1,
+    input: 900, output: 50, cacheRead: 10, cacheWrite: 2, userMsgs: 12, assistantMsgs: 7,
+    lastSeenAt: 500, deleted: false,
+  }]
+  const stale = [session({
+    id: 's-gone',
+    messageCount: 4, assistantCount: 2,
+    tokens: { input: 300, output: 10, cacheRead: 4, cacheWrite: 1 },
+  })]
+  const merged = mergeUsageLedger(final, stale, 900, { markAbsent: true })
+  const entry = merged.entries.find(e => e.id === 's-gone')
+  assert.equal(entry.input, 900, 'the stale read does not shrink the stored totals')
+  assert.equal(entry.assistantMsgs, 7, '…same for the message counts')
+  assert.equal(entry.lastSeenAt, 900, 'recency still advances')
+  assert.equal(entry.deleted, false, 'the stale list still saw the session live')
+  assert.equal(merged.changed, true, 'an attribution/recency refresh is still a change worth writing')
+  // The next full read no longer sees the session → retained as deleted with
+  // the FINAL numbers — which is the whole point of the ledger.
+  const afterGone = mergeUsageLedger(merged.entries, [], 1000, { markAbsent: true })
+  const retained = afterGone.entries.find(e => e.id === 's-gone')
+  assert.equal(retained.deleted, true, 'absence from the next full read retains it as deleted')
+  assert.equal(retained.input, 900, 'retention keeps the largest measurement, not the stale one')
+
+  // Growth still flows through: a genuinely larger later read updates in place.
+  const grown = mergeUsageLedger(merged.entries, [session({
+    id: 's-gone',
+    messageCount: 20, assistantCount: 9,
+    tokens: { input: 1200, output: 60, cacheRead: 30, cacheWrite: 8 },
+  })], 1100, { markAbsent: false })
+  const bigger = grown.entries.find(e => e.id === 's-gone')
+  assert.equal(bigger.input, 1200, 'a larger measurement lands')
+  assert.equal(bigger.assistantMsgs, 9, '…message counts too')
 })
 
 rmSync(tmp, { recursive: true, force: true })

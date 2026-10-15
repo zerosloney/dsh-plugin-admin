@@ -39,7 +39,7 @@ const {
   SEARCH_OPEN_AT_ENABLED,
 } = await import(new URL('../lib/overlay-admin.js', import.meta.url).href)
 
-const { PATCH_BACKUP_SUFFIX, writePatch } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
+const { PATCH_BACKUP_SUFFIX, writePatch, readPatchLines } = await import(new URL('../lib/patch-utils.js', import.meta.url).href)
 
 const results = []
 const check = (name, fn) => {
@@ -312,6 +312,19 @@ await checkAsync('writePatch keeps the replaced revision in the .bak beside the 
   writePatch(patchPath, ['# second'])
   assert.equal(readFileSync(patchPath + PATCH_BACKUP_SUFFIX, 'utf8'), '# first\n[]\n', 'backup holds the revision the write replaced (comment-only text is normalized to a valid empty sequence)')
   assert.equal(readFileSync(patchPath, 'utf8'), '# second\n[]\n', 'the patch holds the new revision (comment-only lines ride above the [] the host requires)')
+})
+
+check('readPatchLines strips a UTF-8 BOM so the first top-level block stays visible', () => {
+  // 一台会写 BOM 的编辑器改过 cordis.patch.yml：js-yaml 容忍 BOM、宿主照常
+  // 启动，而块扫描锚定在第 0 列的 `^- `——BOM 让首个顶级块对所有面板不可见，
+  // 下一次 upsert 会在它旁边再写一行（重复 id 让宿主拒绝启动）。剥离在唯一
+  // 读取入口做（readPatchLines），所有 admin 模块同享。
+  const dir = mkdtempSync(join(tmpdir(), 'patch-bom-'))
+  tempRoots.push(dir)
+  writeFileSync(join(dir, 'cordis.patch.yml'), '\uFEFF- id: web\n  insert:\n    - id: search-override\n', 'utf8')
+  const { lines } = readPatchLines(dir)
+  assert.equal(lines[0], '- id: web', 'the BOM is gone from the first line')
+  assert.equal(matchRowIdLine(lines[0])?.id, 'web', 'the first block matches after the strip')
 })
 
 console.log(results.join('\n'))

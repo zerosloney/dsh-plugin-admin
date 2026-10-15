@@ -36,7 +36,9 @@
  *      verifier's own summary line, not retyped;
  *   5. the documented config-key counts equal `resolvePluginConfig`'s tables;
  *   6. the plugin version strings in README.md and docs/COMPAT.md equal the
- *      package.json version (release commits must move all three together).
+ *      package.json version (release commits must move all three together);
+ *   7. the documented RPC surface ("N 方法 / M 命名空间") equals
+ *      `RPC_MANIFEST`'s real namespace/method counts.
  *
  * Zero dependencies; part of npm test.
  */
@@ -268,6 +270,27 @@ check('README/COMPAT 的插件版本串等于 package.json version', () => {
   }
 })
 
+/* ── 7. the documented RPC surface counts ─────────────────────────────────── */
+
+// The manifest is pure frozen table data (no Context, no side effects), so
+// unlike the gate tables it can be imported directly rather than parsed out of
+// source. This is the cheap pin the review asked for: "91 方法 / 14 命名空间"
+// was the load-bearing number most likely to drift silently.
+const { RPC_MANIFEST } = await import(new URL('../lib/rpc-manifest.js', import.meta.url).href)
+const rpcNamespaces = Object.keys(RPC_MANIFEST).length
+const rpcMethods = Object.values(RPC_MANIFEST).reduce((sum, ns) => sum + Object.keys(ns?.methods ?? {}).length, 0)
+assert.ok(rpcNamespaces > 5, `parsed RPC_MANIFEST (found ${rpcNamespaces} namespaces)`)
+assert.ok(rpcMethods > 50, `counted RPC_MANIFEST methods (found ${rpcMethods})`)
+
+check('ARCHITECTURE.md 的 RPC 方法/命名空间计数与 lib/rpc-manifest.js 一致', () => {
+  const matches = [...arch.matchAll(/(\d+)\s*方法\s*\/\s*(\d+)\s*命名空间/g)]
+  assert.ok(matches.length > 0, 'ARCHITECTURE.md should state the RPC surface ("N 方法 / M 命名空间")')
+  for (const match of matches) {
+    assert.equal(Number(match[1]), rpcMethods, `ARCHITECTURE.md claims ${match[1]} RPC methods; rpc-manifest exports ${rpcMethods}`)
+    assert.equal(Number(match[2]), rpcNamespaces, `ARCHITECTURE.md claims ${match[2]} namespaces; rpc-manifest exports ${rpcNamespaces}`)
+  }
+})
+
 /* ── report ────────────────────────────────────────────────────────────────── */
 
 if (failures.length > 0) {
@@ -275,4 +298,4 @@ if (failures.length > 0) {
   console.error('Fix the DOC or the CODE — whichever is actually wrong — then re-run.')
   process.exit(1)
 }
-console.log(`\nverify-doc-claims OK: ${stepCount} steps / ${staticCount} static gates / ${validatedCount}+${passthroughCount} config keys all match the docs`)
+console.log(`\nverify-doc-claims OK: ${stepCount} steps / ${staticCount} static gates / ${validatedCount}+${passthroughCount} config keys / ${rpcMethods} rpc methods in ${rpcNamespaces} namespaces all match the docs`)

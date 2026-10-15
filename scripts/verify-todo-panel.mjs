@@ -35,7 +35,7 @@ const req = createRequire(import.meta.url)
 
 /* ============================ Host half ============================ */
 
-const { apply, parseGitStatusZ, parseGitNumstat, parseGitBranch, gitFileStats, normalizeMcpToolResult } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply, parseGitStatusZ, parseGitNumstat, parseGitBranch, gitFileStats, gitBaselineDecision, normalizeMcpToolResult } = await import(new URL('../lib/index.js', import.meta.url).href)
 const { renderSessionMarkdown, exportFilename } = await import(new URL('../lib/session-export.js', import.meta.url).href)
 const { foldHealthReport, healthSummaryLine } = await import(new URL('../lib/health-report.js', import.meta.url).href)
 // Descriptor assertions moved here in Phase D1b: the manifest owns the wire surface,
@@ -304,11 +304,58 @@ await checkAsync('fileStats reports a git failure instead of zeroes-as-clean', a
   const diff = await failing.service.gitDiff('broken')
   assert.equal(diff.diff, '', 'no diff text is invented')
   assert.ok(typeof diff.error === 'string' && diff.error !== '', 'gitDiff carries an error too')
-  assert.match(diff.error, /git diff 失败|git diff 超时/, 'the message distinguishes failure from timeout')
+  // A not-a-repo cwd now fails at the BASELINE probe (rev-parse + rev-list
+  // both refuse), which reports its own refusal; a resolvable HEAD that then
+  // fails the diff keeps the failure/timeout messages.
+  assert.match(diff.error, /git 无法解析 HEAD 基线|git diff 失败|git diff 超时/, 'the message distinguishes failure from timeout')
   assert.equal(diff.truncated, false)
   // The success path keeps error null, so one field is enough to branch on.
   const clean = await sessionAdmin.fileStats('plain-session')
   assert.equal(clean.error, null, 'a readable workspace reports no error')
+})
+
+// The git baseline decision (S2 pin). A failed `rev-parse HEAD` has two very
+// different causes: an unborn HEAD (fresh repo — the empty-tree baseline IS
+// the truth) and a refs FAULT in a repo that has commits — where the old
+// unconditional empty-tree fallback reported every changed line as an
+// addition with `error: null`. The decision is pure, so the classification is
+// pinned without simulating corrupted refs.
+check('gitBaselineDecision separates an unborn HEAD from a rev-parse fault', () => {
+  assert.deepEqual(gitBaselineDecision(true, null), { ref: 'HEAD', error: null })
+  assert.deepEqual(
+    gitBaselineDecision(false, false),
+    { ref: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', error: null },
+    'an unborn HEAD keeps the empty-tree baseline',
+  )
+  const fault = gitBaselineDecision(false, true)
+  assert.equal(fault.ref, null, 'a repo WITH commits refuses to fabricate an empty-tree diff')
+  assert.match(fault.error, /HEAD/, 'the refusal names the baseline failure')
+  assert.equal(gitBaselineDecision(false, null).ref, null, 'an unclassifiable failure is a fault too')
+})
+
+// End-to-end through the real service: a staged-but-never-committed repo (the
+// unborn-HEAD case the empty tree exists for) still folds to real stats —
+// status succeeds, the baseline resolves to the empty tree, the staged file
+// counts as the whole change set.
+await checkAsync('fileStats/gitDiff serve an unborn-HEAD repo via the empty-tree baseline', async () => {
+  const unborn = mkdtempSync(join(tmpdir(), 'dsh-unborn-'))
+  const gitIn = (/** @type {string} */ args) => execSync(`git ${args}`, { cwd: unborn, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  gitIn('init')
+  writeFileSync(join(unborn, 'staged.txt'), 'one\ntwo\n')
+  gitIn('add -A')
+  try {
+    const mounted = await makeGitCtxFor(unborn)
+    const stats = await mounted.service.fileStats('u1')
+    assert.equal(stats.error, null, 'an unborn HEAD is not an error')
+    assert.equal(stats.files, 1, 'the staged file is the whole change set')
+    assert.equal(stats.added, 2, 'the empty-tree diff counts its lines as additions')
+    const diff = await mounted.service.gitDiff('u1')
+    assert.equal(diff.error, null, 'gitDiff agrees the baseline resolved')
+    assert.match(diff.diff, /staged\.txt/, 'the diff names the staged file')
+    assert.match(diff.diff, /^\+one/m, 'and shows its added lines')
+  } finally {
+    rmSync(unborn, { recursive: true, force: true })
+  }
 })
 
 // The registry's members drift across dsh versions (this plugin already

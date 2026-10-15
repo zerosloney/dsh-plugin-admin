@@ -193,6 +193,35 @@ await check('write boundary: control characters (newline = cmd.exe command separ
   validateMcpConfig({ transport: 'streamable-http', serverName: 's', url: 'https://example.com/mcp' })
 })
 
+await check('write boundary: reconnect delays are judged against RESOLVED defaults, not raw undefined', async () => {
+  // dsh's resolveReconnectPolicy fills BOTH defaults (initialDelayMs 500,
+  // maxDelayMs 30000) BEFORE judging initial<=max — a row carrying only one
+  // side used to slip through here (`60000 > undefined` is false) and then
+  // failed the host's boot-time resolve, refusing the whole profile: the exact
+  // startup failure this write boundary exists to prevent.
+  assert.throws(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', reconnect: { initialDelayMs: 60_000 } }),
+    /initialDelayMs must be less than or equal to/,
+    'a one-sided initialDelayMs above the DEFAULT maxDelayMs is refused',
+  )
+  assert.doesNotThrow(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', reconnect: { maxDelayMs: 60_000 } }),
+    'a one-sided maxDelayMs above the default initialDelayMs is fine',
+  )
+  assert.doesNotThrow(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', reconnect: { initialDelayMs: 30_000 } }),
+    'exactly the default maxDelayMs is fine (equal is allowed)',
+  )
+  // The host also caps both delays at MAX_TIMER_DELAY_MS (setTimeout's
+  // ceiling); a raw value beyond it passed the positivity check and failed at
+  // boot.
+  assert.throws(
+    () => validateMcpConfig({ transport: 'stdio', serverName: 's', command: 'npx', reconnect: { initialDelayMs: 3_000_000_000 } }),
+    /no greater than 2147483647/,
+    'the timer ceiling is enforced on the raw value',
+  )
+})
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)
