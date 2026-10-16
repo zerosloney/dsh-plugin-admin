@@ -10,6 +10,7 @@
  */
 import React from 'react'
 import { currentLanguage, dshT, i18nSource, installLocaleRuntime, setAdminLang, subscribeLocale } from './i18n.js'
+import { sessionTitleFromLabel } from './session-title.js'
 // Phase E: which panels the official UI has taken over (auto-yield table).
 import { resolveNativeCoverage } from './native-coverage.js'
 
@@ -387,10 +388,11 @@ function setupMenuInjection(call, refreshSessions) {
   if (typeof document === 'undefined') return function () {}
 
   /**
-   * Extract the session title from the row's aria-label. The anchor button
-   * aria-label is: 会话"<title>"的操作 (zh) / Session "<title>" actions (en).
-   * Extracting from the DOM keeps the injection synchronous — no RPC needed
-   * just to show the button, so the menu can't close before it appears.
+   * Extract the session title from the row's aria-label — the DOM half only
+   * picks the button and reads the attribute; the shapes live in the exported
+   * {@link sessionTitleFromLabel} so the locale contract is testable without
+   * a DOM. Extracting from the DOM keeps the injection synchronous — no RPC
+   * needed just to show the button, so the menu can't close before it appears.
    *
    * The selector picks by the UI's CURRENT language (currentLanguage()), not
    * through dshT: a CSS selector is not copy — piping it through the
@@ -404,15 +406,7 @@ function setupMenuInjection(call, refreshSessions) {
       ? 'button[aria-label*="session" i][aria-label*="actions" i]'
       : 'button[aria-label*="会话" i][aria-label*="操作" i]')
     if (btn === null) return null
-    var label = btn.getAttribute('aria-label') || ''
-    // zh: 会话"xxx"的操作 → strip 会话"/"的操作
-    var zh = /会话["“]([^"”]+)["”]/.exec(label)
-    if (zh) return zh[1].trim()
-    // en: Session "xxx" actions
-    var en = /session\s*["“]([^"”]+)["”]/i.exec(label)
-    if (en) return en[1].trim()
-    // fallback: whole label minus known prefixes/suffixes
-    return label.replace(/^会话/, '').replace(/^session/i, '').replace(/["“”]|的操作|actions$/gi, '').trim() || null
+    return sessionTitleFromLabel(btn.getAttribute('aria-label') || '')
   }
 
   /** Find the treeitem row for the anchor button nearest the menu. */
@@ -466,7 +460,10 @@ function setupMenuInjection(call, refreshSessions) {
     if (menuEl.querySelector('[data-dsh-admin-injected]')) return
 
     var text = menuEl.textContent || ''
+    // 归档行的官方菜单项是「取消归档 / Unarchive session」（不是「归档会话」）
+    // ——不认它，归档会话的行菜单就一个注入项都拿不到。
     var isSession = text.indexOf('归档会话') !== -1 || text.indexOf('Archive session') !== -1
+      || text.indexOf('取消归档') !== -1 || text.indexOf('Unarchive session') !== -1
     var isWorkspace = !isSession && (text.indexOf('删除') !== -1 || text.indexOf('Delete workspace') !== -1)
     if (!isSession && !isWorkspace) return
 
@@ -477,8 +474,11 @@ function setupMenuInjection(call, refreshSessions) {
     if (row === null) return
 
     if (isSession) {
-      var title = sessionTitleFromRow(row)
-      if (title === null) return
+      var rowTitle = sessionTitleFromRow(row)
+      if (rowTitle === null) return
+      // Narrow once here: the resolvers below are closures over `title`, and a
+      // captured `var` does not keep a null-guard's narrowing across functions.
+      var title = /** @type {string} */ (rowTitle)
       // Resolve sessions by title lazily at click time (fresh RPC) so the
       // match is always current. Copy-id keeps the fuzzy matcher (a wrong
       // match only mis-copies an id); delete must never guess, so it

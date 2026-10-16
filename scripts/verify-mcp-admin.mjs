@@ -222,6 +222,54 @@ await check('write boundary: reconnect delays are judged against RESOLVED defaul
   )
 })
 
+// 热应用 fiber 匹配器（此前零用例覆盖）：fiber.update(config, noSave=true) 走
+// loader 的 noSave 分支、**不回写** entry.options.config——匹配器必须优先读
+// fiber.config（活配置），否则改名 A→B 热应用成功后，同一次启动内的下一次保
+// 存按盘上的 B 找 fiber、匹配到的却是 entry 里陈旧的 A，热应用静默退化成「每
+// 次都要重启」且理由失实。
+await check('hot-apply matches the fiber by its LIVE config after a rename (entry.options.config goes stale under noSave)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mcp-admin-hotapply-'))
+  const profileDir = join(home, 'profiles', 'web-fixture')
+  mkdirSync(join(profileDir, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
+  // 依赖在册（否则 upsert 会真的去跑 pnpm add）——夹具只需要"已安装"形状。
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.0.0' } }, null, 2))
+  let tail = Promise.resolve()
+  const enqueue = (op) => { const run = tail.then(op, op); tail = run.catch(() => {}); return run }
+  // 夹具 fiber = 改名 A→B 热应用成功之后的形状：entry.options.config 仍是 A
+  //（noSave 短路，loader 不回写），fiber.config 已是 B。
+  const updates = []
+  const fiber = {
+    config: { serverName: 'renamed-server' },
+    entry: { options: { config: { serverName: 'original-server' } } },
+    update: async (cfg, noSave) => { updates.push({ cfg, noSave }) },
+  }
+  const ctx = {
+    baseUrl: pathToFileURL(join(profileDir, 'node_modules', 'dsh-plugin-admin')).href,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    get: () => undefined,
+    registry: { entries: () => [['dsh-mcp-client', { name: 'dsh-mcp-client', fibers: [fiber] }]] },
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    effect: (fn) => fn(),
+  }
+  const audit = createAuditLog({ path: join(home, 'admin-audit.jsonl'), enqueue, logger: ctx.logger })
+  applyMcpAdmin(ctx, { enqueue, audit })
+  const patchPath = join(profileDir, 'cordis.patch.yml')
+  writeFileSync(patchPath, mcpInsertEntryLines('hot-entry', 'renamed-server').join('\n') + '\n', 'utf8')
+  try {
+    const result = await ctx.provided.mcpAdmin.upsert({
+      id: 'hot-entry',
+      config: { transport: 'stdio', serverName: 'renamed-server', command: 'node' },
+    })
+    assert.equal(result.ok, true, 'the save succeeds')
+    assert.equal(result.hotApplied, true, `the fiber is found by its LIVE config (hotApplied:false with a misleading reason before the fix), got reason: ${result.hotReason}`)
+    assert.equal(updates.length, 1, 'fiber.update ran exactly once')
+    assert.equal(updates[0].noSave, true, 'the update rides noSave (the plugin authored the row)')
+    assert.equal(updates[0].cfg.serverName, 'renamed-server', 'the update carries the saved config')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

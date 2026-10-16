@@ -442,6 +442,26 @@ check('a queued RPC body landing after teardown re-arms nothing (startWatch / re
   rmSync(zombieHome, { recursive: true, force: true })
 })
 
+// watcher 的 'error' 事件无监听器时是未捕获异常（EventEmitter 语义）：被监视
+// 目录失联时曾把整个 dsh 进程带崩——webhook-triggers 与 command-hook-admin 各
+// 自修过同款缺陷，cron 是最后一个。无法行为级触发：实测（Windows/libuv，本仓
+// CI 同款）删除或改名被监视目录**不发** error——句柄静默死亡；会发 error 的是
+// 权限拒绝、卷断开这类 EPERM 面，测试造不出来。所以钉在结构上：watcher 创建
+// 点必须携带 error 监听，且监听体是「丢弃 + 钉在 cronDisposed 上的 2 秒重武
+// 装」——与 webhook-triggers.js 同款契约。删掉监听器本检查即失败。
+check('the fs.watch handle carries an error listener with the disposal-gated re-arm (structural)', () => {
+  const source = readFileSync(new URL('../lib/cron-admin.js', import.meta.url), 'utf8')
+  const watchSite = source.indexOf('watch(canonicalWatchPath(')
+  assert.notEqual(watchSite, -1, 'the watch() call site is where the contract lives')
+  const window = source.slice(watchSite, watchSite + 2000)
+  assert.ok(/\.on\('error'/.test(window),
+    "an 'error' listener is attached to the same watcher — without it an fs.watch error escapes as an uncaught exception and takes the whole dsh process down (the webhook-triggers.js contract, applied here in v1.27.19)")
+  assert.ok(/watchRearmTimer = setTimeout/.test(window),
+    'the error handler schedules a re-arm (a recreated directory watches again instead of the mirror going stale forever)')
+  assert.ok(/if \(cronDisposed\) return/.test(window),
+    'the re-arm is gated on disposal (no watcher outlives the unloaded plugin)')
+})
+
 /* ========================================================================== */
 /*                        Scheduler: actual timer fire                        */
 /* ========================================================================== */

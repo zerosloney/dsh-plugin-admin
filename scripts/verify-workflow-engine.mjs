@@ -657,6 +657,37 @@ await checkAsync('vm realm hides host globals (process/fetch unreachable, realm 
   assert.ok(value.escaped === 'undefined' || value.escaped === 'threw', `realm-Function escape probe must not reach host process (got ${value.escaped})`)
 })
 
+await checkAsync('vm realm global is realm-rooted (globalThis.constructor.constructor cannot reach the host)', async () => {
+  // 这条钉住的逃逸在 realm bootstrap 重根全局之前是**活的**：沙箱 `{}` 是宿主
+  // 对象字面量，contextify 后全局的原型链把 `constructor` 答给宿主 Object、再
+  // `.constructor` 就是宿主 Function——一行拿到本 worker 的真 process，从那里
+  // `getBuiltinModule` 交出 node:fs。三条探针分别盖直接的 `constructor` 查找、
+  // `Object.getPrototypeOf` 与 `__proto__` 走链；任何一条拿到宿主对象时
+  // `typeof process` 是 'object'，即断言失败。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`
+    const probe = (get) => {
+      let out
+      try {
+        const Fn = get()
+        out = typeof Fn('return process')()
+      } catch { out = 'threw' }
+      return out
+    }
+    return {
+      direct: probe(() => globalThis.constructor.constructor),
+      proto: probe(() => Object.getPrototypeOf(globalThis).constructor.constructor),
+      protoChain: probe(() => globalThis.__proto__.constructor.constructor),
+    }
+  `)
+  const value = await run(code, {})
+  for (const [path, got] of Object.entries(value)) {
+    assert.ok(got === 'undefined' || got === 'threw', `${path}: the global's constructor chain must resolve inside the realm (got ${got})`)
+  }
+})
+
 await checkAsync('no HOST object crosses into the realm (args / facade results / rejections)', async () => {
   // The escape this test pins (it was live until the JSON bridge landed): every
   // value the host hands the script used to keep its HOST prototype chain, so

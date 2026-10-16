@@ -914,6 +914,48 @@ await check('the chain claim covers grandparents: a second instance cannot resum
 // 通过检查之后、编译之前落盘。resumeInner 的同步前缀（检查→写声明）在互斥锁
 // 的门后一个微任务内跑完，而 compileScript（动态 import + esbuild IPC）至少
 // 还要再等一个微任务——下面的窗口断言因此是确定性的，不是竞态赌博。
+// 祖先声明的**盲写覆盖**缺口（v1.27.19 形状）：链式声明只锁头 id、只检查头
+// id，祖先在头锁内盲写。另一实例沿派生链上别的 head 走来时持有它自己的 head
+// 锁，两边互不互斥——A 的祖先活声明会被 B 的链式写直接覆盖成自己的 pid，第
+// 三实例三检查全放行，双跑防线被击穿。修复后链上每个 id 各自持锁（canonical
+// 序），全部锁在手后对**每个** id 重读外来活声明，任一命中即在写入前整体拒
+// 绝。下面 B 的头声明是本进程的（r1 写的，头检查干净），只有 A 携带外来活声
+// 明——旧代码对这条操作放行并覆盖 A，新代码拒绝且不动盘上任何声明。
+await check('a chain claim refuses on a foreign ANCESTOR claim even when the head claim is its own', async () => {
+  const { spawn } = await import('node:child_process')
+  const home = join(tmpBase, 'chain-ancestor-overwrite')
+  const runsDir = join(home, 'workflows', 'runs')
+  const r1 = makeRegistry(ctxBundle.ctx, home, { stopSettleTimeoutMs: 150 })
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  try {
+    const a = await r1.start({ script: 'return 1', parent: { id: 'sess-anc' } })
+    await r1.join(a.id)
+    const b = await r1.amend(a.id, 'await new Promise(() => {})', { parent: { id: 'sess-anc' } })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(existsSync(join(runsDir, `${a.id}.owner`)), true, 'setup: the running derived run claims its settled source')
+
+    // 只把祖先 A 的声明换成外来活 pid；B 的头声明保持本进程（r1 写的）。
+    writeFileSync(join(runsDir, `${a.id}.owner`), JSON.stringify({ pid: sleeper.pid, at: Date.now() }), 'utf8')
+
+    const r2 = makeRegistry(ctxBundle.ctx, home)
+    await assert.rejects(
+      () => r2.amend(b.id, 'return 0', { parent: { id: 'sess-anc-2' } }),
+      /another dsh process/,
+      'the foreign ancestor claim refuses the whole operation (the head checking clean is not enough)',
+    )
+    const claimA = JSON.parse(readFileSync(join(runsDir, `${a.id}.owner`), 'utf8'))
+    assert.equal(claimA.pid, sleeper.pid, 'the foreign ancestor claim was NOT overwritten (no blind write, no half-chain)')
+
+    await r1.stop(b.id, 'cleanup')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const id of [a.id, b.id]) {
+      rmSync(join(runsDir, `${id}.owner`), { force: true })
+    }
+  } finally {
+    sleeper.kill()
+  }
+})
+
 await check('the owner claim is written BEFORE the compile window, not at settle', async () => {
   const home = join(tmpBase, 'claim-timing')
   const runsDir = join(home, 'workflows', 'runs')
@@ -1281,6 +1323,38 @@ await check('steps cap recycles a runaway ACTIVE loop (the idle watchdog only co
   assert.equal(rec.status, 'stopped', `expected the steps cap to recycle the run, got ${rec.status}`)
   assert.ok(rec.log.some((l) => l.kind === 'steps-cap'), 'the journal carries the steps-cap line')
   assert.ok(bundle.agentCalls() <= 5, `agent calls stayed bounded, got ${bundle.agentCalls()}`)
+})
+
+// 帽按「本代净步数」判：上代继承的回放不占新代预算——否则一个 ≥maxRunSteps
+// 的合法长编排 resume/amend 时，旧代的全量命中在回放阶段就把预算吃光，此后
+// 所有新步骤被帽收走，「resume 可零成本续跑并进入新一代计数」永不成立。旧代
+// 回放同时仍计入 facadeCalls 总量（帽 = maxRunSteps + stepsAtStart）：对同一
+// 缓存步骤的死循环依旧有界，完全不计命中会重开这条失控面。
+await check('a capped run resumes into a NEW generation: inherited replays do not consume the fresh budget', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'cap-resume')
+  const r = makeRegistry(bundle.ctx, home, { maxRunSteps: 3, stopSettleTimeoutMs: 2_000 })
+  const { id } = await r.start({
+    script: `
+      await agent('a'); await agent('b'); await agent('c')
+      await agent('gen1-never')
+      return 'gen1'
+    `,
+    parent: { id: 'sess-cap-resume' },
+  })
+  const capped = await runToDone({ id }, r)
+  assert.equal(capped.status, 'stopped', 'gen 1 trips the cap on its 3rd step')
+  const spawnsBeforeAmend = bundle.started().length
+  const amend = await r.amend(id, `
+    await agent('a'); await agent('b'); await agent('c')
+    const fresh = await agent('d')
+    return 'gen2:' + fresh
+  `, { parent: { id: 'sess-cap-resume' } })
+  const rec = await runToDone(amend, r)
+  assert.equal(rec.status, 'completed', `inherited replays must not consume the new generation's budget, got ${rec.status}`)
+  assert.equal(rec.result, 'gen2:result:d', 'the NEW step executed after the full replay (a/b/c served from cache, only d spawned)')
+  assert.equal(bundle.started().length - spawnsBeforeAmend, 1,
+    'only the new step spawned a subagent (the three replays hit the cache)')
 })
 
 await check('step opts field is capped (prompt/outcome were; opts rode through at bridge budget)', async () => {

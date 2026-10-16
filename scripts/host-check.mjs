@@ -1525,7 +1525,12 @@ assert.equal(second.sessions[0].title, '缓存标题', 'second list serves the c
 // exists — and the cache never accumulates dead sessions.
 await cacheCtx.provided.sessionAdmin.deleteSession('session-cached')
 const third = await cacheCtx.provided.sessionAdmin.list()
-assert.equal(readCalls, 2, 'deleteSession evicts the cached summary (next list re-reads)')
+// The pre-delete snapshot adds its OWN read (readCalls 2): it no longer serves
+// the cached prefix fold — it is the log's LAST reader, so it folds the WHOLE
+// log through its own paged read before the rm (a truncated fold there would
+// be the ledger's permanent final value). The list() after the delete re-reads
+// (readCalls 3) because the delete evicted the cache entry.
+assert.equal(readCalls, 3, 'deleteSession folds the whole log itself and evicts the cached summary (next list re-reads)')
 
 /* ---------- list() keeps per-session summary read failures visible ----------
  * A broken event log must not masquerade as an empty, healthy session; failed

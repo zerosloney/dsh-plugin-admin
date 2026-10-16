@@ -592,6 +592,29 @@ assert.equal(fields14.apiKey.set, true, 'the written secret reports as set')
 assert.equal(fields14.apiKey.value, '', 'and still never round-trips')
 console.log('scenario 14 OK: saveConfig writes/unset row keys and preserves unknown keys + siblings')
 
+// ---------- Scenario 14b: a multi-line flow provider config is REFUSED ------
+// rebuildEntryConfig 只认单行 flow map；多行 flow（手写 `config: {` 换行键）读
+// 不出兄弟键——照旧落盘等于按「只有 patch 里的键」重写，手写 apiKey 静默消失
+// 而面板回执 ok:true。与 web 行（scenario 8d）同一纪律：响亮拒绝，文件保持原
+// 样，让手工编辑者先修形状。
+writeFileSync(patchPath, [
+  '# test patch',
+  '- insert:',
+  '    - id: web-search-perplexity',
+  "      name: '@deepseek-ai/dsh-web-search-perplexity'",
+  '      config: {',
+  "        apiKey: 'pplx-hand-written',",
+  "        model: 'sonar-hand-set',",
+  '      }',
+  '',
+].join('\n'), 'utf8')
+await assert.rejects(() => service.saveConfig('perplexity', { apiKey: 'pplx-new' }, []),
+  /无法解析.*拒绝改写/, 'a multi-line flow provider config refuses the rewrite instead of dropping its siblings')
+const after14b = readFileSync(patchPath, 'utf8')
+assert.ok(after14b.includes('pplx-hand-written'), 'the hand-written apiKey is still on disk (byte preservation)')
+assert.ok(after14b.includes('sonar-hand-set'), 'the hand-set model is still on disk')
+console.log('scenario 14b OK: an unparsable provider-row inline config is refused, file untouched')
+
 // ---------- Scenario 15: bundled override vs opt-in refusal ----------------
 // The shipped DeepSeek row lives in the BUNDLE layer, so a bare id-targeted
 // override is the only shape that configures it; an opt-in provider has no row

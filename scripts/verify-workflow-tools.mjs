@@ -10,10 +10,11 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyWorkflowTools } from '../lib/workflow-tools.js'
+import { createWorkflowLibrary } from '../lib/workflow-library.js'
 import { canonicalWorkspacePath, assertTrustedWorkspacePath } from '../lib/workspace-path.js'
 let failures = 0
 async function check(name, fn) {
@@ -558,6 +559,45 @@ await check('the DEFAULT path (harness-provided session cwd) is passed through u
 })
 
 rmSync(gateRoot, { recursive: true, force: true })
+
+// ─── 项目库读侧逐文件拒绝（真实库 + 真实目录）────────────────────────────
+// 目录级栅门（projectWorkflowsDir + 相邻复验）只管目录本身，管不到目录里的
+// **条目**：`.dsh/workflows` 随仓库走，其文件可以是 clone 进来的符号链接——
+// 读侧曾经直接跟随链接，项目范围内任一会话即可读到项目外任意 JSON 可解析文
+// 件（写路径安全：temp+rename 替换链接本身；delete 摘链接；缺口仅在读）。
+await check('library reads decline non-regular project entries (a repo-shipped symlink reads nothing through)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'wf-lib-symlink-'))
+  const root = join(home, 'proj')
+  const wfDir = join(root, '.dsh', 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  const enqueue = (op) => Promise.resolve().then(op)
+  const library = createWorkflowLibrary({ dshHome: join(home, 'dsh-home'), enqueue })
+  // 链接目标：项目外的 JSON 可解析文件——旧代码会把它当库条目读出来。
+  const outside = join(home, 'outside-secret.json')
+  writeFileSync(outside, JSON.stringify({ name: 'secret', script: 'return 1' }), 'utf8')
+  // 普通条目照常可读（栅门收窄形状，不挡合法使用）。
+  writeFileSync(join(wfDir, 'plain.json'), JSON.stringify({ name: 'plain', script: 'return 1' }), 'utf8')
+  // 向量一：仓库自带的符号链接。无符号链接特权的 Windows 造不出来——该形状
+  // 由 POSIX CI 腿覆盖，这里降级为仅目录用例。
+  let linked = true
+  try { symlinkSync(outside, join(wfDir, 'leak.json')) } catch { linked = false }
+  // 向量二（全平台可造）：目录冒充 `<name>.json`——同一个 isFile 拒绝分支。
+  mkdirSync(join(wfDir, 'dir.json'))
+
+  const items = await library.listSaved(root)
+  const names = items.map((item) => item.name)
+  assert.ok(names.includes('plain'), `a regular entry still reads (got: ${JSON.stringify(names)})`)
+  assert.ok(!names.includes('secret'), 'the symlink target never appears (its JSON parses — the old code listed it)')
+  assert.ok(!names.includes('dir'), 'a directory named *.json is declined')
+  if (linked) assert.ok(!names.includes('leak'), 'the symlink entry itself is not listed')
+  const viaGet = linked ? await library.getSaved('leak', root) : null
+  assert.equal(viaGet, null, 'getSaved declines the symlink (the old code returned the outside file)')
+  // 写路径不受影响：普通条目照常保存（temp+rename 只替换链接本身，不写穿）。
+  await library.saveSaved({ name: 'plain', scope: 'project', script: 'return 2', workspacePath: root })
+  const after = await library.getSaved('plain', root)
+  assert.equal(after.script, 'return 2', 'writes for regular entries still work')
+  rmSync(home, { recursive: true, force: true })
+})
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)

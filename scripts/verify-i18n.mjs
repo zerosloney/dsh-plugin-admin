@@ -131,6 +131,7 @@ const ALLOWED_BARE_CJK = [
   // Byte-exact probes against the HOST's rendered menu text — translating
   // these would break the dock's icon detection.
   { text: '归档会话', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
+  { text: '取消归档', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串；归档行的菜单项）' },
   { text: '删除', why: '宿主 DOM 文本探针（byte-exact 匹配宿主串）' },
   // Menu-injection aria-label selectors (impl.js): same class as the DOM
   // probes above — they match the HOST's rendered zh aria-labels. The

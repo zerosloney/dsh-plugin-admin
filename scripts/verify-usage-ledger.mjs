@@ -346,6 +346,52 @@ check('11. a stale live read cannot regress a stored row (monotonic counters)', 
   assert.equal(bigger.assistantMsgs, 9, '…message counts too')
 })
 
+// ─── 12. 删前快照读整条日志（分页折叠）─────────────────────────────────
+//
+// 面板的缓存折叠只读扫描帽前缀（展示面取舍，之后还有 sweep/读路径兜底）；删
+// 前快照是日志的**最后一个读者**，日志删掉后这份快照就是台账的永久终值——前
+// 缀截断在这里是不可恢复的欠数。夹具把扫描帽压到 4、日志放 10 条各 100 input
+// tokens 的 assistant 事件：旧的前缀折叠记 400，分页折叠记全量 1000。
+await checkAsync('12. the delete-time snapshot folds the WHOLE log (paged), not just the scan-cap prefix', async () => {
+  const { applySessionAdmin } = await import(new URL('../lib/session-admin.js', import.meta.url).href)
+  const events = []
+  for (let i = 0; i < 10; i++) {
+    events.push({ type: 'assistant/message', seq: i, time: 0, data: { usage: { inputTokens: 100, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } } })
+  }
+  // read(offset, length)：官方 session-persistence handle 的分页读形状。
+  const handle = {
+    read: async (offset, length) => ({ eventState: {}, events: events.slice(offset, offset + length) }),
+    close: async () => {},
+  }
+  const persistence = {
+    stat: async () => ({ header: { id: 'sess-fold', cwd: 'E:/proj/fold', createdAt: 1 } }),
+    open: async () => handle,
+  }
+  const path = join(tmp, 'whole-log-fold.json')
+  const usageLedger = createUsageLedger({ path, enqueue: (op) => Promise.resolve().then(op) })
+  const ctx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    sessionPersistence: persistence,
+    get: () => undefined,
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    provided: {},
+    effect: (fn) => fn(),
+  }
+  applySessionAdmin(ctx, {
+    audit: null,
+    handleCapture: { get: () => undefined, delete: () => {}, size: () => 0, wrapped: false },
+    usageLedger,
+    usage: { drainObservedUsage: async () => {}, observedIds: () => new Set(), snapshotIntervalMs: 0 },
+    cfg: { sessionEventScanCap: 4 },
+  })
+  await ctx.provided.sessionAdmin.deleteSession('sess-fold')
+  const stored = readUsageLedger(path)
+  const row = stored.find((e) => e.id === 'sess-fold')
+  assert.ok(row, 'the delete wrote a ledger row')
+  assert.equal(row.input, 1000, `the snapshot folded ALL 10 events (the old scan-cap-prefix fold saw 400), got ${row.input}`)
+  assert.equal(row.assistantMsgs, 10, 'the assistant count is whole-log too')
+})
+
 rmSync(tmp, { recursive: true, force: true })
 console.log(results.join('\n'))
 console.log(`verify-usage-ledger OK: ${results.length} checks`)

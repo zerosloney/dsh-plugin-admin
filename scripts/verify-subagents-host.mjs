@@ -688,6 +688,19 @@ await check('validateGenericCliBackend: command/args/providerName rules', () => 
   assert.throws(() => validateGenericCliBackend({ ...valid, id: 'gemini' }, {}), /后端 ID/)
 })
 
+await check('validateGenericCliBackend: env refuses the keys that would choose the binary or inject code', () => {
+  // assertTrustedCliPaths 的「裸命令名从 PATH 解析是无害的」前提只在没有 env
+  // 注入时成立：宿主 resolveExecutable 用**合并后 env** 的 PATH 解析裸名，
+  // NODE_OPTIONS / LD_PRELOAD 随子 env 生效。这些键在保存时就被拒绝，而不是
+  // 等启动时才架空栅门。
+  const valid = { id: 'cli-gemini', command: 'gemini', args: ['-p', '{prompt}'], providerName: 'cli-gemini', env: { API_KEY: 'k' } }
+  assert.deepEqual(validateGenericCliBackend(valid, {}), undefined, 'a benign env key still passes')
+  for (const denied of ['PATH', 'path', 'Path', 'PATHEXT', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONSTARTUP', 'LD_PRELOAD', 'ld_library_path', 'DYLD_INSERT_LIBRARIES']) {
+    assert.throws(() => validateGenericCliBackend({ ...valid, env: { [denied]: 'C:\\attacker' } }, {}),
+      /被拒绝/, `env.${denied} must be refused at save time`)
+  }
+})
+
 /* 13 ── generic CLI command provider: argv build + stopReason mapping */
 await check('createCliCommandProvider: {prompt} argv, completed/error/aborted mapping', async () => {
   const spawnSpecs = []

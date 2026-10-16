@@ -324,6 +324,30 @@ try {
     assert.equal(agent.steered[0].content[0].text, 'not done yet')
   })
 
+  // 续跑上限：总是 deny 的 Stop 钩子是 repo 可控输入——曾能让每个 turn 结束
+  // 都被拒绝 → steer → 再跑 → 再拒绝，无限烧 token（官方桥同位 TODO 未修，插
+  // 件侧护栏）。连续 deny 到帽放行停止并告警；非 deny 断链归零。
+  await check('Stop: consecutive denies cap the continuation loop (an always-deny repo hook cannot burn tokens forever)', async () => {
+    const capAgent = makeAgent('s-stop-cap', projectDir)
+    writeHooks({ Stop: [{ hooks: [{ command: 'always-deny.sh' }] }] })
+    for (let i = 0; i < 3; i++) {
+      ctx.shell.queue({ exitCode: 2, stdout: { text: '' }, stderr: { text: `not done #${i + 1}` } })
+      await ctx.listeners.get('agent/turn-stopping')({ agent: capAgent, signal: signalOf() })
+    }
+    assert.equal(capAgent.steered.length, 3, 'the first three consecutive denies still steer a continuation')
+    ctx.shell.queue({ exitCode: 2, stdout: { text: '' }, stderr: { text: 'not done #4' } })
+    await ctx.listeners.get('agent/turn-stopping')({ agent: capAgent, signal: signalOf() })
+    assert.equal(capAgent.steered.length, 3, 'the 4th consecutive deny is NOT steered (the stop is allowed)')
+    assert.ok(ctx.warns.some((message) => message.includes('s-stop-cap') && message.includes('续跑上限')),
+      'the warning names the session and the continuation cap')
+    // 非 deny 断链：计数归零，下一个 deny 重新获得完整预算。
+    ctx.shell.queue({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } })
+    await ctx.listeners.get('agent/turn-stopping')({ agent: capAgent, signal: signalOf() })
+    ctx.shell.queue({ exitCode: 2, stdout: { text: '' }, stderr: { text: 'fresh round' } })
+    await ctx.listeners.get('agent/turn-stopping')({ agent: capAgent, signal: signalOf() })
+    assert.equal(capAgent.steered.length, 4, 'a non-deny break resets the chain (the next deny steers again)')
+  })
+
   await check('SessionStart: additionalContext injected once the content is confirmed', async () => {
     // The SessionStart flow cannot ask (no open turn), so first confirm this
     // exact config content through an in-turn trigger: a matched Warmup hook

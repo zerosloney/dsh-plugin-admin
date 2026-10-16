@@ -22,13 +22,16 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 // `mutatePatch` is deliberately NOT imported here: the cross-process check below
 // spawns a worker that imports it by URL, and an unused local import of it was
-// just lint noise (oxlint no-unused-vars).
-import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, ownerProbeProvesDeath, sweepStaleTempFiles, tempPathFor, withFileLock, writePatch } from '../lib/patch-utils.js'
+// just lint noise (oxlint no-unused-vars). The BOM check below DOES import it —
+// a used import is not noise.
+import { PATCH_BACKUP_SUFFIX, atomicRename, hotApplyFiberConfig, isLockContention, mutatePatch, ownerProbeProvesDeath, sweepStaleTempFiles, tempPathFor, topLevelBlocks, withFileLock, withFileLockAsync, writePatch } from '../lib/patch-utils.js'
+const { applyPluginAdmin } = await import(new URL('../lib/plugin-admin.js', import.meta.url).href)
 
 const results = []
 const check = async (name, fn) => {
@@ -65,6 +68,25 @@ await check('a normal critical section runs, returns its value and drops the loc
   assert.equal(value, 42, 'the critical section\'s return value survives')
   assert.ok(!existsSync(lockPath), 'the lock is released')
   assert.equal(readFileSync(target, 'utf8'), '# edited\n', 'the write landed')
+})
+
+await check('mutatePatch sees a BOM-leading first block and the write heals the file', () => {
+  // v1.27.19 给 readPatchLines 剥了 BOM，但 mutatePatch（所有 patch 编辑的锁内
+  // 读）漏了：BOM'd 首行对回调里的块扫描不可见 → upsert 落重复行，最坏经
+  // mcp-admin 的 serverName 查重同样漏检 → dsh 拒启整个 profile。锁内读剥离，
+  // 写回随之治愈文件（js-yaml 两种形态都引导）。
+  const bomTarget = join(dir, 'bom.patch.yml')
+  writeFileSync(bomTarget, '\uFEFF- id: alpha\n  name: keep\n- id: beta\n  name: keep2\n', 'utf8')
+  const seen = mutatePatch(bomTarget, (lines) => {
+    const first = lines.findIndex((line) => line === '- id: alpha')
+    assert.notEqual(first, -1, 'the first top-level block is visible to the locked callback')
+    return { next: [...lines, '- id: gamma\n  name: added'], value: first }
+  })
+  assert.equal(seen.value, 0, 'the alpha row sits at line 0 (BOM stripped before the callback runs)')
+  const after = readFileSync(bomTarget, 'utf8')
+  assert.ok(!after.startsWith('\uFEFF'), 'the persisted revision carries no BOM (the write heals the file)')
+  assert.ok(after.includes('- id: gamma'), 'the appended row landed')
+  assert.equal(topLevelBlocks(after.split(/\r?\n/)).length, 3, 'three top-level blocks read back')
 })
 
 await check('a leftover lock from THIS process is taken over (crash or pid reuse)', async () => {
@@ -433,6 +455,102 @@ await check('a failed atomicRename reaps its own temp (no orphan residue)', () =
   assert.ok(existsSync(toDir), 'the target directory is untouched')
 })
 
+// ─── withFileLockAsync：spawn 型临界区的异步孪生 ────────────────────────────
+// runPnpm 的临界区必须跨 await 持锁（spawn 不能跑在同步变体的 Atomics.wait
+// 段里；把 async fn 交给同步变体等于拿锁返回 promise 的瞬间就放锁）。文件协议
+// 与同步变体同形：`<file>.lock` + `<pid>\n`、fail-open、验证式释放。
+
+await check('withFileLockAsync: same-path sections serialize in-process, and the lock spans the await', async () => {
+  const at = join(dir, 'async-lock.json')
+  const order = []
+  const first = withFileLockAsync(at, async () => {
+    order.push('first-start')
+    assert.equal(readOwner(at + '.lock'), process.pid, 'the async lock carries `<pid>\\n` like the sync one')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    order.push('first-end')
+    return 'one'
+  }, { waitMs: 500 })
+  const second = withFileLockAsync(at, async () => {
+    order.push('second-start')
+    return 'two'
+  }, { waitMs: 500 })
+  assert.equal(await first, 'one')
+  assert.equal(await second, 'two')
+  assert.deepEqual(order, ['first-start', 'first-end', 'second-start'],
+    'same-path async sections ran one at a time (the exclusion spans the awaited body)')
+  assert.ok(!existsSync(at + '.lock'), 'the lock is released after the body settles')
+})
+
+await check('withFileLockAsync: a throwing body releases the lock and the chain survives', async () => {
+  const at = join(dir, 'async-lock-throw.json')
+  await assert.rejects(() => withFileLockAsync(at, async () => { throw new Error('body failed') }, { waitMs: 500 }), /body failed/)
+  assert.ok(!existsSync(at + '.lock'), 'no lock left behind by the failed section')
+  assert.equal(await withFileLockAsync(at, async () => 'ok', { waitMs: 500 }), 'ok',
+    'the next section acquires immediately (the per-path queue survived the rejection)')
+})
+
+await check('withFileLockAsync: a foreign LIVE lock is waited for, then fails open without stealing', async () => {
+  const at = join(dir, 'async-lock-live.json')
+  const holder = spawn(process.execPath, ['-e', `
+    const { openSync, writeSync } = require('node:fs')
+    const h = openSync(${JSON.stringify(at)} + '.lock', 'wx')
+    writeSync(h, process.pid + '\\n')
+    setInterval(() => {}, 1000)
+  `], { stdio: 'ignore' })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const started = Date.now()
+    assert.equal(await withFileLockAsync(at, async () => 'ran', { waitMs: 300 }), 'ran',
+      'fail-open: the write proceeds after the budget (same trade as the sync variant)')
+    assert.ok(Date.now() - started >= 250, 'it waited the budget first')
+    assert.equal(readOwner(at + '.lock'), holder.pid, 'the live foreign lock was NOT stolen or deleted')
+  } finally {
+    holder.kill()
+    try { unlinkSync(at + '.lock') } catch { /* holder may have been killed mid-write */ }
+  }
+})
+
+// ─── install/remove 的失败回滚（与宿主 plugin-manager 的 RESTORED_FILES 对齐）──
+// pnpm 解析过程中就会改写 package.json / pnpm-lock.yaml——超时或非零退出把半
+// 套状态留在盘上。面板编排器快照这两个文件，失败时恢复（node_modules 不动，与
+// 官方同面）；过去面板是唯一无恢复步骤的 pnpm 编排者。
+
+await check('pluginAdmin.install restores the manifest snapshot when pnpm fails mid-mutation', async () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'plugin-rollback-'))
+  const manifestPath = join(profileDir, 'package.json')
+  const original = JSON.stringify({ name: 'profile-fixture', dependencies: {} }, null, 2) + '\n'
+  writeFileSync(manifestPath, original, 'utf8')
+  const ctx = {
+    baseUrl: pathToFileURL(profileDir).href,
+    logger: { info() {}, warn() {}, error() {} },
+    get: () => undefined,
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    provided: {},
+    effect: (fn) => fn(),
+  }
+  applyPluginAdmin(ctx, {
+    enqueue: (op) => Promise.resolve().then(op),
+    audit: null,
+    cfg: {},
+    panelStates: {},
+    runPnpm: async () => {
+      // Partial pnpm failure: mutate the manifest + create a lockfile, THEN die.
+      writeFileSync(manifestPath, original.replace('"dependencies": {}', '"dependencies": { "left-partial": "^1.0.0" }'), 'utf8')
+      writeFileSync(join(profileDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n', 'utf8')
+      throw new Error('pnpm add left-partial exited with code 1: registry exploded')
+    },
+  })
+  try {
+    await assert.rejects(() => ctx.provided.pluginAdmin.install('left-partial'), /registry exploded/,
+      'the pnpm failure surfaces to the caller')
+    assert.equal(readFileSync(manifestPath, 'utf8'), original, 'package.json is restored to its pre-run bytes')
+    assert.ok(!existsSync(join(profileDir, 'pnpm-lock.yaml')), 'a lockfile the run created is removed (the snapshot recorded it absent)')
+    assert.ok(!existsSync(manifestPath + '.lock'), 'no lock file left behind')
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, leftover takeover, dead owner, unreadable record, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, leftover takeover, dead owner, unreadable record, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply, async lock, pnpm rollback)')
