@@ -792,5 +792,59 @@ assert.ok(new RegExp('^ {4}searchProvider: exa$', 'm').test(after20)
   && !/^ {6}searchProvider: exa$/m.test(after20), 'the nested key kept its own value and indent')
 console.log('scenario 20 OK: the searchProvider rewrite is bounded to the config block')
 
+// ---------- Scenario 21: a foreign entry reusing a provider id is not the provider's row ----
+// Row ids share ONE global patch namespace with every other panel's entries:
+// an MCP server (or subagent instance) legitimately named `web-search-exa`
+// must never read as exa's mount row. History: install() answered installed:true
+// without authoring the real row, config()/saveConfig() read/wrote the foreign
+// entry, and uninstall() DELETED it (with pnpm remove on top). Identity is
+// two-shaped now: an insert entry must carry the provider's `name:`, a bare
+// override row only counts at its block head.
+writeFileSync(patchPath, SEED_PATCH + [
+  '',
+  '- id: dsh-mcp-client',
+  "  name: '@deepseek-ai/dsh-mcp-client'",
+  '  insert:',
+  '      - id: web-search-exa',
+  '        config:',
+  '          command: uvx',
+  '          apiKey: FOREIGN-SECRET',
+  '',
+].join('\n'), 'utf8')
+
+// config() must not read the foreign entry's config as exa's own.
+const config21 = await service.config('exa')
+const apiKey21 = config21.fields.find((field) => field.key === 'apiKey')
+assert.equal(apiKey21.set, false, 'the foreign MCP entry does not read as an exa apiKey')
+
+// saveConfig() with only the foreign row present refuses loudly (opt-in
+// provider, no mount row) instead of writing into the foreign entry.
+await assert.rejects(
+  () => service.saveConfig('exa', { apiKey: 'sk-fake' }),
+  /先点「📥 安装」/,
+  'saveConfig refuses while only a foreign same-id entry exists'
+)
+
+// install() still authors the real mount row beside the foreign entry.
+rmSync(join(tmpRoot, 'node_modules'), { recursive: true, force: true })
+pnpmCalls = []
+const install21 = await service.install('exa')
+assert.ok(install21.installed, 'install succeeds despite the foreign same-id entry')
+assert.deepEqual(pnpmCalls[0]?.args, ['add', '@deepseek-ai/dsh-web-search-exa'], 'pnpm add ran for the real spec')
+const after21 = readFileSync(patchPath, 'utf8')
+assert.ok(/name: '@deepseek-ai\/dsh-web-search-exa'/.test(after21), 'the authored mount row (with the provider name) landed')
+assert.ok(/command: uvx/.test(after21), 'the foreign MCP entry survived install')
+
+// uninstall() strips the authored row and leaves the foreign entry alone.
+pnpmCalls = []
+const uninstall21 = await service.uninstall('exa')
+assert.equal(uninstall21.ok, true, 'uninstall succeeds')
+const after21b = readFileSync(patchPath, 'utf8')
+assert.ok(!/name: '@deepseek-ai\/dsh-web-search-exa'/.test(after21b), 'the authored mount row was removed')
+assert.ok(/^\s*- id: web-search-exa\s*$/m.test(after21b), 'the foreign same-id entry is NOT deleted by uninstall')
+assert.ok(/command: uvx/.test(after21b), 'the foreign entry config is intact')
+assert.ok(/- id: dsh-mcp-client/.test(after21b), 'the parent MCP row survived')
+console.log('scenario 21 OK: a foreign same-id entry is not the provider row (config/saveConfig/install/uninstall)')
+
 rmSync(tmpRoot, { recursive: true, force: true })
 console.log('verify-web-search-admin OK: all Web Search administration scenarios passed')

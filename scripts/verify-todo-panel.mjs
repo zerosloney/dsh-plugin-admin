@@ -23,7 +23,7 @@
  */
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -519,6 +519,80 @@ await checkAsync('gitDiff returns the workspace diff and flags nothing when smal
   const none = await exportAdmin.gitDiff('ghost')
   assert.deepEqual(none, { diff: '', truncated: false, error: null, missing: true }, 'unknown session → empty, not error (missing flags the vanished session)')
   assert.equal(out.error, null, 'a readable repo reports no error')
+})
+
+// The session workspace is repo-controlled content the session may not trust:
+// a cloned repo can arm `[diff "x"] textconv = <cmd>` (+ a `.gitattributes`
+// rule) and `diff.external`, and a bare porcelain `git diff` executes those
+// commands with this process's privileges the moment the panel renders the
+// diff. The host defends the same face elsewhere (GitRunner cleans the env and
+// speaks plumbing-only; GIT_EXTERNAL_DIFF is boot-blacklisted) — the plugin's
+// porcelain invocations must refuse both drivers (`--no-ext-diff
+// --no-textconv`). The filters write a MARKER file outside the repo when they
+// run — that is the only reliable detector: git tolerates a failing filter
+// (measured: a non-zero-exit textconv degrades the diff to empty output
+// without any error), so an exit-code trap would pass vacuously.
+await checkAsync('gitDiff renders through a repo that arms textconv + external diff drivers (they must never execute)', async () => {
+  const pwnDir = mkdtempSync(join(tmpdir(), 'todo-git-pwn-'))
+  const markerDir = mkdtempSync(join(tmpdir(), 'todo-git-pwn-marker-'))
+  const textconvMarker = join(markerDir, 'textconv-ran')
+  const externalMarker = join(markerDir, 'external-ran')
+  const pwnGit = (args) => execFileSync('git', args, { cwd: pwnDir, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
+  try {
+    pwnGit(['init', '-q'])
+    pwnGit(['config', 'user.email', 'verify@example.com'])
+    pwnGit(['config', 'user.name', 'verify'])
+    writeFileSync(join(pwnDir, 'a.txt'), 'one\n', 'utf8')
+    writeFileSync(join(pwnDir, 'ext.bin'), 'raw-v1\n', 'utf8')
+    pwnGit(['add', 'a.txt', 'ext.bin'])
+    pwnGit(['commit', '-q', '-m', 'init'])
+    // Two driver channels, two attribute shapes: the named driver
+    // (`* diff=pwn` → `diff.pwn.textconv`) covers textconv; the bare
+    // attribute on a second path (`ext.bin diff` → `diff.external`) covers
+    // the external driver. Each filter drops its own marker file when git
+    // runs it. The command is double-quoted for cmd.exe/sh with single-quoted
+    // JS inside; the path is forward-slashed because it lands inside a JS
+    // string literal.
+    writeFileSync(join(pwnDir, '.git', 'info', 'attributes'), '* diff=pwn\next.bin diff\n', 'utf8')
+    const filter = (marker) => `node -e "require('fs').writeFileSync('${marker.split('\\').join('/')}','1')"`
+    pwnGit(['config', 'diff.pwn.textconv', filter(textconvMarker)])
+    pwnGit(['config', 'diff.external', filter(externalMarker)])
+    writeFileSync(join(pwnDir, 'a.txt'), 'one\nTWO\n', 'utf8')
+    writeFileSync(join(pwnDir, 'ext.bin'), 'raw-v2\n', 'utf8')
+
+    const stat = exportCtx.sessionPersistence.stat
+    exportCtx.sessionPersistence.stat = async (id) => (id === 'pwn-session'
+      ? { header: { id: 'pwn-session', cwd: pwnDir, createdAt: 1 }, revision: 'r', sizeBytes: null }
+      : stat(id))
+    try {
+      const out = await exportAdmin.gitDiff('pwn-session')
+      assert.equal(out.error, null, `the diff renders without repo config interference, got error: ${out.error ?? ''}`)
+      assert.ok(out.diff.includes('TWO'), 'the change body survives (internal diff machinery, not a driver)')
+      assert.ok(!existsSync(textconvMarker), 'the textconv filter never executed')
+      assert.ok(!existsSync(externalMarker), 'the external diff driver never executed')
+      // numstat is the same porcelain face (fileStats footer): with the
+      // drivers refused it still parses instead of erroring into zeroes.
+      const stats = await exportAdmin.fileStats('pwn-session')
+      assert.equal(stats.error ?? null, null, 'fileStats renders too')
+      assert.ok(stats.files >= 2, `both changed files counted, got ${JSON.stringify(stats)} `)
+      assert.ok(!existsSync(textconvMarker) && !existsSync(externalMarker), 'numstat ran the drivers neither')
+    } finally {
+      exportCtx.sessionPersistence.stat = stat
+    }
+  } finally {
+    rmSync(pwnDir, { recursive: true, force: true })
+    rmSync(markerDir, { recursive: true, force: true })
+  }
+})
+
+check('source pin: both porcelain `git diff` invocations refuse repo-configured drivers', () => {
+  const src = readFileSync(new URL('../lib/session-admin.js', import.meta.url), 'utf8')
+  const calls = [...src.matchAll(/runGitOutcome\(cwd, \[[^\]]*'diff',[^\]]*\]/g)].map((m) => m[0])
+  assert.ok(calls.length >= 2, `two porcelain git diff call sites (numstat + full diff), found ${calls.length}`)
+  for (const call of calls) {
+    assert.ok(call.includes("'--no-ext-diff'") && call.includes("'--no-textconv'"),
+      `every porcelain git diff carries --no-ext-diff + --no-textconv, got: ${call}`)
+  }
 })
 
 /* searchSessions host half: stubs shaped per the CORE contract (session-query

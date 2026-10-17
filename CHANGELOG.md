@@ -4,6 +4,16 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.27.21] - 2026-10-17
+
+### Fixed
+
+- **saveCommand 改名重试循环 off-by-one，第 4 次删除失败即 Atomics.wait(undefined) 无限阻塞主线程**（`lib/command-hook-admin.js`，严重）：`attempt <= delays.length` 让第 4 轮读到 `delays[3] === undefined`，而 Atomics.wait 的 undefined timeout 语义是 +∞，同步阻塞整个 dsh 主线程（该循环跑在共享串行队列里，携带全部会话），只能杀进程恢复；紧随其后的「诚实报错」分支成为死代码。修复为 `attempt < delays.length`。`verify-command-hooks`：新增 1 用例（source pin 钉住循环上界——进程内无法可靠模拟 AV 持锁，行为级不可行）。
+- **sessionAdmin 的两处 porcelain `git diff` 会执行仓库自配的 diff 驱动/textconv 过滤器**（`lib/session-admin.js`，严重）：会话工作区可以是不可信仓库内容，`[diff "x"] textconv = <cmd>` + `.gitattributes`（及 `diff.external`/GIT_EXTERNAL_DIFF）在面板渲染 diff 的瞬间即以宿主进程权限执行任意命令；宿主对同一威胁是刻意设防的（GitRunner `GIT_CONFIG_COUNT: '0'` + 仅 plumbing 的 diff-tree，GIT_EXTERNAL_DIFF 启动黑名单），插件的 porcelain 调用是唯一重开这个面的组件。修复：gitDiff（整 diff）与 fileStats（`--numstat`）两处追加 `--no-ext-diff --no-textconv`（数值语义与宿主 plumbing 同为原始内容）。`verify-todo-panel`：新增真实仓库行为用例（双通道各自布防并落 marker 文件；实测 git **容忍**失败的过滤器——非零退出静默降级为空 diff 不报错，退出码陷阱是假阴性，marker 是唯一可靠探测器；负样本确认摘掉 flag 即 FAIL）+ source pin（两处调用都带双 flag）。
+- **workflow 空闲看门狗双重死，挂死 run 永不自动回收**（`lib/workflow-runs.js`，中等）：① 武装在 `handle.done` 赋值之后，而该赋值表达式同步跑进 settle 的前缀——看门狗创建时判据已恒真；② 退役判据用 `settled`，但 settle 是 run 的驱动体而非完成回调（IIFE 一进来就同步置 settled 并在 settle 内 `await runner.run`），settled 在整个运行期为真。两个缺陷各自足以让挂死回收整体失效，且每 run 泄漏一个 60s interval（settle 进门清理时它还是 null，此后无人再清）。修复：武装提前到 `handle.done` 赋值之前、退役挪到 settle 的 finally、判据换独立 `terminal` 旗标（finally 置真；try/catch 末尾到 finally 无 await，status 离开 running 与 terminal 之间无窗口）+ 一发即停（stop 落定窗口内不重复记行/叠 stop）。`createRunRegistry` 新增 `idleBudgetMs`/`watchdogTickMs` 测试注入口（与 `stopSettleTimeoutMs` 同一测试旁路，非对外配置面）。`verify-workflow-runs`：新增行为用例（注入短预算实测挂死 run 被回收、journal 留 idle-timeout 行、claim 已撤）与 source pin。
+- **settle 的 finally 先撤 owner claim 后落终态 journal，跨实例 resume 窗口**（`lib/workflow-runs.js`，中等）：撤销与终态落盘之间磁盘 journal 仍写 running 且无声明——共享 DSH_HOME 的另一实例把本 run 判成 orphaned 放行 resume，尾部未落账步骤双跑。修复：先 `persist(record)` 后撤声明——窗口内声明仍在，resume 走声明检查被拒（fail-closed）；persist 吞错不抛（见其注释），撤销不会被写盘失败跳过。`verify-workflow-runs`：source pin 钉住 persist 先于 clearOwnerClaim（跨实例窗口在单进程不可观测，形状钉死）。
+- **web-search 的 provider 行按裸 id 全文件匹配，可与用户自选的 MCP/子代理条目 id 撞车**（`lib/web-search-admin.js`，中等）：row id 命名空间全 patch 全局共享，一个恰好叫 `web-search-exa` 的 MCP 条目（命名完全合法）会让 install 谎报成功而不落真实挂载行、config/saveConfig 读写错对象、uninstall 删掉用户条目再 pnpm remove。修复：身份改双形状判定——insert 条目必须携带 provider 自己的 `name:` 行（`buildProviderBlock` 的落盘形状；`entryCarriesName` 限定条目 span 与缩进，`entryEndAt` 防跨条目），裸 override 行只认块头（`buildProviderOverrideBlock` 的形状，块体深处的同 id 行属于别的嵌套结构）；`findProviderEntry`/`hasInsertShapedRow`/`findNonInsertRowBlock`/`removeMountRow` 四个匹配函数统一收紧。`verify-web-search-admin`：新增 scenario 21（config 不把外键条目读成 provider 字段、saveConfig 响亮拒绝、install 照常落真实行、uninstall 不删外键条目与父行）。
+
 ## [1.27.20] - 2026-10-16
 
 ### Fixed

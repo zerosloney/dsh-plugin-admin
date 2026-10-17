@@ -1387,6 +1387,76 @@ await check('step opts field is capped (prompt/outcome were; opts rode through a
   assert.deepEqual(small.opts, { note: 'tiny' }, 'a within-budget opts rides through unchanged')
 })
 
+// ─── P4d：空闲看门狗 / 落定收尾顺序 ───────────────────────────────────────────
+
+// 看门狗必须真的能回收挂死 run。历史上它曾在 handle.done 赋值表达式**之后**
+// 才武装，而那个表达式同步跑进 settle 的前缀（settled 置真）——看门狗每个
+// tick 都在首个判断上返回，挂死回收整体失效且每 run 泄漏一个 interval。注入
+// 短预算（idleBudgetMs/watchdogTickMs 与 stopSettleTimeoutMs 同一测试旁路）
+// 让这条路径行为级可跑：35 分钟的真实预算等不起。
+await check('idle watchdog recovers a hung run (armed before settle can mark it settled)', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'idle')
+  const r = makeRegistry(bundle.ctx, home, { idleBudgetMs: 150, watchdogTickMs: 50, stopSettleTimeoutMs: 300 })
+  const { id } = await r.start({
+    // 永不 resolve 的 await：无在飞叶子（idle() 不 busy）、无挂起提问、
+    // 无 facade 活动——看门狗判定的正是这个形状。abort 传不进去，回收走
+    // stop 的落定预算 + terminate。
+    script: `await new Promise(() => {})`,
+    parent: { id: 'sess-idle' },
+  })
+  let rec = null
+  for (let i = 0; i < 400; i++) {
+    rec = r.get(id)
+    if (rec && rec.status !== 'running') break
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.ok(rec, 'the run record exists')
+  assert.equal(rec.status, 'stopped', `the idle watchdog recycled the hung run, got ${rec?.status}`)
+  assert.ok((rec.log ?? []).some((row) => row.kind === 'idle-timeout'), 'the journal carries the idle-timeout row')
+  // 声明已撤、终态已落盘：get() 回读的是磁盘 journal（active 句柄已清）。
+  const claimPath = join(home, 'workflows', 'runs', id + '.owner')
+  assert.ok(!existsSync(claimPath), 'the owner claim was withdrawn after settle')
+})
+
+// 两处时序约束没有单进程可观测的外部窗口（跨实例窗口在共享队列的亚毫秒级），
+// 以源码 pin 钉死形状；两处都曾是/可再次成为静默失效：
+//  1. 看门狗武装必须先于 handle.done 赋值（settle 前缀同步置 settled），
+//     且退役只在 settle 的 finally——进门清会在首个 tick 前杀死新武装的狗。
+//  2. settle 的 finally 先 persist 终态、后撤 owner claim——反过来会在
+//     「journal 仍 running 且无声明」的窗口里让另一实例把本 run 判成
+//     orphaned 放行 resume（尾部步骤双跑）；终态先落盘则窗口内声明仍在，
+//     resume 被声明检查拒绝（fail-closed）。
+await check('source pin: watchdog armed before handle.done; settle persists terminal state before withdrawing owner claims', async () => {
+  const src = readFileSync(new URL('../lib/workflow-runs.js', import.meta.url), 'utf8')
+  const startAnchor = src.indexOf('const handle = { record, controller, runner, code, done: null, settled: false')
+  assert.ok(startAnchor !== -1, 'start() handle literal found')
+  const armIdx = src.indexOf('const watchdog = setInterval(', startAnchor)
+  const doneIdx = src.indexOf('handle.done = (async () => {', startAnchor)
+  assert.ok(armIdx !== -1 && doneIdx !== -1 && armIdx < doneIdx,
+    'the idle watchdog must be armed BEFORE the handle.done assignment runs settle\'s synchronous prefix')
+  // 退役判据必须是终态旗标：settled 在 settle 进入（= run 一开始）就置真——
+  // settle 是 run 的驱动体，不是完成回调——拿它判「已落定」看门狗永远不动。
+  const tickSrc = src.slice(armIdx, doneIdx)
+  assert.ok(tickSrc.includes('handle.terminal'),
+    'the idle tick disarms on the terminal flag, not on settle-entry\'s settled flag')
+  assert.ok(!tickSrc.includes('handle.settled'),
+    'the idle tick must never test settled: it is true for the whole run (settle is the run driver)')
+
+  const settleStart = src.indexOf('async function settle(runId)')
+  const sectionEnd = src.indexOf('─── 控制', settleStart)
+  assert.ok(settleStart !== -1 && sectionEnd !== -1, 'settle() body located')
+  const body = src.slice(settleStart, sectionEnd)
+  const finallyIdx = body.indexOf('} finally {')
+  const clearIdx = body.indexOf('clearInterval(handle.watchdog)')
+  const persistIdx = body.indexOf('await persist(record)')
+  const claimIdx = body.indexOf('clearOwnerClaim(claimed)')
+  assert.ok(finallyIdx !== -1 && clearIdx !== -1 && persistIdx !== -1 && claimIdx !== -1, 'settle finally contains watchdog teardown + persist + claim withdrawal')
+  assert.ok(clearIdx > finallyIdx, 'the watchdog is retired in the finally, not on settle entry (entry-clear kills it before its first tick)')
+  assert.ok(body.indexOf('handle.terminal = true') > finallyIdx, 'the terminal flag flips inside settle\'s finally')
+  assert.ok(persistIdx < claimIdx, 'the terminal journal lands before owner claims are withdrawn (resume stays fail-closed in the window)')
+})
+
 // ─── 清理 ─────────────────────────────────────────────────────────────────────
 
 rmSync(tmpBase, { recursive: true, force: true })

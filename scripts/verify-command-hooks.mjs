@@ -808,5 +808,20 @@ try {
   assert.match(source, /import \{[^}]*withFileLock[^}]*\} from '\.\/patch-utils\.js'/, 'withFileLock is imported from patch-utils')
 }
 
+// Seam probe for the saveCommand rename retry: the loop sleeps delays[attempt]
+// after each failed rmSync, and its bound must be `< delays.length` — with
+// `<=` a 4th consecutive failure (a held old file is exactly what the retry
+// exists for) indexed delays[3] === undefined and Atomics.wait's undefined
+// timeout means +∞: the main thread froze forever and the honest-error throw
+// was dead code. Simulating a persistently held file in-process is not
+// feasible (Windows AV locks can't be reproduced reliably; the module's
+// rmSync import can't be monkey-patched through ESM), so the gate pins the
+// bound itself.
+{
+  const source = readFileSync(new URL('../lib/command-hook-admin.js', import.meta.url), 'utf8')
+  assert.match(source, /for \(let attempt = 0; attempt < delays\.length; attempt\+\+\)/,
+    'the rename retry loop is bounded by `< delays.length` (never reads delays[attempt] === undefined)')
+}
+
 console.error(results.join('\n'))
 console.log(`\nverify-command-hooks: ${results.length} checks passed`)
