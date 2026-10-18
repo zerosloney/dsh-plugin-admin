@@ -161,6 +161,42 @@ await check('the log compacts at its cap instead of growing without bound', asyn
   assert.equal(log.size(), entries.length, 'the reported size matches the file')
 })
 
+// The secret-SHAPE channel postdates the trail: rows written by an older build
+// can carry plaintext keys, and compaction used to carry those bytes into every
+// fresh file while read() handed them across the RPC untouched. A hand-placed
+// legacy row must lose its bytes in BOTH paths while keeping its shape (the
+// same "bad row keeps its shape, never its bytes" rule as the subagent journal).
+await check('legacy plaintext rows are re-redacted on compaction AND on read', async () => {
+  const secret = 'sk-test1234567890'
+  // Compaction keeps the TAIL, so the legacy rows are appended last to ride
+  // into the kept slice — the way a mixed-age trail looks right before a trim.
+  const legacy = join(dir, 'legacy.jsonl')
+  const log = createAuditLog({ path: legacy, cap: 4, now: () => 100 })
+  await log.record({ action: 'cronAdmin/upsert', detail: '1' })
+  await log.record({ action: 'cronAdmin/upsert', detail: '2' })
+  writeFileSync(legacy, readFileSync(legacy, 'utf8') + [
+    JSON.stringify({ at: 1, action: 'legacy/old', detail: 'written before the shape channel' }),
+    JSON.stringify({ at: 2, action: 'legacy/leak', detail: `token ${secret} pasted into free text` }),
+  ].join('\n') + '\n', 'utf8')
+  await log.record({ action: 'cronAdmin/upsert', detail: '3' })
+  const raw = readFileSync(legacy, 'utf8')
+  assert.ok(!raw.includes(secret), 'compaction does not carry the legacy plaintext forward')
+  const compactedRow = raw.trim().split('\n')
+    .map((line) => JSON.parse(line))
+    .find((row) => row.action === 'legacy/leak')
+  assert.ok(compactedRow, 'the legacy row survives compaction as a row (a shape, not bytes)')
+  assert.ok(String(compactedRow.detail).includes(REDACTED), 'the secret shape is replaced in place')
+  // read() is the RPC boundary: the same legacy row is re-redacted on the way
+  // out even when compaction never ran for this file.
+  const readOnly = join(dir, 'legacy-read.jsonl')
+  writeFileSync(readOnly, JSON.stringify({ at: 3, action: 'legacy/leak', detail: `token ${secret}` }) + '\n', 'utf8')
+  const fresh = createAuditLog({ path: readOnly, cap: 100 })
+  const rows = fresh.read(10)
+  assert.ok(!JSON.stringify(rows).includes(secret), 'read() never hands legacy plaintext across the RPC')
+  assert.equal(rows[0].action, 'legacy/leak', 'the row itself still comes through')
+  assert.ok(String(rows[0].detail).includes(REDACTED), 'the shape is redacted in the returned row')
+})
+
 // The count used to be read once and then only incremented in memory, so a write
 // this process did not make (a second dsh instance on the same $DSH_HOME, or a
 // hand edit) made it drift permanently: an undercount let the trail grow past

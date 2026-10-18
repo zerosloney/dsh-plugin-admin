@@ -116,6 +116,37 @@ await check('serialize → parse round-trip (full config)', () => {
   assert.equal(config.enableRunInBackground, true)
 })
 
+/* 1b ── 行匹配统一到共享 matcher:行尾注释不再让受管行对解析隐形 */
+await check('parseManagedEntries tolerates trailing comments on id lines (shared matcher grammar)', () => {
+  // 手编行 `- id: researcher # 生产` 曾对私有正则不可见（解析不到、面板不
+  // 显示），对 allBlockIds 的唯一性闸（共享 matcher）却可见——改名保存被
+  // 「已被其他插件实例占用」的误导性错误挡下。读写现在同一把尺子。
+  const managed = [
+    MANAGED_BLOCK_MARKER,
+    '- insert:',
+    '    - id: researcher # 手编注释',
+    "      name: '@deepseek-ai/dsh-tool-subagent'",
+    '      config:',
+    '        provider: spawn',
+    '        toolName: web_researcher',
+  ]
+  const parsed = parseManagedEntries(managed.join('\n'))
+  assert.equal(parsed.length, 1, 'a commented inner id line is still a parsed managed row')
+  assert.equal(parsed[0].id, 'researcher')
+  // 顶层（legacy）块的 id 行同样容忍注释。
+  const legacy = [
+    '- id: legacy-agent # 手编注释',
+    "  name: '@deepseek-ai/dsh-tool-subagent'",
+    '  config:',
+    '    provider: spawn',
+    '    toolName: tool_a',
+  ]
+  const legacyParsed = parseManagedEntries(legacy.join('\n'))
+  assert.equal(legacyParsed.length, 1, 'a commented top-level id line is still parsed')
+  assert.equal(legacyParsed[0].id, 'legacy-agent')
+  assert.equal(legacyParsed[0].config.toolName, 'tool_a')
+})
+
 /* 2 ── upsert into a patch with foreign rows keeps them byte-identical */
 await check('upsert preserves foreign rows and appends the managed row', () => {
   const lines = BASE_PATCH.split('\n')
@@ -565,6 +596,18 @@ await check('validateCliConfig: shape, enums, env keys', () => {
   assert.throws(() => validateCliConfig(codex, { providerName: 'Bad Name' }), /providerName/)
   assert.throws(() => validateCliConfig(codex, { env: { 'BAD KEY': 'v' } }), /env 键名/)
   assert.throws(() => validateCliConfig(codex, { env: { OK: 5 } }), /必须是字符串/)
+  // 危险键黑名单按自身判据（「选哪个二进制 / 注入什么代码」）封全同族键：
+  // BASH_ENV/ENV 让 CLI 自己派生的 bash 子进程启动即 source 攻击者脚本
+  // （NODE_OPTIONS 的晚一跳版本），COMSPEC 改写 Windows 上 shell 语义子进程
+  // 的落点，ZDOTDIR/PERL5OPT/RUBYOPT 是 zsh/perl/ruby 系的同一注入。
+  for (const denied of ['PATH', 'PATHEXT', 'COMSPEC', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONSTARTUP', 'BASH_ENV', 'ENV', 'ZDOTDIR', 'PERL5OPT', 'RUBYOPT', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'bash_env', 'comspec']) {
+    assert.throws(() => validateCliConfig(codex, { env: { [denied]: '/tmp/x' } }), /被拒绝/, `env key ${denied} is denied`)
+  }
+  // __proto__ 过得了键名白名单，但序列化装载时静默丢键——落盘与运行态分叉
+  // 的形状，按「不是配置」同一判据拒绝。字面量里的 __proto__ 是原型设置而非
+  // 自有键，RPC 边界的 JSON.parse 才是它的到达形状，用例按真实形状构造。
+  const protoShaped = JSON.parse('{"providerName":"codex","permissionMode":"never","env":{"__proto__":"/tmp/x"}}')
+  assert.throws(() => validateCliConfig(codex, protoShaped), /不是可落盘的配置键/)
   // model: real member of both stock CLI packages' Config schemas — accepted,
   // and a bad value rejected with the key's own name (it used to be "unknown").
   assert.deepEqual(validateCliConfig(codex, { providerName: 'codex', permissionMode: 'never', model: 'gpt-5.2', disposeGraceMs: 3000, env: {} }), undefined)
@@ -1139,6 +1182,27 @@ await check('npm install -g script flags follow the installScripts policy', asyn
   assert.deepEqual(npmScriptFlags(pkgs, 'registry-only'), pkgs.map(pkg => `--allow-scripts=` + pkg), 'registry-only keeps them building')
   assert.deepEqual(npmScriptFlags(pkgs, 'allow'), pkgs.map(pkg => `--allow-scripts=` + pkg), 'allow keeps them building')
   assert.deepEqual(npmScriptFlags(pkgs, undefined), pkgs.map(pkg => `--allow-scripts=` + pkg), 'undefined falls back to the mounted default (allow)')
+})
+
+/* source pin — resolvePackageAsync 失败不固化。probe 层的书面契约是「负结果
+ * 不缓存，下次真探测」（probeNpmGlobalRoot 的 finish 注释）；包装层若把构建
+ * 在**失败**探测上的 resolver（缺 -g 锚）永久缓存，cliInstall 装成功也复检
+ * 不过、cliUpsert 用陈旧锚拒绝挂载，而 cliList 的新鲜解析器却显示可挂载——
+ * 列表与变更路径自相矛盾，仅重启可愈。判定信号是 npmGlobalRootCache 的三态
+ * （undefined=探测失败 / null=确无全局根 / string=有根）。没有无网络的观测
+ * 缝（探测真 spawn npm），按仓库先例以源码 pin 钉形状。 */
+await check('source pin: resolvePackageAsync drops its cache when the global-root probe failed', () => {
+  const src = readFileSync(new URL('../lib/subagent-admin.js', import.meta.url), 'utf8')
+  const wrapIdx = src.indexOf('const resolvePackageAsync = async () => {')
+  assert.ok(wrapIdx !== -1, 'the async wrapper found')
+  const body = src.slice(wrapIdx, src.indexOf('\n  }', wrapIdx))
+  assert.ok(body.includes('resolverPromise ??= packageResolverFor(profileDir)'), 'the wrapper memoizes the built resolver')
+  assert.ok(body.includes('if (npmGlobalRootCache === undefined) resolverPromise = undefined'),
+    'a resolver built on a FAILED probe is dropped (negative results are not cached through the wrapper)')
+  // 三态语义不能被收窄成「有根才缓存」：null（探测成功、机器确无全局根）是
+  // 完整真相，同样值得暖存——收窄会让无 npm 的机器每次挂载都付一次 15s 探测。
+  assert.ok(!body.includes('npmGlobalRootCache === null') && !body.includes('typeof npmGlobalRootCache === \'string\''),
+    'the reset condition stays on the failure tri-state, not on root presence')
 })
 
 console.log(results.join('\n'))

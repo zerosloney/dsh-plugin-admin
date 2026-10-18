@@ -510,6 +510,35 @@ await check('withFileLockAsync: a foreign LIVE lock is waited for, then fails op
   }
 })
 
+await check('withFileLock: a short waitMs gives up on a live foreign lock inside that budget, not the default 3s', async () => {
+  // The options knob exists for the chained claim (workflow-runs' claimRunExclusive):
+  // it hands each lock in a derivation chain its remaining share of ONE shared
+  // deadline, because Atomics.wait blocks the host thread synchronously and N
+  // locks x 3s was the old ceiling. This pins the knob itself: a live foreign
+  // lock is failed open inside the SHORT budget — never waited out to the
+  // default 3000ms, and never stolen (same protocol, smaller window).
+  const at = join(dir, 'sync-lock-budget.json')
+  const holder = spawn(process.execPath, ['-e', `
+    const { openSync, writeSync } = require('node:fs')
+    const h = openSync(${JSON.stringify(at)} + '.lock', 'wx')
+    writeSync(h, process.pid + '\\n')
+    setInterval(() => {}, 1000)
+  `], { stdio: 'ignore' })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const started = Date.now()
+    const value = withFileLock(at, () => 'ran', { waitMs: 300 })
+    const waited = Date.now() - started
+    assert.equal(value, 'ran', 'fail-open: the section still runs after the short budget')
+    assert.ok(waited >= 250, 'it waited the short budget first (waited ' + waited + 'ms)')
+    assert.ok(waited < 2000, 'it did NOT wait out the default 3000ms budget (waited ' + waited + 'ms)')
+    assert.equal(readOwner(at + '.lock'), holder.pid, 'the live foreign lock was NOT stolen or deleted')
+  } finally {
+    holder.kill()
+    try { unlinkSync(at + '.lock') } catch { /* holder may have been killed mid-write */ }
+  }
+})
+
 // ─── install/remove 的失败回滚（与宿主 plugin-manager 的 RESTORED_FILES 对齐）──
 // pnpm 解析过程中就会改写 package.json / pnpm-lock.yaml——超时或非零退出把半
 // 套状态留在盘上。面板编排器快照这两个文件，失败时恢复（node_modules 不动，与

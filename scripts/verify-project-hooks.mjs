@@ -128,7 +128,7 @@ function makeApproval(scripted = []) {
   }
 }
 
-function makeStubCtx(shell, approval, sandboxPolicy) {
+function makeStubCtx(shell, approval, sandboxPolicy, workspacePaths) {
   // An omitted approval stubs an auto-approving service (the happy path);
   // pass null explicitly for "no approval service mounted" (fail-closed).
   const approvalSvc = approval === null
@@ -156,12 +156,14 @@ function makeStubCtx(shell, approval, sandboxPolicy) {
     // `ctx.workspaceRegistry` read is refused by Cordis's scope guard (the service
     // is deliberately not in the plugin's inject list) — the real-host smoke
     // caught exactly that, and verify-service-injects now pins it.
+    // workspacePaths 覆盖注册表内容（默认 tempRoot）：根形状注册的 belt 用例
+    // 需要一个「注册了盘根」的部署形状。
     get: (name) => (name === 'sessionPersistence'
       ? { locate: (header) => ({ kind: 'jsonl', path: `/logs/${header?.id ?? 'x'}.jsonl` }) }
       : name === 'approval'
         ? approvalSvc
         : name === 'workspaceRegistry'
-          ? { list: () => [{ path: tempRoot }] }
+          ? { list: () => (workspacePaths ?? [tempRoot]).map((path) => ({ path })) }
           : name === 'sandboxPolicy'
             ? sandboxPolicy
             : undefined),
@@ -487,6 +489,30 @@ try {
     } finally {
       rmSync(unrelated, { recursive: true, force: true })
     }
+  })
+
+  await check('a ROOT-shaped workspace registration is not a trust root for the cwd fence (belt)', async () => {
+    // 经官方 workspace-controller 到达的注册不走本插件的形状栅格；
+    // trustedRootsOf（CLI 信任根）已对盘根/UNC 跳过，cwdInKnownWorkspaces
+    // （projectAdmin/list 与工作流保存库共用的 cwd 围栏）此前没有同款
+    // belt——一个盘根注册会让该盘上任意 cwd 全部过闸（target.startsWith
+    // 对整盘为真），项目枚举与保存库写面跟着放大。
+    const rootShape = process.platform === 'win32' ? 'C:\\' : '/'
+    const beltCtx = makeStubCtx(makeShell(), undefined, undefined, [rootShape])
+    applyProjectAdmin(beltCtx)
+    await assert.rejects(
+      () => beltCtx.provided.projectAdmin.list(tempRoot),
+      /不在 dsh 已知工作区内/,
+      'a cwd on the drive does not pass the fence through a root-shaped registration',
+    )
+    // UNC 形状的注册同样不算信任根（用不存在的 share——不会真的发起 SMB）。
+    const uncCtx = makeStubCtx(makeShell(), undefined, undefined, ['\\\\no-such-host\\share'])
+    applyProjectAdmin(uncCtx)
+    await assert.rejects(
+      () => uncCtx.provided.projectAdmin.list(tempRoot),
+      /不在 dsh 已知工作区内/,
+      'an UNC-shaped registration is refused by shape before any resolution',
+    )
   })
 
   await check('hookSpecificOutput without hookEventName is discarded (codec parity)', async () => {

@@ -475,7 +475,8 @@ export function WorkflowSection(props) {
     }
     children.push(h('div', { key: 'script-head', style: { fontWeight: '600', marginTop: '8px' } }, dshT('脚本')))
     children.push(h('pre', { key: 'script', style: preStyle() }, d.script || ''))
-    if (d.error) children.push(h('div', { key: 'err', style: { color: '#c00', marginTop: '6px' } }, d.error))
+    // d.error 的渲染在函数入口 early-return 了（:450 的错误卡片）——这里不再
+    // 有可达的 error 分支，曾留着一个永远画不出来的副本。
     if (d.result !== null && d.result !== undefined) {
       children.push(h('div', { key: 'res-head', style: { fontWeight: '600', marginTop: '8px' } }, dshT('返回值')))
       children.push(h('pre', { key: 'res', style: preStyle() }, safeStringify(d.result)))

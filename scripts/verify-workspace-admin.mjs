@@ -647,4 +647,28 @@ console.log('scenario 7 OK: rename refuses a duplicate title and allows self/no-
   console.log('scenario 8 OK: missing registry/workspace verbs refuse with a named error')
 }
 
+// --- Scenario 9: drifted list() members cannot crash the write paths ---------
+// The read path's project() already nulls out null/primitive list() members;
+// create()/rename() read `.id` off every member raw and used to throw a bare
+// TypeError over the whole verb. Same drift, same tolerance: the bad member
+// is skipped (created-detection still sees the real members around it).
+{
+  const driftedRegistry = new FakeRegistry()
+  await driftedRegistry.create('/Users/demo/kept', 'Kept')
+  const realList = driftedRegistry.list.bind(driftedRegistry)
+  driftedRegistry.list = () => [null, 42, ...realList()]
+  const driftedSvc = mountHost({ workspaceRegistry: driftedRegistry })
+  // canonicalWorkspacePath wants a directory that exists — same trick as
+  // scenario 8.
+  const driftedDir = new URL('.', import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '')
+  const created = await driftedSvc.create(driftedDir, 'Drifted')
+  assert.equal(created.created, true, 'create survives drifted members and still reports created:true')
+  await assert.doesNotReject(
+    () => driftedSvc.rename(created.workspace.workspaceId, 'Drifted Renamed'),
+    'rename survives drifted members (the conflict scan skips them)',
+  )
+  assert.equal(driftedRegistry.get(created.workspace.workspaceId).title, 'Drifted Renamed', 'the rename landed')
+  console.log('scenario 9 OK: drifted (null/primitive) list members cannot crash create/rename')
+}
+
 console.log('verify-workspace-admin OK: all Workspace administration scenarios passed')

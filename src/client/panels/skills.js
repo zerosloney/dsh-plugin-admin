@@ -1,5 +1,5 @@
 /** skills — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, copyTextSilently, createElement, dshT, messageOf, sectionState, showToast } from './context.js'
+import { UiButton, UiInput, copyTextSilently, createElement, dshT, messageOf, sectionState, showToast, useRef } from './context.js'
 
 export var SKILLS_RENDER_CAP = 400
 
@@ -56,6 +56,10 @@ export function SkillsSection(props) {
   })
   var state = kit.state
   var alive = kit.alive
+  // 「✓ 已复制」复位定时器的句柄：不跟踪的话，1.5s 内连续复制两个技能时，
+  // 前一个的旧定时器会把后一个刚亮起的标记提前吹灭（todo.js 的 copyDiffTimer
+  // 是同款既有模式）。
+  var copiedTimer = useRef(null)
 
   /**
    * Merge a partial state patch into the section state.
@@ -144,7 +148,9 @@ export function SkillsSection(props) {
     copyTextSilently('/' + name).then(function () {
       if (!alive.current) return
       patch({ copiedName: name })
-      setTimeout(function () {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current)
+      copiedTimer.current = setTimeout(function () {
+        copiedTimer.current = null
         if (!alive.current) return
         patch({ copiedName: '' })
       }, 1500)

@@ -404,6 +404,28 @@ await check('repeated authentication failures are throttled (429 + retry-after)'
   m.dispose()
 })
 
+await check('loopback callers share ONE rate bucket across address spellings', async () => {
+  // 127.x / ::1 / ::ffff:127.x 是同一物理调用方的三种字面量：按字面量分桶把
+  // 请求预算拆成 2-3 份，本机穷举预算同比放大。桶键折叠后「本机 = 一个调用
+  // 方、一份预算」——两种拼法合起来耗尽预算，第三种拼法同样 429（按字面量
+  // 分桶的旧形状在这里会答 202）。
+  const m = mount({ webhookTriggersPath: join(dir, 'loop-rules.json'), webhookHistoryPath: join(dir, 'loop-history.json'), webhookRateLimit: 2 })
+  await m.service.saveRule(RULE)
+  const first = mockRes()
+  await m.handler(jsonReq({ remote: '127.0.0.1' }), first)
+  assert.equal(first.statusCode, 202, 'the IPv4 loopback spelling is admitted')
+  const second = mockRes()
+  await m.handler(jsonReq({ remote: '::1' }), second)
+  assert.equal(second.statusCode, 202, 'the ::1 spelling rides the SAME bucket (shared budget: 2/2)')
+  const third = mockRes()
+  await m.handler(jsonReq({ remote: '127.0.0.1' }), third)
+  assert.equal(third.statusCode, 429, 'the shared bucket is exhausted')
+  const mapped = mockRes()
+  await m.handler(jsonReq({ remote: '::ffff:127.0.0.1' }), mapped)
+  assert.equal(mapped.statusCode, 429, 'the IPv4-mapped spelling rides the same collapsed bucket')
+  m.dispose()
+})
+
 await check('an address-less transport keeps per-CALLER request budgets', async () => {
   // The transport reports no peer address, so each request carries its own
   // socket object (this mock does; a real keep-alive connection reuses one).

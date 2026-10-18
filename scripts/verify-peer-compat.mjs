@@ -23,7 +23,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { parseVersion, satisfiesDshRange, dshPeersOf, evaluateDshPeerCompat, resolveDshRuntimeVersion, readInstalledDshPeers, resetRuntimeVersionCacheForTests } = await import('../lib/peer-compat.js')
+const { parseVersion, satisfiesDshRange, dshPeersOf, evaluateDshPeerCompat, resolveDshRuntimeVersion, readInstalledDshPeers, resetRuntimeVersionCacheForTests, versionExemptionFor } = await import('../lib/peer-compat.js')
 
 const results = []
 const check = (name, fn) => {
@@ -206,6 +206,46 @@ await checkAsync('5. runtime version override + installed manifest reads round-t
 
     const verdict = evaluateDshPeerCompat(info.peers, '0.1.7-rc.2')
     assert.deepEqual(verdict, { ok: true, incompatible: {} }, 'the real production range evaluates compatible')
+  } finally {
+    rmSync(profile, { recursive: true, force: true })
+  }
+})
+
+check('6. versionExemptionFor reads the host compatibility.json grants (same records dsh plugin allow-version writes)', () => {
+  // 宿主格式（app-boot profile-compatibility.ts）：<profile>/compatibility.json,
+  // { "name@exactVersion": ["<exact runtime>", ...] }；键精确匹配 name@version,
+  // 值必须包含**当前** runtime 才算豁免。assessInstalledCompat 据此放过已豁免
+  // 的包（宿主照常引导它），缺失/损坏/形状不对一律读作「无豁免」——方向保守，
+  // 预检宁可多一次警示也不替宿主放行。
+  const profile = mkdtempSync(join(tmpdir(), 'peer-compat-exempt-'))
+  try {
+    writeFileSync(join(profile, 'compatibility.json'), JSON.stringify({
+      'some-plugin@1.0.0': ['9.9.9'],
+      'granted-plugin@2.0.0': ['0.2.0-rc.1', '0.1.9'],
+      'bad-shape@3.0.0': 'not-a-list',
+      'not-a-version-key': ['0.2.0-rc.1'],
+    }, null, 2))
+    const exempted = versionExemptionFor(profile, '0.2.0-rc.1')
+    assert.equal(exempted('granted-plugin', '2.0.0'), true, 'an exact name@version grant naming this runtime exempts')
+    assert.equal(exempted('some-plugin', '1.0.0'), false, 'a grant naming a DIFFERENT runtime does not')
+    assert.equal(exempted('granted-plugin', '2.0.1'), false, 'a different plugin version is a different key')
+    assert.equal(exempted('absent-plugin', '1.0.0'), false, 'an unlisted package is not exempted')
+    assert.equal(exempted('bad-shape', '3.0.0'), false, 'a non-list value reads as absent (conservative)')
+    assert.equal(exempted('granted-plugin', null), false, 'an unreadable installed version is never exempted')
+    assert.equal(versionExemptionFor(profile, '0.1.9')('granted-plugin', '2.0.0'), true, 'the runtime version is the predicate parameter, not ambient state')
+  } finally {
+    rmSync(profile, { recursive: true, force: true })
+  }
+})
+
+check('7. versionExemptionFor treats a missing or broken compatibility.json as no exemptions', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'peer-compat-exempt-missing-'))
+  try {
+    assert.equal(versionExemptionFor(profile, '0.2.0-rc.1')('any-plugin', '1.0.0'), false, 'a missing file grants nothing')
+    writeFileSync(join(profile, 'compatibility.json'), '{not json')
+    assert.equal(versionExemptionFor(profile, '0.2.0-rc.1')('any-plugin', '1.0.0'), false, 'a broken file grants nothing')
+    writeFileSync(join(profile, 'compatibility.json'), '["not", "an", "object"]')
+    assert.equal(versionExemptionFor(profile, '0.2.0-rc.1')('any-plugin', '1.0.0'), false, 'a non-object shape grants nothing')
   } finally {
     rmSync(profile, { recursive: true, force: true })
   }

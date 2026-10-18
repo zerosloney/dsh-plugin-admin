@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
 const { runCommandCaptured, DEFAULT_STDERR_TAIL_CHARS } = await import(new URL('../lib/run-command.js', import.meta.url).href)
-const { killProcessTree } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
+const { killProcessTree, killTreeAndAwaitDeath } = await import(new URL('../lib/mcp-probe.js', import.meta.url).href)
 
 let failures = 0
 async function check(name, fn) {
@@ -177,6 +177,63 @@ await check('an invalid pid is a no-op (never a stray kill)', () => {
     killProcessTree(bad, { spawnFn: () => { throw new Error('must not spawn') }, killFn: (pid, signal) => kills.push({ pid, signal }) })
   }
   assert.deepEqual(kills, [], 'no kill was attempted for any invalid pid')
+})
+
+console.log('killTreeAndAwaitDeath:')
+
+// runPnpm 的超时路径在清单还原 / 释放跨进程锁之前必须等进程树死透：垂死 pnpm
+// 的网络解析若落在还原之后，快照还原被整体作废。这里用 killFn 接缝模拟三种
+// 死亡时序（立即死 / 探测报活到预算放行 / 真 pid 死亡），预算封顶是上限而非
+// 正确性依赖。
+await check('resolves as soon as the death probe answers ESRCH (kill-then-await)', async () => {
+  const calls = []
+  /** 第一次是 kill 本身（SIGKILL），之后每次探测都报 ESRCH——已死。 */
+  const killFn = (/** @type {number} */ pid, /** @type {number|string} */ signal) => {
+    calls.push(signal)
+    if (signal === 0) { const e = new Error('esrch'); e.code = 'ESRCH'; throw e }
+  }
+  const spawned = []
+  const fakeSpawn = () => {
+    const emitter = new EventEmitter()
+    emitter.unref = () => {}
+    spawned.push(emitter)
+    return emitter
+  }
+  const started = Date.now()
+  await withBudget(killTreeAndAwaitDeath(4242, { spawnFn: fakeSpawn, killFn, budgetMs: 5_000, pollMs: 5 }), 3_000, 'death await')
+  assert.ok(Date.now() - started < 2_000, 'the await settles promptly on a confirmed death')
+  if (process.platform === 'win32') {
+    assert.equal(spawned.length, 1, 'taskkill was spawned before the probes')
+    assert.ok(calls.includes(0), 'the death probes ran through the killFn seam')
+  } else {
+    assert.equal(calls[0], 'SIGKILL', 'the kill itself ran first on the POSIX path')
+  }
+})
+
+await check('an alive-reading probe is bounded by the budget, then resolves anyway', async () => {
+  const probes = []
+  const killFn = (/** @type {number} */ pid, /** @type {number|string} */ signal) => {
+    if (signal === 0) {
+      probes.push(signal)
+      // EPERM = 活着只是无权发信号——绝不能读成死亡。
+      const e = new Error('eperm'); e.code = 'EPERM'; throw e
+    }
+  }
+  const started = Date.now()
+  await withBudget(killTreeAndAwaitDeath(4242, { spawnFn: () => { throw new Error('must not spawn on POSIX shape') }, killFn, budgetMs: 120, pollMs: 20 }), 3_000, 'budget ceiling')
+  const elapsed = Date.now() - started
+  assert.ok(elapsed >= 100 && elapsed < 2_000, `the budget is a ceiling that actually bounds (took ${elapsed}ms, ${probes.length} probes)`)
+})
+
+await check('a real short-lived child is confirmed dead (or the budget releases the caller)', async () => {
+  const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })
+  await withBudget(killTreeAndAwaitDeath(child.pid, { budgetMs: 2_000, pollMs: 10 }), 5_000, 'real child death')
+})
+
+await check('an invalid pid resolves immediately without killing', async () => {
+  const started = Date.now()
+  await killTreeAndAwaitDeath(undefined, { spawnFn: () => { throw new Error('must not spawn') } })
+  assert.ok(Date.now() - started < 100, 'an invalid pid is a fast no-op')
 })
 
 if (failures > 0) {

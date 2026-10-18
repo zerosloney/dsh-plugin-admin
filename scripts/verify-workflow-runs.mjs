@@ -1457,6 +1457,89 @@ await check('source pin: watchdog armed before handle.done; settle persists term
   assert.ok(persistIdx < claimIdx, 'the terminal journal lands before owner claims are withdrawn (resume stays fail-closed in the window)')
 })
 
+// ─── 跨进程 owner claim 的读面仲裁 / record 自由文本字段帽 ─────────────────────
+
+// 读面（list/get/stop）必须消费 owner claim：另一活实例持有声明时它在真的跑，
+// 呈现为 orphaned + stop 报「not running」会给「手删活声明」提供（错误的）面板
+// 佐证——恰好是 assertNoForeignOwner 拒绝信息要防的双跑缺口。
+await check('list/get/stop honor a live foreign owner claim: running, not orphaned', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'claim-live')
+  const r = makeRegistry(bundle.ctx, home)
+  const id = 'wf_1_claimalive'
+  const runsDir = join(home, 'workflows', 'runs')
+  mkdirSync(runsDir, { recursive: true })
+  writeFileSync(join(runsDir, id + '.json'), JSON.stringify({ id, status: 'running', script: 'return 1', createdAt: Date.now() }), 'utf8')
+  writeFileSync(join(runsDir, id + '.summary.json'), JSON.stringify({ id, status: 'running', label: null }), 'utf8')
+  // 活的外来 pid：测试进程的父进程（npm / shell 链）必然存活。
+  writeFileSync(join(runsDir, id + '.owner'), JSON.stringify({ pid: process.ppid, at: Date.now() }), 'utf8')
+  const listed = r.list().find((/** @type {any} */ row) => row.id === id)
+  assert.equal(listed?.status, 'running', `a live foreign claim must present running, got ${listed?.status}`)
+  assert.equal(r.get(id)?.status, 'running', 'get() presents running under a live foreign claim')
+  const stop = await r.stop(id, 'stopped')
+  assert.equal(stop.stopped, false)
+  assert.match(String(stop.reason), /another dsh process/, `stop names the foreign owner instead of "not running", got: ${stop.reason}`)
+  // 声明撤除后回落孤儿呈现（无声明路径的既有语义不变）。
+  rmSync(join(runsDir, id + '.owner'))
+  assert.equal(r.list().find((/** @type {any} */ row) => row.id === id)?.status, 'orphaned', 'without the claim the run presents orphaned again')
+  assert.equal((await r.stop(id, 'stopped')).reason, 'not running', 'stop falls back to the honest not-running once the claim is gone')
+})
+
+// 死 pid 的声明是崩溃残留：无侧车的 fallback 路径同样不把它读成活执行。
+await check('a dead-pid claim is crash residue: the fallback path still presents orphaned', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'claim-dead')
+  const r = makeRegistry(bundle.ctx, home)
+  const id = 'wf_2_deadclaim'
+  const runsDir = join(home, 'workflows', 'runs')
+  mkdirSync(runsDir, { recursive: true })
+  // 只有 journal、没有侧车 → list() 走 fallback 分支。
+  writeFileSync(join(runsDir, id + '.json'), JSON.stringify({ id, status: 'running', script: 'return 1', createdAt: Date.now() }), 'utf8')
+  // 形状合法但几乎必然无人占用的 pid：pidAlive 按 ESRCH 判死。
+  writeFileSync(join(runsDir, id + '.owner'), JSON.stringify({ pid: 2147483630, at: Date.now() }), 'utf8')
+  assert.equal(r.list().find((/** @type {any} */ row) => row.id === id)?.status, 'orphaned', 'a dead-pid claim reads as crash residue in list()')
+  assert.equal(r.get(id)?.status, 'orphaned', 'a dead-pid claim reads as crash residue in get()')
+  assert.equal((await r.stop(id, 'stopped')).reason, 'not running', 'stop treats a dead-pid claim as unowned')
+})
+
+await check('record.error is capped at the record-field budget', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'errcap')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({
+    script: `throw new Error('x'.repeat(100_000))`,
+    parent: { id: 'sess-errcap' },
+  })
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'errored')
+  assert.ok(rec.error.length <= 8_192 + '…[截断]'.length, `the summary error is bounded, got ${rec.error.length}`)
+  assert.ok(rec.error.endsWith('…[截断]'), 'the truncation marker is honest')
+  const journal = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.json'), 'utf8'))
+  assert.ok(journal.error.length <= 8_192 + '…[截断]'.length, 'the journaled error is bounded too')
+})
+
+await check('pendingQuestion.text is capped at the record-field budget', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'askcap')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({
+    script: `const a = await ask('q'.repeat(100_000))\nreturn a`,
+    parent: { id: 'sess-askcap' },
+  })
+  let question = null
+  for (let i = 0; i < 200; i++) {
+    question = r.get(id)?.pendingQuestion ?? null
+    if (question) break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.ok(question, 'the question reached the summary slot')
+  assert.ok(question.text.length <= 8_192 + '…[截断]'.length, `the question text is bounded, got ${question.text.length}`)
+  assert.ok(question.text.endsWith('…[截断]'), 'the truncation marker is honest')
+  assert.equal(r.answer(id, 'ok').answered, true, 'the (capped) question is still answerable')
+  const rec = await runToDone({ id }, r)
+  assert.equal(rec.status, 'completed', 'the run settles after the answer')
+})
+
 // ─── 清理 ─────────────────────────────────────────────────────────────────────
 
 rmSync(tmpBase, { recursive: true, force: true })

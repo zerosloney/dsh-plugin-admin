@@ -606,13 +606,26 @@ function setupMenuInjection(call, refreshSessions) {
             return
           }
           var workspaces = listResult.value.workspaces || []
-          var wsPath = null
+          // 与会话侧 resolveSessionFuzzy 同一安全姿态：精确匹配优先且必须唯一
+          // ——旧实现「遍历到第一个包含命中就 break」会让标题「proj」的工作区
+          // 抢走「proj-2」的点击，开错目录（fsAdmin/reveal 只读，但开错窗口
+          // 本身就是错误的反馈）。精确不唯一、或包含匹配不唯一，都响亮失败。
+          var exact = []
+          var fuzzy = []
           for (var i = 0; i < workspaces.length; i++) {
             var w = workspaces[i]
-            var wTitle = (w && w.title) || ''
-            if (wTitle === wsTitle || (wsTitle !== '' && wTitle !== '' && (wsTitle.indexOf(wTitle) !== -1 || wTitle.indexOf(wsTitle) !== -1))) { wsPath = w && w.path; break }
+            var wTitle = (w && typeof w.title === 'string') ? w.title.trim() : ''
+            if (wTitle !== '' && wTitle === wsTitle) { exact.push(w); continue }
+            if (wsTitle !== '' && wTitle !== '' && (wsTitle.indexOf(wTitle) !== -1 || wTitle.indexOf(wsTitle) !== -1)) fuzzy.push(w)
           }
-          if (wsPath === null) { showToast('error', dshT('❌ 打开失败：未找到工作区路径')); return }
+          var matches = exact.length > 0 ? exact : fuzzy
+          if (matches.length === 0) { showToast('error', dshT('❌ 打开失败：未找到工作区路径')); return }
+          if (matches.length > 1) {
+            showToast('error', dshT('❌ 存在 ') + String(matches.length) + dshT(' 个同名工作区，无法确定目标；请在 设置 → Web 与会话 中按路径操作'))
+            return
+          }
+          var wsPath = matches[0] && typeof matches[0].path === 'string' ? matches[0].path : ''
+          if (wsPath === '') { showToast('error', dshT('❌ 打开失败：未找到工作区路径')); return }
           call('fsAdmin/reveal', { path: wsPath }).then(function (result) {
             // Success needs no toast — the Explorer window opening is the
             // feedback itself. Only failures get a hint.

@@ -625,6 +625,38 @@ await checkAsync('shell() fabricates no workdir when the parent carries neither 
   assert.ok(!('workdir' in ctx.get('shell')._specs().at(-1)), 'no workdir field is fabricated')
 })
 
+await checkAsync('shell() rejects a timeoutMs that no Node timer can represent (script bug, fails loud before the executor)', async () => {
+  // timeoutMs 在执行器侧就是一枚 Node 定时器：超过 2147483647 的值会被
+  // setTimeout **立即触发**（subagent-admin 的 MAX_TIMER_DELAY_MS 防的同一个
+  // 坑），非数/负数/NaN 则全靠宿主自省——旧实现原样透传，一条 shell 步骤可能
+  // 挂到空闲看门狗 30 分钟兜底才回收。契约：非零退出码是数据，参数形状错误是
+  // 脚本 bug——facade 入口硬失败、错误措辞可读，命令根本不进执行器。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  for (const bad of ['1e12', '-1', 'NaN', '"5000"', '0', 'Infinity']) {
+    const { code } = await compileScript(`await shell('echo hi', { timeoutMs: ${bad} }); return 'no'`)
+    await assert.rejects(
+      () => run(code, {}),
+      /shell\(\) timeoutMs must be a positive finite number no greater than 2147483647/,
+      `timeoutMs ${bad} must be refused with a readable error`,
+    )
+  }
+  assert.equal(ctx.get('shell')._calls().length, 0, 'the command never reaches the executor')
+})
+
+await checkAsync('shell() passes a legal timeoutMs through verbatim; omitting it still leaves the spec clean', async () => {
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { facade } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const defaulted = await facade.shell('echo hi')
+  assert.equal(defaulted.exitCode, 0, 'the no-opts call runs as before')
+  assert.ok(!('timeoutMs' in ctx.get('shell')._specs().at(-1)), 'an omitted timeoutMs is still omitted (executor default)')
+  const result = await facade.shell('echo hi', { timeoutMs: 5000 })
+  assert.equal(result.exitCode, 0, 'a legal timeoutMs runs as usual')
+  assert.equal(ctx.get('shell')._specs().at(-1).timeoutMs, 5000, 'the legal value reaches the spec untouched')
+})
+
 await checkAsync('require / import are blocked in sandbox', async () => {
   const { ctx } = mockCtx()
   const controller = new AbortController()
@@ -686,6 +718,40 @@ await checkAsync('vm realm global is realm-rooted (globalThis.constructor.constr
   for (const [path, got] of Object.entries(value)) {
     assert.ok(got === 'undefined' || got === 'threw', `${path}: the global's constructor chain must resolve inside the realm (got ${got})`)
   }
+})
+
+await checkAsync('a thenable smuggled into __dshWorkflowResult receives vm-realm resolving functions (realm-flip detector)', async () => {
+  // worker 侧 `await context.__dshWorkflowResult`（workflow-realm-worker.js）在
+  // 理论上可被脚本用 defineProperty(globalThis, …, { get }) 种进自制 thenable：
+  // 引擎采纳它时会把 resolving functions 交到脚本手上。**实测依据**（Node 22 /
+  // V8，本负样本即证）：交给脚本的 resolve 函数属于 **vm realm**——其
+  // `constructor` 造出的 Function 在无 process 的 realm 内求值，拿不到 worker
+  // 的宿主对象。但这是 V8 非规范行为，**无跨版本契约**：若某天运行时翻转为
+  // 宿主 realm，`F('return typeof process')()` 会变 'object'（worker 的真
+  // process 一步到手），本用例即红——它是一枚翻转探测器，不是规范保证。
+  // 夹具走本套件其余 realm 用例同款 createRunner().run()：真实 worker 线程 +
+  // vm realm（非进程内桩化路径）。
+  const { ctx } = mockCtx()
+  const controller = new AbortController()
+  const { run } = createRunner({ ctx, parent: {}, signal: controller.signal, semaphore: createSemaphore(1) })
+  const { code } = await compileScript(`
+    let captured = null
+    Object.defineProperty(globalThis, '__dshWorkflowResult', {
+      get() {
+        // getter 在 worker 读取属性时才触发；then 把 resolving function 交给
+        // captured 后立刻用它做探针，并把结果 res() 回引擎的 await——run 的
+        // 终值因此就是探针结果（脚本的 return 被 getter 覆盖，回不去终值）。
+        return { then(res) { captured = res; const F = captured.constructor; res(F('return typeof process')()) } }
+      },
+    })
+    return 'smuggled'
+  `)
+  const value = await run(code, {})
+  assert.equal(
+    value,
+    'undefined',
+    `the resolving function must evaluate inside a process-less realm (got ${JSON.stringify(value)}: 'smuggled' = the property hijack itself failed, 'object' = the resolving function escaped to the host realm)`,
+  )
 })
 
 await checkAsync('no HOST object crosses into the realm (args / facade results / rejections)', async () => {

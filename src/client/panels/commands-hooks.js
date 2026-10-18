@@ -250,6 +250,9 @@ export function ChCommandsTab(props) {
     call('commandHookAdmin/listCommands', {})
       .then(function (result) {
         setList(unwrap(result))
+        // 与 act() 同一清理纪律：不清的话首次失败的红色横幅滞留到下一次
+        // act()——列表已更新而错误仍挂着，钩子页的成功 note 还会被压住。
+        setError('')
         setBusy(false)
       })
       .catch(function (e) {
@@ -570,6 +573,10 @@ export function ChHooksTab(props) {
     call('commandHookAdmin/listHooks', {})
       .then(function (result) {
         setData(unwrap(result))
+        // 与 act() 同一清理纪律（同文件命令页签同款）：不清的话首次失败的
+        // 红色横幅滞留，且 `note !== '' && error === ''` 的渲染门把后续成功
+        // note 一起压住。
+        setError('')
         setBusy(false)
       })
       .catch(function (e) {

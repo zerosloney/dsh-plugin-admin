@@ -47,7 +47,7 @@ function makeFixture(homeName) {
   const home = mkdtempSync(join(tmpdir(), `mcp-admin-${homeName}-`))
   const profileDir = join(home, 'profiles', 'web-fixture')
   mkdirSync(join(profileDir, 'node_modules', 'dsh-plugin-admin'), { recursive: true })
-  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture' }, null, 2))
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'profile-fixture', dependencies: { '@deepseek-ai/dsh-mcp-client': '0.0.0' } }, null, 2))
   let tail = Promise.resolve()
   const enqueue = (op) => { const run = tail.then(op, op); tail = run.catch(() => {}); return run }
   const ctx = {
@@ -222,6 +222,26 @@ await check('write boundary: reconnect delays are judged against RESOLVED defaul
   )
 })
 
+await check('write boundary: toolCallTimeoutMs carries the same timer ceiling as reconnect', async () => {
+  // toolCallTimeoutMs 只查「正有限数」放过 5e9 这种值：AbortSignal.timeout 对
+  // 超过 setTimeout 上限的 delay 立即触发——每次 tools/call 瞬间以与服务器
+  // 真实死活无关的超时失败。与 reconnect 的两个 delay 同帽（MCP_MAX_TIMER_
+  // DELAY_MS），写边界在落盘前拒绝。
+  assert.throws(
+    () => validateMcpConfig({ transport: 'streamable-http', serverName: 's', url: 'https://example.com/mcp', toolCallTimeoutMs: 5_000_000_000 }),
+    /toolCallTimeoutMs must be a positive finite number no greater than 2147483647/,
+    'a value beyond the timer ceiling is refused',
+  )
+  assert.doesNotThrow(
+    () => validateMcpConfig({ transport: 'streamable-http', serverName: 's', url: 'https://example.com/mcp', toolCallTimeoutMs: 2_147_483_647 }),
+    'exactly the ceiling is allowed',
+  )
+  assert.doesNotThrow(
+    () => validateMcpConfig({ transport: 'streamable-http', serverName: 's', url: 'https://example.com/mcp', toolCallTimeoutMs: 60_000 }),
+    'a normal budget rides through',
+  )
+})
+
 // 热应用 fiber 匹配器（此前零用例覆盖）：fiber.update(config, noSave=true) 走
 // loader 的 noSave 分支、**不回写** entry.options.config——匹配器必须优先读
 // fiber.config（活配置），否则改名 A→B 热应用成功后，同一次启动内的下一次保
@@ -267,6 +287,65 @@ await check('hot-apply matches the fiber by its LIVE config after a rename (entr
     assert.equal(updates[0].cfg.serverName, 'renamed-server', 'the update carries the saved config')
   } finally {
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+await check('hand-edited shapes the flat parser cannot round-trip refuse the rewrite (fail-loud, not corrupt)', async () => {
+  // 「能解析但会改坏」的形状：映射集合里带引号冒号的键（`"a:b": v`）、列表项
+  //（`- x: v`）、更深嵌套——旧平坦解析把它们 parse 成垃圾（键 "a、键 - x、
+  // 嵌套压平），保存重写产出非法 YAML，boot-critical 的 patch 让整个 profile
+  // 拒启。现在这些形状在 configFromBlock 响亮降级为 null，走进 upsert 的
+  // 「手编形状」保存闸：拒绝改写、文件字节保持，而不是替手工编辑者改坏。
+  const shapes = [
+    ['quoted-colon key', [
+      '- insert:',
+      '    - id: weird-entry',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      config:',
+      '        transport: stdio',
+      '        serverName: weird-server',
+      '        command: node',
+      '        env:',
+      '          "a:b": v',
+    ]],
+    ['list item inside a mapping', [
+      '- insert:',
+      '    - id: weird-entry',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      config:',
+      '        transport: stdio',
+      '        serverName: weird-server',
+      '        command: node',
+      '        env:',
+      '          - x: v',
+    ]],
+    ['deeper nesting under a mapping', [
+      '- insert:',
+      '    - id: weird-entry',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      config:',
+      '        transport: stdio',
+      '        serverName: weird-server',
+      '        command: node',
+      '        env:',
+      '          plain: v',
+      '            deeper: v2',
+    ]],
+  ]
+  for (const [label, lines] of shapes) {
+    const fx = makeFixture('hostile')
+    try {
+      fx.writePatchText(lines.join('\n') + '\n')
+      const before = fx.readPatch()
+      await assert.rejects(
+        () => fx.svc().upsert({ id: 'weird-entry', config: { transport: 'stdio', serverName: 'renamed-server', command: 'node' } }),
+        /hand-edited shape/,
+        `${label}: the rewrite is refused instead of writing broken YAML`,
+      )
+      assert.equal(fx.readPatch(), before, `${label}: the file stays byte-identical`)
+    } finally {
+      fx.cleanup()
+    }
   }
 })
 

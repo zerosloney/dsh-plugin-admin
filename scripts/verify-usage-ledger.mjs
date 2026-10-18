@@ -346,6 +346,62 @@ check('11. a stale live read cannot regress a stored row (monotonic counters)', 
   assert.equal(bigger.assistantMsgs, 9, '…message counts too')
 })
 
+check('11b. attribution follows the NEWER lastSeenAt side, counters still max-join', () => {
+  // The attribution half of the S1 race: the pre-delete snapshot (NEW title,
+  // HIGH lastSeenAt) is stored; a stale live read (OLD title, LOW lastSeenAt —
+  // a sweep snapshot from an instance whose clock trails the writer of the
+  // snapshot) merges afterwards. Attribution used to follow incoming
+  // unconditionally, permanently pulling a deleted session's title/project
+  // back to the old values — the dashboard then buckets its tokens under the
+  // old project. Now the attribution block follows the higher-stamped side,
+  // the same join unionUsageEntries makes, while the counters stay per-field
+  // max and the deleted rule is unchanged (a live read marks live).
+  const final = [{
+    id: 's-renamed', project: 'new-proj', title: '新标题', createdAt: 5,
+    input: 900, output: 50, cacheRead: 10, cacheWrite: 2, userMsgs: 12, assistantMsgs: 7,
+    lastSeenAt: 500, deleted: true,
+  }]
+  const staleLive = [session({
+    id: 's-renamed', title: '旧标题', cwd: 'E:/Demo/old-proj',
+    messageCount: 4, assistantCount: 2,
+    tokens: { input: 300, output: 10, cacheRead: 4, cacheWrite: 1 },
+  })]
+  const merged = mergeUsageLedger(final, staleLive, 400, { markAbsent: true })
+  const entry = merged.entries.find(e => e.id === 's-renamed')
+  assert.equal(entry.title, '新标题', 'attribution follows the higher lastSeenAt side')
+  assert.equal(entry.project, 'new-proj', '…same for the project bucket')
+  assert.equal(entry.createdAt, 5, '…and the whole block moves together')
+  assert.equal(entry.input, 900, 'counters still take the per-field max')
+  assert.equal(entry.userMsgs, 12, '…message counts too')
+  assert.equal(entry.lastSeenAt, 500, 'the stamp keeps the max (never regresses, aligned with union)')
+  assert.equal(entry.deleted, false, 'the stale read saw the session live — the deleted rule is unchanged')
+  assert.equal(merged.changed, true, 'an un-delete is a change worth writing')
+
+  // Alignment sanity: an INCOMING row with the higher stamp still wins the
+  // attribution (the common path, and what check 11 already pins for counters).
+  const refreshed = mergeUsageLedger(merged.entries, [session({
+    id: 's-renamed', title: '新标题', cwd: 'E:/Demo/new-proj',
+    messageCount: 20, assistantCount: 9,
+    tokens: { input: 1200, output: 60, cacheRead: 30, cacheWrite: 8 },
+  })], 600, { markAbsent: false })
+  const newer = refreshed.entries.find(e => e.id === 's-renamed')
+  assert.equal(newer.title, '新标题', 'a fresher incoming row refreshes attribution in place')
+  assert.equal(newer.project, 'new-proj')
+  assert.equal(newer.input, 1200, 'counters still grow through')
+  assert.equal(newer.lastSeenAt, 600)
+
+  // unionUsageEntries already picked attribution by lastSeenAt; merge must
+  // not disagree with it (the two paths share one merge base on disk).
+  const unionRow = unionUsageEntries(final, [{
+    id: 's-renamed', project: 'old-proj', title: '旧标题', createdAt: 1,
+    input: 300, output: 10, cacheRead: 4, cacheWrite: 1, userMsgs: 4, assistantMsgs: 2,
+    lastSeenAt: 400, deleted: false,
+  }])[0]
+  assert.equal(unionRow.title, '新标题', 'union keeps the newer side attribution (already its rule)')
+  assert.equal(unionRow.project, 'new-proj')
+  assert.equal(unionRow.input, 900, 'union counters still max-join')
+})
+
 // ─── 12. 删前快照读整条日志（分页折叠）─────────────────────────────────
 //
 // 面板的缓存折叠只读扫描帽前缀（展示面取舍，之后还有 sweep/读路径兜底）；删
@@ -390,6 +446,79 @@ await checkAsync('12. the delete-time snapshot folds the WHOLE log (paged), not 
   assert.ok(row, 'the delete wrote a ledger row')
   assert.equal(row.input, 1000, `the snapshot folded ALL 10 events (the old scan-cap-prefix fold saw 400), got ${row.input}`)
   assert.equal(row.assistantMsgs, 10, 'the assistant count is whole-log too')
+})
+
+// ─── 12b. 分页折叠的 title 跨页取最后 ───────────────────────────────────
+// deriveSessionSummary 内 title 是后到覆盖；跨页若先到先得，>5000 事件且其后
+// 仍有改名事件的日志会把旧标题永久钉进台账（删后台账无校正来源）。「页内
+// last-wins、跨页再取最后」才与整数组折叠一致。
+await checkAsync('12b. the paged fold takes the LAST title across pages (a rename after page 1 lands in the ledger)', async () => {
+  const { applySessionAdmin } = await import(new URL('../lib/session-admin.js', import.meta.url).href)
+  const events = []
+  events.push({ type: 'session/title', seq: 0, time: 0, data: { title: 'First Title' } })
+  for (let i = 1; i < 6002; i++) {
+    events.push({ type: 'assistant/message', seq: i, time: 0, data: { usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } })
+  }
+  events.push({ type: 'session/title', seq: 6002, time: 0, data: { title: 'Renamed Title' } })
+  const handle = {
+    read: async (offset, length) => ({ eventState: {}, events: events.slice(offset, offset + length) }),
+    close: async () => {},
+  }
+  const persistence = {
+    stat: async () => ({ header: { id: 'sess-title', cwd: 'E:/proj/fold', createdAt: 1 } }),
+    open: async () => handle,
+  }
+  const path = join(tmp, 'whole-log-title.json')
+  const usageLedger = createUsageLedger({ path, enqueue: (op) => Promise.resolve().then(op) })
+  const ctx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    sessionPersistence: persistence,
+    get: () => undefined,
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    provided: {},
+    effect: (fn) => fn(),
+  }
+  applySessionAdmin(ctx, {
+    audit: null,
+    handleCapture: { get: () => undefined, delete: () => {}, size: () => 0, wrapped: false },
+    usageLedger,
+    usage: { drainObservedUsage: async () => {}, observedIds: () => new Set(), snapshotIntervalMs: 0 },
+    cfg: { sessionEventScanCap: 4 },
+  })
+  await ctx.provided.sessionAdmin.deleteSession('sess-title')
+  const row = readUsageLedger(path).find((e) => e.id === 'sess-title')
+  assert.ok(row, 'the delete wrote a ledger row')
+  assert.equal(row.title, 'Renamed Title', `the rename after page 1 wins, got ${JSON.stringify(row.title)}`)
+  assert.equal(row.input, 6001, 'the counts still fold whole-log')
+})
+
+// ─── 12c. archive 对缺 archiveSession 的 registry 给具名拒绝 ───────────────
+// 同 unarchive 的既有形状：旧 dsh 版本可能没有这个公开动词，直呼它会以裸
+// TypeError 冲出 RPC；护栏把它折成可读的「dsh 版本过旧」拒绝。
+await checkAsync('12c. archive refuses with a named error when the registry lacks archiveSession', async () => {
+  const { applySessionAdmin } = await import(new URL('../lib/session-admin.js', import.meta.url).href)
+  const ctx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    sessionPersistence: { list: async () => [{ header: { id: 'sess-arch' } }] },
+    // list() 在场（workspaceRegistryOf 的唯一形状检查）但缺 archiveSession——
+    // 正是 registry 漂移的样子。
+    get: (key) => (key === 'workspaceRegistry' ? { list: () => [] } : undefined),
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    provided: {},
+    effect: (fn) => fn(),
+  }
+  applySessionAdmin(ctx, {
+    audit: null,
+    handleCapture: { get: () => undefined, delete: () => {}, size: () => 0, wrapped: false },
+    usageLedger: null,
+    usage: { drainObservedUsage: async () => {}, observedIds: () => new Set(), snapshotIntervalMs: 0 },
+    cfg: { sessionEventScanCap: 4 },
+  })
+  await assert.rejects(
+    () => ctx.provided.sessionAdmin.archive('sess-arch'),
+    /缺少 archiveSession/,
+    'a registry without archiveSession reports the incompatible surface, not a bare TypeError',
+  )
 })
 
 rmSync(tmp, { recursive: true, force: true })

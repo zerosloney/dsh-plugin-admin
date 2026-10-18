@@ -557,7 +557,9 @@ const cfg13 = await service.config('perplexity')
 assert.equal(cfg13.providerId, 'perplexity')
 assert.equal(cfg13.namespace, 'web-search-perplexity', 'the provider namespace is reported')
 assert.equal(cfg13.source, 'row', 'no settings namespace mounted → the cordis row is the source')
-assert.equal(cfg13.revision, null, 'a row-backed editor has no settings revision')
+// 行源 revision 是 web 行块指纹（stale-write 守卫）；本夹具没有 web 行 → null
+// （无从指纹，守卫跳过）。指纹形状与对账行为在 scenario 23 覆盖。
+assert.equal(cfg13.revision, null, 'no web row → no fingerprint to guard with')
 assert.equal(cfg13.restartRequired, true, 'a row write needs a restart')
 const fields13 = Object.fromEntries(cfg13.fields.map((f) => [f.key, f]))
 assert.deepEqual(Object.keys(fields13), ['apiKey', 'baseURL', 'model', 'maxTokens', 'searchRecency'], 'the field list is the provider Config key set')
@@ -845,6 +847,104 @@ assert.ok(/^\s*- id: web-search-exa\s*$/m.test(after21b), 'the foreign same-id e
 assert.ok(/command: uvx/.test(after21b), 'the foreign entry config is intact')
 assert.ok(/- id: dsh-mcp-client/.test(after21b), 'the parent MCP row survived')
 console.log('scenario 21 OK: a foreign same-id entry is not the provider row (config/saveConfig/install/uninstall)')
+
+// ---------- Scenario 22: the settings.update fallback host refuses unset ----
+// 降级宿主（settings 只有 update 没有 mutate）表达不了 unset。此前静默丢弃
+// unset 却照常回报 changed 含该键——面板按「已清除」渲染，刷新后键还在。
+// 现在写入之前 fail-loud（一个键都不动），set-only 的保存照常走 update。
+{
+  const updateCalls = []
+  const fallbackHost = mountWithSettings({
+    describe: settingsStub.describe,
+    update: async (ns, merged, expected) => {
+      updateCalls.push({ ns, merged, expected })
+    },
+  })
+  await assert.rejects(
+    () => fallbackHost.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, ['apiKey'], 11),
+    /不支持清除配置键/,
+    'an unset on the update-only fallback host is refused loudly, before any write',
+  )
+  assert.deepEqual(updateCalls, [], 'the refusal fired BEFORE update was called — nothing was half-applied')
+  const setOnly = await fallbackHost.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [], 11)
+  assert.deepEqual(setOnly, { ok: true, source: 'settings', changed: ['model'], restartRequired: false },
+    'a set-only save rides update with the merged values and reports exactly what was applied')
+  assert.deepEqual(updateCalls, [{
+    ns: 'web-search-deepseek',
+    merged: { model: 'deepseek-v4-flash' },
+    expected: 11,
+  }], 'update received only the submitted keys with the read revision')
+}
+console.log('scenario 22 OK: the update-only fallback host refuses unset loudly and reports only applied keys')
+
+// ---------- Scenario 23: the row source carries a stale-write fingerprint ---
+// settings 源有宿主 revision 检查，行源此前完全没有——双开面板（或面板 + 手编）
+// 后写直接覆盖前写。config() 现在回 web 行块的 sha256 短指纹；保存时在锁内
+// 对账，对不上拒绝。缩进锚同场景覆盖：块内更深的同名 `config:` / `searchProvider:`
+// 不再被当成行配置读写。
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  '  config:',
+  '    searchProvider: deepseek-official',
+  '    fetchProvider: http',
+  '',
+].join('\n'), 'utf8')
+const cfg23 = await service.config('deepseek-official')
+assert.equal(cfg23.source, 'row')
+assert.match(cfg23.revision, /^[0-9a-f]{16}$/, 'the web row block fingerprints as the row-source revision')
+const freshRevision23 = cfg23.revision
+// 外部改动（手编）落在 config() 读出之后：保存必须拒绝，不得覆盖前写。
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  '  config:',
+  '    searchProvider: deepseek-official',
+  '    fetchProvider: http',
+  '    userTimeoutMs: 4242',
+  '',
+].join('\n'), 'utf8')
+await assert.rejects(
+  () => service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [], freshRevision23),
+  /已被其他界面或手工编辑修改/,
+  'a save against a stale row fingerprint is refused instead of clobbering the external edit',
+)
+assert.ok(/userTimeoutMs: 4242/.test(readFileSync(patchPath, 'utf8')), 'the refusal left the external edit untouched')
+// 指纹新鲜时照常写入。
+const cfg23b = await service.config('deepseek-official')
+await service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [], cfg23b.revision)
+assert.ok(/searchProvider: deepseek-official/.test(readFileSync(patchPath, 'utf8')), 'the fresh-fingerprint save landed')
+// 不带 revision 的手写 RPC 刻意跳过守卫（与 settings 源同语义）。
+await service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [])
+console.log('scenario 23 OK: the row source refuses stale fingerprints in the lock and lands fresh ones')
+
+// ---------- Scenario 24: the config: anchor is the row's own 2-space key ----
+// 合法 YAML 里更深的子映射先携带同名 `config:`（与块内更深的 `searchProvider:`）
+// 时，读写都必须认本行的真实键，不能被嵌套同名键带偏。
+writeFileSync(patchPath, [
+  '# test patch',
+  '- id: web',
+  "  name: '@deepseek-ai/dsh-web'",
+  '  retry:',
+  '    config: nested-not-the-row-config',
+  '    searchProvider: nested-not-a-provider',
+  '  config:',
+  '    searchProvider: deepseek-official',
+  '    fetchProvider: http',
+  '',
+].join('\n'), 'utf8')
+const cfg24 = await service.config('deepseek-official')
+assert.equal(cfg24.revision !== null, true, 'the web row still fingerprints with a nested decoy present')
+assert.ok(!/nested-not-a-provider/.test(JSON.stringify(cfg24.fields)), 'the nested searchProvider is not read as the provider')
+await service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [])
+const after24 = readFileSync(patchPath, 'utf8')
+assert.ok(/retry:\n    config: nested-not-the-row-config/.test(after24), 'the nested decoy config survives untouched')
+assert.ok(/    model: "deepseek-v4-flash"/.test(after24), 'the write landed inside the REAL config block')
+const realBlock24 = after24.slice(after24.indexOf('  config:'))
+assert.ok(realBlock24.includes('model: "deepseek-v4-flash"'), 'model is inside the row config, not the decoy')
+console.log('scenario 24 OK: nested same-name keys cannot hijack the row config read/write')
 
 rmSync(tmpRoot, { recursive: true, force: true })
 console.log('verify-web-search-admin OK: all Web Search administration scenarios passed')
