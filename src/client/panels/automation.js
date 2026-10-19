@@ -246,6 +246,9 @@ export function WebhookSection(props) {
         workspacePath: rule.action && rule.action.workspacePath || '',
         agentPreset: rule.action && rule.action.agentPreset || 'cordis',
         permissionPreset: rule.action && rule.action.permissionPreset || 'workspace-write',
+        // Not editable here, but the save replaces the whole action: carrying
+        // the stored value keeps an API-set model override from being cleared.
+        model: rule.action ? rule.action.model ?? null : null,
         promptTemplate: rule.promptTemplate || '',
       } : {
         id: seed && seed.id || '',
@@ -308,6 +311,7 @@ export function WebhookSection(props) {
       entry.action.workspacePath = d.workspacePath
       entry.action.agentPreset = d.agentPreset
       entry.action.permissionPreset = d.permissionPreset
+      if (d.model != null) entry.action.model = d.model
     }
     callRemote('webhookAdmin/saveRule', { entry: entry }).then(function (result) {
       if (!alive.current) return
@@ -557,6 +561,9 @@ export function CronSection(props) {
         workspacePath: task.action && task.action.workspacePath || '',
         agentPreset: task.action && task.action.agentPreset || 'cordis',
         permissionPreset: task.action && task.action.permissionPreset || 'workspace-write',
+        // Carried, not edited: the save replaces the whole action (see the
+        // webhook editor's note).
+        model: task.action ? task.action.model ?? null : null,
         promptTemplate: task.promptTemplate || '',
       } : {
         id: seed && seed.id || '',
@@ -608,6 +615,7 @@ export function CronSection(props) {
       entry.action.workspacePath = d.workspacePath
       entry.action.agentPreset = d.agentPreset
       entry.action.permissionPreset = d.permissionPreset
+      if (d.model != null) entry.action.model = d.model
     }
     callRemote('cronAdmin/upsert', { entry: entry }).then(function (result) {
       if (!alive.current) return
@@ -1112,6 +1120,11 @@ export function CronRender(view, actions) {
     for (var i = 0; i < view.tasks.length; i++) {
       const task = view.tasks[i] // per-iteration binding: row handlers close over THIS task
       var nextIn = task.nextRun === null ? null : task.nextRun - view.nowMs
+    // A fire (scheduled or ▶) advances the host's nextRun, but the list is
+    // not polled, so the row kept rendering the PAST moment as "— 后 (…)".
+    // Past the stored moment the countdown is stale, not negative: say so
+    // and let the next reload deliver the recomputed time.
+    var fireDue = nextIn !== null && nextIn < 0
       elements.push(createElement('div', { className: 'card', key: 'task-' + task.id },
         createElement('div', { className: 'card-header' },
           createElement('span', { className: 'card-title' },
@@ -1163,7 +1176,9 @@ export function CronRender(view, actions) {
             dshT('⏱ 下次触发 '),
             createElement('span', { style: { fontWeight: 600 }, title: task.nextRunISO ? formatLocal(task.nextRunISO) : '' },
               task.nextRun === null ? dshT('—（表达式在可搜索范围内无匹配日期）')
-                : formatCountdown(nextIn) + dshT(' 后 (') + formatLocal(task.nextRun) + ')'),
+                : fireDue
+                  ? dshT('已到触发时刻（点击刷新重算）')
+                  : formatCountdown(nextIn) + dshT(' 后 (') + formatLocal(task.nextRun) + ')'),
           ),
           task.action.mode === 'steer' && task.targetOnline === false
             ? createElement('span', { className: 'card-sub-item', style: { color: '#eab308' }, title: dshT('目标会话不在内存中，触发时注入会失败') }, dshT('⚠ 目标会话离线'))

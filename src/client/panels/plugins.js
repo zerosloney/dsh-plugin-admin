@@ -116,6 +116,9 @@ export function PluginsSection(props) {
   // skips a required follow-up (the post-upgrade refresh), or FALSE mid-flight
   // and lets a second one through. Refs are immune to closure staleness.
   var checkingRef = useRef(false)
+  // A forced refresh that arrived while a check was in flight (an upgrade
+  // finishing mid auto-check). Replayed when that one settles.
+  var pendingForceRef = useRef(false)
   // Same single-flight contract for the mutating actions (install / upgrade /
   // upgrade-all / remove): the `busy` state field only drives the disabled
   // button visuals; the entry guards read the ref so a stale render closure
@@ -192,8 +195,16 @@ export function PluginsSection(props) {
    * in the section doc block above checkUpdates).
    * @param {boolean} [force] - true to force the host to bypass its update cache.
    */
-  function checkUpdates(force) {
-    if (checkingRef.current) return
+function checkUpdates(force) {
+    if (checkingRef.current) {
+      // An upgrade finishing while the panel-open auto check is still in flight
+      // used to lose this refresh entirely: the in-flight answer (taken BEFORE
+      // the upgrade) then re-armed the badge for the plugin that was just
+      // upgraded, and persisted it. Remember the request and replay it as soon
+      // as the current one settles.
+      if (force === true) pendingForceRef.current = true
+      return
+    }
     checkingRef.current = true
     patchPlugin({ checkingUpdates: true, note: '' })
     callRemote('pluginAdmin/checkUpdates', { force: force === true }).then(function (result) {
@@ -225,6 +236,12 @@ export function PluginsSection(props) {
         }
         return next
       })
+      // A forced refresh requested while this one ran is replayed now, so an
+      // upgrade that landed mid-check ends up with a post-upgrade answer.
+      if (pendingForceRef.current) {
+        pendingForceRef.current = false
+        checkUpdates(true)
+      }
     }, function (failure) {
       checkingRef.current = false
       if (!alive.current) return
@@ -237,6 +254,10 @@ export function PluginsSection(props) {
       var failurePatch = { checkingUpdates: false, error: dshT('检查更新调用失败：') + messageOf(failure) }
       if (pendingBulkNote !== '') failurePatch.note = pendingBulkNote
       patchPlugin(failurePatch)
+      if (pendingForceRef.current) {
+        pendingForceRef.current = false
+        checkUpdates(true)
+      }
     })
   }
 

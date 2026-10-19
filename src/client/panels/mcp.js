@@ -82,6 +82,21 @@ export function mcpTestStorage() {
 }
 
 /**
+ * Own enumerable keys of a parsed object, WITHOUT the prototype-accessor
+ * trap: `JSON.parse` can produce an own `__proto__` key, and `out[id] = entry`
+ * would then set the destination's prototype instead of a property. Reading
+ * through `Object.keys` + a null-prototype destination keeps the map a plain
+ * data record whatever the stored bytes say. Non-objects (arrays included)
+ * yield no keys — the cache is a map, not a list.
+ * @param {unknown} parsed
+ * @returns {string[]}
+ */
+function ownMapKeys(parsed) {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+  return Object.keys(/** @type {Record<string, unknown>} */ (parsed))
+}
+
+/**
  * Read the persisted MCP test-result cache. A missing, unparseable, or
  * storage-unavailable backend yields an empty map.
  * @returns {McpTestState} entryId -> cached probe record.
@@ -93,13 +108,15 @@ export function loadMcpTestCache() {
     var raw = store.getItem(MCP_TEST_CACHE_KEY)
     if (raw === null) return {}
     var parsed = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object') return {}
     // Purge failure records persisted by older builds: only a durable OK is
     // worth restoring on mount; a stale ❌ from a past outage must not
     // outlive the session it happened in.
-    var out = /** @type {McpTestState} */ ({})
-    for (var id in parsed) {
-      var entry = parsed[id]
+    var out = /** @type {McpTestState} */ (Object.create(null))
+    var keys = ownMapKeys(parsed)
+    for (var i = 0; i < keys.length; i++) {
+      var id = keys[i]
+      if (id === '__proto__') continue
+      var entry = /** @type {any} */ (parsed)[id]
       if (entry && entry.result && entry.result.ok === true) out[id] = entry
     }
     return out
@@ -143,21 +160,45 @@ export function clearMcpTestCacheEntry(id) {
   } catch (e) { /* ignore */ }
 }
 
+/**
+ * Numeric input values stay as the RAW string while the user types: an empty
+ * box is "" (not 0) and a half-typed "1e" is not NaN. Only the save path
+ * coerces, so the controlled input never rewrites what was typed and the
+ * host's own fail-loud validation reports a genuinely bad value.
+ * @param {unknown} value
+ * @returns {string|number}
+ */
+function numberDraft(value) {
+  if (typeof value === 'string') return value
+  return typeof value === 'number' && Number.isFinite(value) ? value : ''
+}
+
 /** Drop test states whose entry no longer exists in the host list.
  * @param {McpTestState} map - the current test-state map.
  * @param {Array<McpListEntry>} entries - the live host entry list.
  * @returns {McpTestState} the pruned map. */
 export function pruneMcpTestState(map, entries) {
+  return pruneMcpTestStatePure(map, entries).map
+}
+
+/** Pure twin of {@link pruneMcpTestState}: no storage side effect, plus the
+ * `changed` flag the caller needs to schedule the write itself (updaters must
+ * stay pure — the mirror effect owns persistence).
+ * @param {McpTestState} map - the current test-state map.
+ * @param {Array<McpListEntry>} entries - the live host entry list.
+ * @returns {{ map: McpTestState, changed: boolean }} */
+export function pruneMcpTestStatePure(map, entries) {
   var valid = /** @type {Record<string, boolean>} */ ({})
   for (var i = 0; i < entries.length; i++) valid[entries[i].id] = true
-  var next = /** @type {McpTestState} */ ({})
+  var next = /** @type {McpTestState} */ (Object.create(null))
   var changed = false
-  for (var id in map) {
+  var ids = Object.keys(map)
+  for (var k = 0; k < ids.length; k++) {
+    var id = ids[k]
     if (valid[id]) next[id] = map[id]
     else changed = true
   }
-  if (changed) saveMcpTestCache(next)
-  return next
+  return { map: next, changed }
 }
 
 /** Compact timestamp for a cached probe ("14:32" today, "6-1 14:32" older).
@@ -191,8 +232,10 @@ export var UPDATE_REMINDER_KEY = 'dsh-plugin-admin/update-reminders'
  * @returns {Record<string, any>} the merged copy. */
 export function mergeReminder(entry, partial) {
   var next = /** @type {Record<string, any>} */ ({})
-  for (var k in entry) next[k] = entry[k]
-  for (var pk in partial) next[pk] = partial[pk]
+  var entryKeys = Object.keys(entry || {})
+  for (var i = 0; i < entryKeys.length; i++) next[entryKeys[i]] = entry[entryKeys[i]]
+  var partialKeys = Object.keys(partial || {})
+  for (var j = 0; j < partialKeys.length; j++) next[partialKeys[j]] = partial[partialKeys[j]]
   return next
 }
 
@@ -208,17 +251,20 @@ export function loadUpdateReminders() {
     var raw = store.getItem(UPDATE_REMINDER_KEY)
     if (raw === null) return {}
     var parsed = JSON.parse(raw)
-    var out = /** @type {Record<string, any>} */ ({})
-    if (parsed !== null && typeof parsed === 'object') {
-      for (var name in parsed) {
-        var r = parsed[name]
-        if (r && typeof r.latest === 'string' && r.latest.length > 0) {
-          out[name] = {
-            latest: r.latest,
-            at: typeof r.at === 'number' ? r.at : 0,
-            updateAvailable: true,
-            error: '',
-          }
+    // Same shape discipline as loadMcpTestCache: a JSON array is not a map,
+    // and an own `__proto__` key must not reach a property assignment.
+    var out = /** @type {Record<string, any>} */ (Object.create(null))
+    var names = ownMapKeys(parsed)
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i]
+      if (name === '__proto__') continue
+      var r = /** @type {any} */ (parsed)[name]
+      if (r && typeof r.latest === 'string' && r.latest.length > 0) {
+        out[name] = {
+          latest: r.latest,
+          at: typeof r.at === 'number' ? r.at : 0,
+          updateAvailable: true,
+          error: '',
         }
       }
     }
@@ -235,7 +281,9 @@ export function saveUpdateReminders(map) {
   if (store === null) return
   try {
     var out = /** @type {Record<string, any>} */ ({})
-    for (var name in map) {
+    var names = Object.keys(map)
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i]
       var r = map[name]
       if (r && r.updateAvailable === true && typeof r.latest === 'string' && r.latest.length > 0) {
         out[name] = { latest: r.latest, at: typeof r.at === 'number' ? r.at : Date.now() }
@@ -268,8 +316,9 @@ export function mergeUpdateReminders(curMap, list) {
   var liveNames = /** @type {Record<string, boolean>} */ ({})
   for (var a = 0; a < list.length; a++) liveNames[list[a].name] = true
   var map = /** @type {Record<string, any>} */ ({})
-  for (var k in curMap) {
-    if (curMap[k] && liveNames[k]) map[k] = curMap[k]
+  var keys = Object.keys(curMap || {})
+  for (var k = 0; k < keys.length; k++) {
+    if (curMap[keys[k]] && liveNames[keys[k]]) map[keys[k]] = curMap[keys[k]]
   }
   for (var i = 0; i < list.length; i++) {
     var u = list[i]
@@ -295,9 +344,11 @@ export function mergeUpdateReminders(curMap, list) {
 export function updateCheckNote(map, checkedCount) {
   var updateCount = 0
   var checkErrorCount = 0
-  for (var n in map) {
-    if (map[n].updateAvailable === true) updateCount++
-    if (map[n].error) checkErrorCount++
+  var noteKeys = Object.keys(map || {})
+  for (var i = 0; i < noteKeys.length; i++) {
+    var entry = map[noteKeys[i]]
+    if (entry.updateAvailable === true) updateCount++
+    if (entry.error) checkErrorCount++
   }
   if (updateCount > 0) return dshT('发现 ') + updateCount + dshT(' 个插件有新版本')
   if (checkErrorCount > 0) {
@@ -427,6 +478,9 @@ export function McpSection(props) {
     // entryId -> { busy?, result?, error?, at? }; previous successful probes
     // are restored from localStorage so statuses survive panel remounts.
     mcpTestState: loadMcpTestCache(),
+    // Set when a pure prune changed the map's CONTENT without changing the
+    // map identity; the mirror effect consumes it and clears it.
+    mcpTestCacheDirty: false,
     // MCP playground (MCP Inspector posture): one open invocation bench per
     // panel — { entryId, tool, argsText, busy, result, error } or null.
     mcpPlayground: null,
@@ -449,6 +503,15 @@ export function McpSection(props) {
   useEffect(function () {
     saveMcpTestCache(mView.mcpTestState || {})
   }, [mView.mcpTestState])
+  // The prune that drops entries removed on the host keeps the previous map
+  // object when nothing qualified (so the effect above does not run); a dirty
+  // flag carries the rare "same map, storage must still shrink" case.
+  useEffect(function () {
+    if (mView.mcpTestCacheDirty === true) {
+      saveMcpTestCache(mView.mcpTestState || {})
+      patchMcp({ mcpTestCacheDirty: false })
+    }
+  }, [mView.mcpTestCacheDirty])
   // Probe sequence guard: the probe of an older click must never overwrite a
   // newer one's result when both are in flight. Keyed PER ENTRY — a single
   // counter let "probe A, then probe B" drop A's (perfectly current) response
@@ -550,8 +613,14 @@ export function McpSection(props) {
           for (var k in cur) next[k] = cur[k]
           next.mcpBusy = false
           next.mcpEntries = entries
-          // Drop cached probes whose entry no longer exists on the host.
-          next.mcpTestState = pruneMcpTestState(cur.mcpTestState, entries)
+          // Drop cached probes whose entry no longer exists on the host. The
+          // prune is PURE here (it returns the next map and a flag); the
+          // persistence belongs to the mirror effect, so a StrictMode double
+          // invocation or an interrupted render cannot desynchronise storage
+          // from state.
+          var pruned = pruneMcpTestStatePure(cur.mcpTestState, entries)
+          next.mcpTestState = pruned.map
+          if (pruned.changed) next.mcpTestCacheDirty = true
           return next
         })
       } else {
@@ -718,12 +787,26 @@ export function McpSection(props) {
     if (draft.toolCallTimeoutMs !== undefined) config.toolCallTimeoutMs = draft.toolCallTimeoutMs
     if (draft.failOnStartupError) config.failOnStartupError = true
     if (draft.reconnectEnabled) {
-      config.reconnect = {
-        enabled: true,
-        initialDelayMs: Number(draft.reconnectInitialDelayMs),
-        maxDelayMs: Number(draft.reconnectMaxDelayMs),
-        maxAttempts: Number(draft.reconnectMaxAttempts),
+      // The drafts hold raw input strings; coerce once here and refuse the
+      // shapes the host would reject (an empty box reading as 0, a half-typed
+      // number becoming NaN) with a local message instead of a late 4xx.
+      var delays = [
+        ['initialDelayMs', draft.reconnectInitialDelayMs],
+        ['maxDelayMs', draft.reconnectMaxDelayMs],
+        ['maxAttempts', draft.reconnectMaxAttempts],
+      ]
+      /** @type {Record<string, any>} */
+      var reconnect = { enabled: true }
+      for (var di = 0; di < delays.length; di++) {
+        var raw = String(delays[di][1] === undefined || delays[di][1] === null ? '' : delays[di][1]).trim()
+        var parsed = raw === '' ? NaN : Number(raw)
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          patchMcp({ mcpBusy: false, mcpError: dshT('重连参数 ') + delays[di][0] + dshT(' 必须是非负数字（当前：') + JSON.stringify(raw) + '）' })
+          return
+        }
+        reconnect[delays[di][0]] = parsed
       }
+      config.reconnect = reconnect
     }
     patchMcp({ mcpBusy: true, mcpError: '', mcpNote: '' })
     callRemote('mcpAdmin/upsert', { entry: { id: draft.id, config: config } }).then(function (result) {
@@ -1114,7 +1197,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             min: 0,
             value: d.reconnectInitialDelayMs,
             'aria-label': 'initialDelayMs',
-            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectInitialDelayMs: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectInitialDelayMs: numberDraft(e.target.value) }) },
           }),
         ),
         createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1 1 120px' }, key: 'f-reconnect-md' },
@@ -1124,7 +1207,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             min: 0,
             value: d.reconnectMaxDelayMs,
             'aria-label': 'maxDelayMs',
-            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxDelayMs: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxDelayMs: numberDraft(e.target.value) }) },
           }),
         ),
         createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1 1 120px' }, key: 'f-reconnect-ma' },
@@ -1134,7 +1217,7 @@ export function renderMcpSection(view, patchMcp, patchDraft, patchPlayground, re
             min: 0,
             value: d.reconnectMaxAttempts,
             'aria-label': 'maxAttempts',
-            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxAttempts: Number(e.target.value) }) },
+            onChange: function (/** @type {McpInputEvent} */ e) { patchDraft({ reconnectMaxAttempts: numberDraft(e.target.value) }) },
           }),
         ),
       ) : null,

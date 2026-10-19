@@ -4,6 +4,53 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.28.0] - 2026-10-19
+
+独立审查（9 路并行深审 + 逐条到 dsh 源码复核）后的修复轮：3 严重 + 6 安全/数据 + 12 中等 + 11 轻微。
+
+### Fixed
+
+- **不可信仓库的 git 执行面还剩 `core.fsmonitor` / clean filter / 环境注入三条通道**（`lib/session-admin.js` + `lib/run-command.js`，严重）：`--no-ext-diff --no-textconv` 只关了 diff 驱动的两个口子；`git status`/`git diff` 刷新索引时会执行仓库 `.git/config` 里的 `core.fsmonitor = <命令>`，启动环境里的 `GIT_CONFIG_KEY_n` 也能注入同一批配置，而待办 dock 会自动轮询这两个调用。修复：所有 git 调用统一经 `withGitSafety` / `gitChildEnv`——前置 `-c core.fsmonitor=false -c core.untrackedCache=false`，环境注入 `GIT_CONFIG_COUNT=0`、`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0`，剔除 ambient `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` 与 `GIT_EXTERNAL_DIFF`（与宿主 GitRunner 同款纪律）。`verify-todo-panel`：35 → 36 checks（真实仓库先证明裸 `git status` 会执行 fsmonitor，再断言插件的 fileStats/gitDiff 不会）。
+- **手编混装 `- insert:` 块里编辑/删除一个 MCP 条目会静默吞掉同块的其他插件条目（含密钥）**（`lib/mcp-admin.js`，严重）：`mcpEntryViews` 只收编 MCP 条目，而 upsert/remove 用整块 span 重建——同块里的 `web-search-exa` 行与注释随 `ok:true` 回执一起消失。修复：视图记录条目在原始块内的精确行区间，新增 `rebuildBlockLines` 按行重建并保留所有未被 MCP 视图认领的行（外来条目、注释、空行原位保留）；空块归一为 `[]`，legacy 裸行保存仍升级为 insert 形状。`verify-mcp-admin`：11 → 13 checks（remove/upsert 两种动作下外来行、密钥、注释、兄弟条目全部存活）。
+- **受管子代理行字段集停在 dsh 0.2.0，persona/toolFilter 在 0.2.1+ 会让该行启动直接炸**（`lib/subagent-admin.js`，严重）：0.2.1 的 tool-subagent `apply()` 对这两个键硬拒绝（已迁入 Agent Preset），`backgroundMode` 已成死键。修复：按运行版本判定（`DSH_RUNTIME_VERSION`/app-boot manifest），0.2.1+ 拒绝写入并指明改用 `agentPreset`；能力门改为「provider 声明了 且 宿主不拒绝」。新增 `verify-subagent-host-version`（0.2.0 与 0.2.1 两个宿主各跑一遍）。
+- **`project-hooks` 的仓库可控 matcher 可冻死整个 dsh 进程**（`lib/project-hooks.js`，安全）：`.agents/hooks.json` 是不可信仓库输入，`(a+)+$` 一类形状在 29 字符上即可烧掉约 20 秒且 `RegExp.test` 不可取消、轮次取消信号无效。修复：`unsafeMatcherReason` 保守预检（量词嵌套分组 / 含量词分支的交替分组），加载期拒绝并指因，运行期兜底不执行；正常 matcher（`Bash|Edit`、`mcp__.*`、`^Write$`）不受影响。`verify-project-hooks`：33 → 34 checks。
+- **MCP 行源的 stale-write 指纹锚在 `web` 行，而 saveConfig 写的是 provider 行**（`lib/web-search-admin.js`，中等）：守卫对它要保护的字节恒不敏感，双开面板后写仍覆盖前写。修复：指纹改锚 `writeRowConfig` 真正重写的 provider 行块（无自有行时回退 `web` 行）。`verify-web-search-admin`：新增 scenario 23b（手改 provider 行被拒、web 行未动也拒绝；刷新后新指纹照常落盘）。
+- **`restoreManifestState` 在文件锁外还原**（`lib/plugin-admin.js`，轻微）：pnpm 的异步锁一释放，第二实例即可抢锁开跑，随后的锁外整文件覆写会丢它的更新。修复：两个文件各自持 `withFileLock` 还原。
+- **peer-compat 没跟上宿主准入门，且豁免记录不逐项校验**（`lib/peer-compat.js` + `lib/plugin-admin.js`，中等）：宿主改为 `engines.dsh` **优先且独断**（此时忽略 peerDependencies），镜像只读 peers——带不满足 `engines.dsh` 的包预检零警告而宿主启动静默跳过；豁免记录只要命中一项就放行，而宿主要求**每一项**都是精确 semver、任一非法整条作废。修复：两者都对齐宿主。`verify-peer-compat`：7 checks 内新增两条断言。
+- **脚本/模型可控的 `label` 与 `args` 无字段帽**（`lib/workflow-runs.js`，中等）：每次步骤 persist 整份重写 journal、每次 `list()` 轮询整读，一个 4M label 会变成永久轮询流量。修复：label 走 `capRecordText`、args 走 `journalOutcome`（降级为有界预览并带 `argsTruncated` 旗标）。`verify-workflow-runs`：新增断言。
+- **步数帽的抵扣基数是继承缓存表的大小而非本代实际回放次数**（`lib/workflow-runs.js`，中等）：amend 大改脚本后旧缓存大量不命中时，本代可多跑出继承条数次真实调用才触帽。修复：改为 `facadeCalls - replayedHits`，帽消息同步改口径。
+- **`runAgent` 在 finally 里裸 `await dispose()`，teardown 失败会顶替已成功捕获的步骤结果**（`lib/workflow-engine.js`，中等）：dsh 契约明文要求 dispose 的拒绝不得替换 result。修复：独立 catch 并记一条 `agent-teardown` 诊断。
+- **webhook 无 deliveryId 的拒绝历史行每次 flush 翻倍**（`lib/webhook-triggers.js`，中等）：封锁/认证失败行以 `deliveryId: null` 进环，而 merge 对无 id 行双向透传，重启后从盘上回种再翻倍，最终把真实交付历史挤出 200 条环。修复：无 id 行按内容去重。
+- **编辑 webhook 规则 / 定时任务会静默清除 create 动作的 `model`**（`lib/webhook-triggers.js` + `lib/cron-admin.js` + `src/client/panels/automation.js`，中等）：面板全量替换 action 且没有 model 输入位。修复：两端都按「缺省即保持」处理（显式 `model: null` 仍可清除）。
+- **CLI 后端的 `cwd` 在面板保存时被静默丢弃**（`lib/subagent-admin.js`，中等）：只有 env 有缺省继承规则。修复：cwd 同款缺失即保持。
+- **MCP 三把尺子不一：name 行带行尾注释的条目对面板隐身、serverName 行带注释的条目永远无法保存**（`lib/mcp-admin.js`，中等）：修复 `MCP_NAME_ROW` 与 `serverName` 身份正则容忍行尾注释，并把 `blockIdentity` 接受规范化后的单空格缩进。`verify-mcp-admin`：新增断言（含注释的行可列出、可保存）。
+- **web-search 解析失败的响亮拒绝把问题内联体（含 apiKey）原样回显**（`lib/web-search-admin.js`，中等）：违反「密钥只写不回显」。修复：错误消息改为形状摘要（长度 + 键名，密钥类键名标注「已隐藏」）。
+- **numstat 失败被折成 `error: null` 的 ±0**（`lib/session-admin.js`，中等）：与本模块自己立的「读不出 ≠ 干净」规则相悖。修复：失败/超时返回明确的 `error`。
+- **分页折叠的页级 fallback 标题会覆盖早页真实标题**（`lib/session-admin.js`，中等）：删前快照是台账永久终值。修复：抽出 `fallbackTitleOf` 供两处共用，跨页只接受与兜底不同的真实 title。`verify-usage-ledger`：15 → 17 checks（含跨实例可见性）。
+- **台账 `persist()` 的 unchanged 快路径让空闲实例永远看不见另一实例写入的行**（`lib/usage-ledger.js`，中等）：修复：快路径用一次 `stat`（mtime,size）探测，变化时才在锁内并集读入；未变化仍零 I/O。
+- **CLI env 黑名单按自身判据漏了 `PYTHONHOME` / `SHELL` / `PS4`**（`lib/subagent-admin.js`，中等）：与已禁的 PYTHONPATH / COMSPEC 同判据。修复：补入并更新错误措辞。
+- **`stop()` 是唯一不过 runId 白名单就拼盘上路径的入口**（`lib/workflow-runs.js`，轻微）：`..\..\x` 可让 owner 探测落在 runs 目录之外（只读 oracle）。修复：同款语法闸。
+- **终态不清 `pendingQuestion`**（`lib/workflow-runs.js`，轻微）：fire-and-forget `ask()` 后完成的运行永久显示「等待回答」。修复：settle 时清空。
+- **仓库可控 matcher 之外的通配与集合判定、`[]` 占位识别、`maskSecretMap` 数组放行**（`lib/patch-utils.js` + `lib/secret-fields.js`，轻微）：分别补尾注释容忍、数组按空映射处理。
+- **`peer-compat` 的运行版本缓存与集成探针**（`scripts/integration-check.mjs`）：新增 3 组探针（准入门 `engines.dsh` 优先分支、tool-subagent 硬拒绝、GitRunner 环境纪律），142 → 148 条，让这类镜像漂移下次自动变红。
+
+### Changed
+
+- 验证基线由 dsh **0.2.0-rc.1** 上调为 **0.2.1-rc.2**（148 条契约探针在此检出上全绿）。
+- `npm test`：43 → **45 步**（新增 `verify-subagent-host-version` 与 `verify-client-hygiene`），脚本 38 → 40 个。
+
+### 客户端
+
+- **删除的会话会从置顶白名单里剪掉**（`sessions.js`）：原先只增不减，「已置顶(N)」计数虚高；剪枝只在列表**非空**时执行，避免一次瞬时空答复抹掉全部置顶。
+- **localStorage 读取器拒绝 JSON 数组与自有 `__proto__` 键**，所有 map 遍历改用 `Object.keys`（`mcp.js`）：`for...in` 会把继承条目回写进存储；`pruneMcpTestState` 新增纯函数孪生，持久化交给镜像 effect。
+- **工作区菜单判据收紧为精确的「删除工作区」**（`impl.js`）：原先任意含「删除」的弹窗都会被当成工作区菜单并注入假菜单项。
+- **`maxTokens: 0` 与空 `permissionMode` 的预检对齐宿主**（`subagents.js`）：前者被当作合法、后者显示回退却不写回草稿，都只会把拒绝推迟到最后一次点击。
+- **cron 行在触发时刻过去后不再渲染负倒计时**（`automation.js`）：改为「已到触发时刻（点击刷新重算）」。
+- **workflow 打开新 run 时清空详情卡并作废在途请求**（`workflow.js`）：原先旧卡片继续渲染，新 run 的「详情」首击变成关闭。
+- **升级完成后的强制刷新不再被单飞守卫吞掉**（`plugins.js`）：被丢弃的那次刷新会让在途的旧答案把刚升级的插件重新标成「有新版本」并持久化。
+- todo 文件区去重比较补上 `changed` 行列表；usage 项目筛选在目标项目本时段无数据时给出可见的禁用说明项；批量删除失败文案改指宿主日志；MCP 重连数字输入保留原始字符串并在保存时本地校验。
+- `verify-client-hygiene`（新）：10 条客户端源级钉，覆盖上述契约。
+
 ## [1.27.23] - 2026-10-18
 
 ### Fixed

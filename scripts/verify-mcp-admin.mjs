@@ -349,6 +349,64 @@ await check('hand-edited shapes the flat parser cannot round-trip refuse the rew
   }
 })
 
+await check('editing/removing an MCP entry in a mixed insert block keeps foreign rows, comments and secrets', async () => {
+  // An insert block may compose more than the MCP client — the loader accepts
+  // sibling rows of other plugins. Rebuilding the block from the MCP views
+  // alone dropped them (with their secrets) while the save reported ok:true.
+  // A foreign sibling in the same block, written at the wrapper's own indent.
+  const foreign = [
+    "    - id: '@deepseek-ai/dsh-web-search-exa'",
+    '     config:',
+    '      apiKey: "sk-live-secret"',
+  ]
+  for (const action of ['remove', 'upsert']) {
+    const fx = makeFixture(`mixed-${action}`)
+    try {
+      // The insert wrapper's indent is baked into the fixture rows themselves
+      // (mcpInsertEntryLines already matches mcpInsertBlockLines' output).
+      const head = mcpInsertEntryLines('mcp_row', 'fs')
+      const tail = mcpInsertEntryLines('mcp_two', 'git').slice(1)
+      fx.writePatchText([head[0], ...head.slice(1), ...foreign, '  # keep me', ...tail].join('\n') + '\n')
+      if (action === 'remove') {
+        await fx.svc().remove('mcp_row')
+      } else {
+        await fx.svc().upsert({ id: 'mcp_row', config: { transport: 'stdio', serverName: 'fs2', command: 'node' } })
+      }
+      const text = fx.readPatch()
+      assert.ok(text.includes('dsh-web-search-exa'), `${action}: the foreign plugin row survives`)
+      assert.ok(text.includes('sk-live-secret'), `${action}: the foreign row's secret survives`)
+      assert.ok(text.includes('# keep me'), `${action}: the comment survives`)
+      assert.ok(text.includes('mcp_two'), `${action}: the sibling MCP entry survives`)
+      assert.equal(text.includes('serverName: "fs"'), false, `${action}: the target was really replaced`)
+      const ids = (await fx.svc().list()).entries.map((entry) => entry.id).sort()
+      assert.deepEqual(ids, action === 'remove' ? ['mcp_two'] : ['mcp_row', 'mcp_two'])
+    } finally {
+      fx.cleanup()
+    }
+  }
+})
+
+await check('trailing comments on name/serverName rows neither hide an entry nor block its save', async () => {
+  const fx = makeFixture('row-comments')
+  try {
+    // Start from a row the panel itself authored (its indentation is the
+    // contract), then annotate it the way a human editing the patch would.
+    fx.writePatchText('[]\n')
+    await fx.svc().upsert({ id: 'commented', config: { transport: 'stdio', serverName: 'commented-server', command: 'node' } })
+    fx.writePatchText(fx.readPatch()
+      .replace("name: '@deepseek-ai/dsh-mcp-client'", "name: '@deepseek-ai/dsh-mcp-client' # 生产 MCP")
+      .replace('serverName: "commented-server"', 'serverName: "commented-server" # 主力'))
+    const listed = await fx.svc().list()
+    assert.deepEqual(listed.entries.map((entry) => entry.id), ['commented'],
+      'a commented name row is still an MCP entry, not an invisible duplicate')
+    const saved = await fx.svc().upsert({ id: 'commented', config: { transport: 'stdio', serverName: 'commented-server', command: 'npx' } })
+    assert.equal(saved.ok, true, 'and a save is accepted instead of being called hand-edited')
+    assert.ok(/command: "npx"/.test(fx.readPatch()), 'the edit landed')
+  } finally {
+    fx.cleanup()
+  }
+})
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

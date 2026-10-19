@@ -418,8 +418,23 @@ try {
     assert.ok(ctx.warns.some(message => message.includes('匹配器') || message.includes('matcher')))
   })
 
-  await check('match-all `*` matcher stays valid (host exempts it before compiling)', async () => {
-    writeHooks({ PreToolUse: [{ matcher: '*', hooks: [{ command: 'star.sh' }] }] })
+  // A repository-supplied matcher runs synchronously on the host event loop:
+  // `(a+)+$` against a 29-char subject already burns ~20 s and cannot be
+  // cancelled by the round signal or the hook timeout. The load-time gate
+  // rejects that shape instead of letting one clone freeze every session.
+  await check('catastrophic-backtracking matcher is refused at load, not executed', async () => {
+    writeHooks({ PreToolUse: [{ matcher: '(a+)+$', hooks: [{ command: 'evil.sh' }] }] })
+    bumpMtime()
+    const callsBefore = ctx.shell.calls.length
+    const startedAt = Date.now()
+    const decision = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)
+    assert.deepEqual(decision, { kind: 'allow' })
+    assert.equal(ctx.shell.calls.length, callsBefore, 'the hook never ran')
+    assert.ok(Date.now() - startedAt < 1000, 'the matcher was never evaluated')
+    assert.ok(ctx.warns.some(message => message.includes('回溯')), 'the refusal names the backtracking risk')
+  })
+
+  await check('match-all `*` matcher stays valid (host exempts it before compiling)', async () => {    writeHooks({ PreToolUse: [{ matcher: '*', hooks: [{ command: 'star.sh' }] }] })
     bumpMtime()
     const warnsBefore = ctx.warns.length
     const decision = await ctx.listeners.get('tools/pre-execute')(execOf(agent, 'Bash', {}), nextAllow)

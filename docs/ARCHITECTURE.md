@@ -41,7 +41,7 @@ pnpm 编排安装 / 卸载 / 更新 + bundles 清单同步。安装/更新完成
 ### 🕘 历史会话（Web 与会话 · 第一页签）
 挂在设置 → Web 与会话的第一个页签，与 Web 搜索共用侧边栏入口、页内双页签，所有 dsh 版本下行为一致。原「工作区」面板已退役（各版本 dsh 均原生覆盖工作区管理）；宿主侧 `workspaceAdmin` 命名空间仍随插件注册（历史兼容 RPC 面，不是面板入口）。
 
-批量删除的语义：在线会话自动先关停（closeSession）再删日志，其余直接删除（deleteSession）；单个失败不阻塞其余，结束汇总失败数。删除路径在物理删除前做 `lstat` 与 realpath 包含性校验（见 §5）。
+批量删除的语义：在线会话自动先关停（closeSession）再删日志，其余直接删除（deleteSession）；单个失败不阻塞其余，结束汇总失败数。删除路径在物理删除前做 `lstat` 与 realpath 包含性校验（见 §5）。置顶是纯本地 id 白名单，列表刷新时对**非空**结果剪枝（已删除会话的 id 不再累积，「已置顶(N)」不会虚高）；空结果不剪，避免一次瞬时空答复抹掉全部置顶。
 
 ### 📚 技能
 只读全量清单，三层作用域合并——**全局层**、**每个 Agent 预设的 standing 作用域**、**每个已知会话的 (cwd, 预设) 作用域**。Web 部署（`dsh-web-app`）会把宿主层 `skill-filesystem` 行禁用、改由预设挂载本地发现，所以那里全局层为 0 属正常，用户目录（`~/.agents/skills`、`~/.dsh/skills`）由预设作用域列出。读取预设作用域会经 `agentPresets.acquireScope`（租约式，读毕即释放）确保该预设的 standing 挂载（代码里还防御性探测 `standingKeyFor`，但没有任何已发布宿主暴露该成员——缺 `acquireScope` 的宿主按作用域读取失败如实上报 `complete:false`，不会静默丢层）（只组合插件，不启动 agent / 会话 / 轮次），这是宿主侧读取预设层的唯一入口。严格只读：只调 `snapshot()` / `list()` 摘要，正文 loader `get()` 从不调用，不写任何东西；覆盖面 / 失败 / `complete` 旗标随行返回，残缺清单永远不会读成完整清单。
@@ -103,7 +103,9 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 
 **默认让位**：官方 `ui-conversation` 自 0.1.7 起在 `conversation.input.dock` 挂了自己的 TodoPanel（id `todo`），探测命中即不注册本插件浮层（见 docs/COMPAT.md 官方覆盖表）；要找回增强版，`config.panels.todo: 'on'` 或 localStorage `dsh-admin-panels` 强制。
 
-**git 读取失败与"工作区干净"是两件事，分开呈现**：`gitDiff` / `fileStats` 各自带一个 `error` 字段（成功路径为 `null`）。读不出来时（非仓库、无 git、超时）不再返回零值充当"无改动"——那会让"复制 diff"按钮复制空字符串并弹出「工作区干净」，把相反的结论说得斩钉截铁。失败时 `gitDiff` 回 `error` 而非空 diff（超时与非超时措辞不同，因为二者对用户含义不同），`fileStats` 回零值 + `error`，面板据此隐藏该区段而不是显示 `0 个文件`；"没有 cwd"仍算合法的空答案（`error: null`）。git 的 stderr 常是一大段选项用法，诊断只取能说明原因的那一行，取不到就只报退出码——不把无关的 flag 列表念给用户。
+**git 读取失败与"工作区干净"是两件事，分开呈现**：`gitDiff` / `fileStats` 各自带一个 `error` 字段（成功路径为 `null`）。读不出来时（非仓库、无 git、超时）不再返回零值充当"无改动"——那会让"复制 diff"按钮复制空字符串并弹出「工作区干净」，把相反的结论说得斩钉截铁。失败时 `gitDiff` 回 `error` 而非空 diff（超时与非超时措辞不同，因为二者对用户含义不同），`fileStats` 回零值 + `error`，面板据此隐藏该区段而不是显示 `0 个文件`；"没有 cwd"仍算合法的空答案（`error: null`）。git 的 stderr 常是一大段选项用法，诊断只取能说明原因的那一行，取不到就只报退出码——不把无关的 flag 列表念给用户。**numstat 失败同样不是零**：status 成功而 `git diff --numstat` 超时/失败时，文件行数无法统计，返回 `error` 而不是每文件 ±0。
+
+**会话工作区是不可信检出**，因此 git 子进程照抄宿主 GitRunner 的纪律：环境里注入 `GIT_CONFIG_COUNT=0`（忽略启动环境里的 `GIT_CONFIG_KEY_n` 注入）、`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0` 并剔除 `GIT_EXTERNAL_DIFF`；每次调用前置 `-c core.fsmonitor=false -c core.untrackedCache=false`——仓库自带的 `core.fsmonitor` 会让 `status`/`diff` 刷新索引时**执行任意命令**，是 `--no-ext-diff/--no-textconv` 覆盖不到的通道。
 
 ### 🌐 i18n
 面板文案内置简体/English 双语，**接在 dsh 自己的语言服务上**（`ctx.locale`）：工具栏 🌐 切换的是整个界面的语言，面板即时重绘、无需刷新；宿主未提供该服务时回落到「跟随浏览器语言 + 中文原文兜底」，永不出坏。
@@ -182,7 +184,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 ## 6. 测试与接缝契约
 
 ```sh
-npm test   # 5 道静态闸门 + 38 个脚本（self-check / host-check / 37 个 verify-* / integration-check），共 43 步；数字以 npm test 输出为准
+npm test   # 5 道静态闸门 + 40 个脚本（self-check / host-check / 39 个 verify-* / integration-check），共 45 步；数字以 npm test 输出为准
 ```
 
 静态闸门（`npm test` 先跑，任一失败即中止）：
@@ -193,7 +195,7 @@ npm test   # 5 道静态闸门 + 38 个脚本（self-check / host-check / 37 个
 - `verify-doc-claims`：**文档里可机械校验的声明必须与仓库一致**——步数 / 静态闸门数 / verify-* 脚本数、文档点名的脚本与模块路径是否存在、最新 CHANGELOG 各节的 `N → M checks` 是否自洽且不超出该套件声明的用例数、config 键数是否等于 `lib/index.js` 导出的两张表。它守的是整条链**自己的数字**，所以排在链首。
 - `verify-line-anchors`：**文档里的 `path:line` 锚点必须落在文件内**。行号锚点的失效方式比路径更隐蔽——重构把代码挪走后，文件与路径都还在，所以"路径存在"检查照旧全绿，而行号已经指向无关函数甚至越过文件末尾。本闸门就是为两个真实案例写的：`CHANGELOG.md` 与 `docs/COMPAT.md` 都曾引用 ~~`lib/index.js:1756-1795`（用量台账观察器），而 v1.26.2 的拆分把 `index.js` 从 3648 行减到 936 行，该行号早已不存在。三类分别处理：**本仓锚点**（`lib|src|scripts|types|docs/`）必须落在文件内；**上游锚点**（`packages/…`，指向未 vendored 的 dsh checkout）只校验形态，并在输出里**如实报告"未核对"**而不是假装通过——设 `DSH_CHECKOUT` 后按真实 checkout 核对；**反例引用**（在反引号前加 `~~`）不算声明，闸门跳过。锚点形态本身也有断言（只认已知顶层目录，裸文件名不算声明）。
 
-- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**142 条断言**，覆盖全部管理 RPC 命名空间与 workflow 引擎接缝；条数以 `npm test` 输出为准）。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**148 条断言**，覆盖全部管理 RPC 命名空间、workflow 引擎接缝，以及三处「镜像宿主行为」的上游规则——插件准入门 `engines.dsh` 优先分支、tool-subagent 对 persona/toolFilter 的硬拒绝、GitRunner 的 git 环境纪律；条数以 `npm test` 输出为准）。
 - **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（**28 项断言**，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**21 次只读调用覆盖 13/14 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
 - `verify-service-injects.mjs` 静态扫描 `lib/**`，断言每一处直接的 `ctx.<service>` 读取都在 `inject` 声明里 —— 少了这一条，真实宿主会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见（`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着）。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。

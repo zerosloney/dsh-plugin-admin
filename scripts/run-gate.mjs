@@ -47,6 +47,8 @@ const STEPS = [
   { name: 'verify-mcp-cache', desc: 'MCP connectivity-test cache in the panel (localStorage seed/restore/invalidate)', cmd: [node, 'scripts/verify-mcp-cache.mjs'] },
   { name: 'verify-update-reminders', desc: 'update-reminder badge survives settings re-open (stubbed registry)', cmd: [node, 'scripts/verify-update-reminders.mjs'] },
   { name: 'verify-subagents-host', desc: 'subagent-admin host half: rows, mounts, tool constraints, tool seed', cmd: [node, 'scripts/verify-subagents-host.mjs'] },
+  { name: 'verify-subagent-host-version', desc: 'persona/toolFilter are refused only on hosts that reject them (0.2.1+)', cmd: [node, 'scripts/verify-subagent-host-version.mjs'] },
+  { name: 'verify-client-hygiene', desc: 'client source pins: pin pruning, localStorage shapes, menu heuristic, prechecks', cmd: [node, 'scripts/verify-client-hygiene.mjs'] },
   { name: 'verify-subagents-client', desc: 'subagents section in jsdom via real React 18', cmd: [node, 'scripts/verify-subagents-client.mjs'] },
   { name: 'verify-command-hooks', desc: 'commands/hooks remote contract end-to-end (temp DSH_HOME)', cmd: [node, 'scripts/verify-command-hooks.mjs'] },
   { name: 'verify-project-commands', desc: 'project .agents commands: frontmatter parse + registration', cmd: [node, 'scripts/verify-project-commands.mjs'] },

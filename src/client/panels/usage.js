@@ -326,6 +326,14 @@ export function renderUsageDashboard(usage, patch) {
           onChange: function (/** @type {{ target: { value: string } }} */ e) { patch({ project: e.target.value }) },
         },
         createElement('option', { key: 'all', value: '' }, dshT('全部项目')),
+        // A selected project that has no rows in the CURRENT range is kept as
+        // an explicit disabled option: the select would otherwise render blank
+        // while the rows stay filtered by a choice the user cannot see (and
+        // cannot clear except by guessing). Keeping it visible also lets the
+        // filter explain itself instead of showing an empty dashboard.
+        project !== '' && projectNames.indexOf(project) === -1
+          ? createElement('option', { key: 'kept', value: project, disabled: true }, project + dshT('（本时段无数据）'))
+          : null,
         projectNames.map(function (pn) { return createElement('option', { key: pn, value: pn }, pn) })))),
     createElement('div', { className: 'usage-kpi-grid' },
       kpiCard('k-token', dshT('总 Token'), formatTokenCount(curK.tokens) || '0', curK.tokens, prevK.tokens),

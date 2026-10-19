@@ -600,7 +600,9 @@ await check('validateCliConfig: shape, enums, env keys', () => {
   // BASH_ENV/ENV 让 CLI 自己派生的 bash 子进程启动即 source 攻击者脚本
   // （NODE_OPTIONS 的晚一跳版本），COMSPEC 改写 Windows 上 shell 语义子进程
   // 的落点，ZDOTDIR/PERL5OPT/RUBYOPT 是 zsh/perl/ruby 系的同一注入。
-  for (const denied of ['PATH', 'PATHEXT', 'COMSPEC', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONSTARTUP', 'BASH_ENV', 'ENV', 'ZDOTDIR', 'PERL5OPT', 'RUBYOPT', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'bash_env', 'comspec']) {
+  // PYTHONHOME 比 PYTHONPATH 更强（启动即换标准库目录），SHELL 与 COMSPEC
+  // 同判据（claude-code 按 $SHELL 选 bash 工具），PS4 是 xtrace 的命令替换。
+  for (const denied of ['PATH', 'PATHEXT', 'COMSPEC', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'BASH_ENV', 'ENV', 'PS4', 'ZDOTDIR', 'PERL5OPT', 'RUBYOPT', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'bash_env', 'comspec', 'pythonhome']) {
     assert.throws(() => validateCliConfig(codex, { env: { [denied]: '/tmp/x' } }), /被拒绝/, `env key ${denied} is denied`)
   }
   // __proto__ 过得了键名白名单，但序列化装载时静默丢键——落盘与运行态分叉

@@ -492,6 +492,66 @@ await checkAsync('12b. the paged fold takes the LAST title across pages (a renam
   assert.equal(row.input, 6001, 'the counts still fold whole-log')
 })
 
+// ─── 12e. 空闲实例也能看见另一实例写入的行 ─────────────────────────────────
+// 快路径「merge 没变就直接返回镜像」只对写路径成立：实例 B 做了删前快照后，
+// 实例 A（自身数字无变化）永远看不到那行，仪表盘持续漏账。一次 stat 比较
+// (mtime,size) 让变化的文件被并集读入，未变化时仍是零 I/O。
+await checkAsync('12e. an idle instance adopts rows another instance wrote (no lost visibility)', async () => {
+  const shared = join(tmp, 'shared-ledger.json')
+  try { rmSync(shared, { force: true }) } catch { /* absent */ }
+  const a = createUsageLedger({ path: shared, enqueue: (op) => Promise.resolve().then(op) })
+  const b = createUsageLedger({ path: shared, enqueue: (op) => Promise.resolve().then(op) })
+  await a.record([{ id: 'live', title: 'A live', tokens: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 }, messageCount: 1, assistantCount: 1 }])
+  // B writes a retained (deleted) row through its own instance.
+  await b.upsert([{ id: 'gone', title: 'deleted elsewhere', createdAt: 1, lastSeenAt: Date.now(), tokens: { input: 99, output: 9, cacheRead: 0, cacheWrite: 0 }, messageCount: 1, assistantCount: 1, deleted: true }])
+  // A refreshes with the SAME live rows: nothing changed for A…
+  const rows = await a.record([{ id: 'live', title: 'A live', tokens: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 }, messageCount: 1, assistantCount: 1 }])
+  // …but the dashboard must see B's retained row.
+  assert.ok(rows.some((row) => row.id === 'gone'), 'the other instance\'s retained row is visible after a refresh')
+})
+
+// ─── 12d. 页级 fallback 标题不得覆盖早页的真实 title ───────────────────────
+// deriveSessionSummary 只在「整份日志没有 title 事件」时才用首条用户消息
+// 兜底；分页折叠若逐页照抄 part.title，一个 title 在早页、末页有用户
+// 消息的长会话会把真实标题换成末页摘要首行——删前快照是台账永久终值。
+await checkAsync('12d. a page-level fallback title never overwrites an explicit title seen on an earlier page', async () => {
+  const { applySessionAdmin } = await import(new URL('../lib/session-admin.js', import.meta.url).href)
+  const events = []
+  events.push({ type: 'session/title', seq: 0, time: 0, data: { title: 'Real Title' } })
+  for (let i = 1; i < 5000; i++) {
+    events.push({ type: 'assistant/message', seq: i, time: 0, data: { usage: { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } })
+  }
+  events.push({ type: 'user/message', seq: 5000, time: 0, data: { content: [{ type: 'text', text: 'a user message on page two' }] } })
+  const handle = {
+    read: async (offset, length) => ({ eventState: {}, events: events.slice(offset, offset + length) }),
+    close: async () => {},
+  }
+  const persistence = {
+    stat: async () => ({ header: { id: 'sess-fallback', cwd: 'E:/proj/fold', createdAt: 1 } }),
+    open: async () => handle,
+  }
+  const ledgerPath = join(tmp, 'whole-log-fallback-title.json')
+  const usageLedger = createUsageLedger({ path: ledgerPath, enqueue: (op) => Promise.resolve().then(op) })
+  const ctx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    sessionPersistence: persistence,
+    get: () => undefined,
+    provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
+    provided: {},
+    effect: (fn) => fn(),
+  }
+  applySessionAdmin(ctx, {
+    audit: null,
+    handleCapture: { get: () => undefined, delete: () => {}, size: () => 0, wrapped: false },
+    usageLedger,
+    usage: { drainObservedUsage: async () => {}, observedIds: () => new Set(), snapshotIntervalMs: 0 },
+    cfg: { sessionEventScanCap: 4 },
+  })
+  await ctx.provided.sessionAdmin.deleteSession('sess-fallback')
+  const row = readUsageLedger(ledgerPath).find((e) => e.id === 'sess-fallback')
+  assert.equal(row.title, 'Real Title', `the explicit title survives a later page's fallback, got ${JSON.stringify(row.title)}`)
+})
+
 // ─── 12c. archive 对缺 archiveSession 的 registry 给具名拒绝 ───────────────
 // 同 unarchive 的既有形状：旧 dsh 版本可能没有这个公开动词，直呼它会以裸
 // TypeError 冲出 RPC；护栏把它折成可读的「dsh 版本过旧」拒绝。

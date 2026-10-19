@@ -200,7 +200,19 @@ await checkAsync('5. runtime version override + installed manifest reads round-t
     assert.deepEqual(info, {
       version: '1.4.2',
       peers: { '@deepseek-ai/dsh': '^0.1.6' },
+      enginesDsh: null,
     }, 'the manifest read filters to dsh peers and carries the exact version')
+
+    // engines.dsh is the host's FIRST and exclusive rule: declaring it makes
+    // peerDependencies irrelevant at boot.
+    writeFileSync(join(profile, 'node_modules', '@deepseek-ai', 'dsh-fake-plugin', 'package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh-fake-plugin',
+      version: '1.4.2',
+      engines: { dsh: '>=0.2.0' },
+      peerDependencies: { '@deepseek-ai/dsh': '^0.1.6' },
+    }))
+    assert.equal(readInstalledDshPeers(profile, '@deepseek-ai/dsh-fake-plugin').enginesDsh, '>=0.2.0',
+      'an engines.dsh range rides along so the precheck applies the host rule')
     assert.equal(readInstalledDshPeers(profile, '@deepseek-ai/dsh-absent'), null, 'a missing manifest is null, not a throw')
     assert.equal(readInstalledDshPeers(profile, ''), null)
 
@@ -224,6 +236,9 @@ check('6. versionExemptionFor reads the host compatibility.json grants (same rec
       'granted-plugin@2.0.0': ['0.2.0-rc.1', '0.1.9'],
       'bad-shape@3.0.0': 'not-a-list',
       'not-a-version-key': ['0.2.0-rc.1'],
+      // 宿主 isVersionList 要求列表每一项都是精确 semver，任一项非法则**整条
+      // 记录作废**；这里必须同款拒绝，否则宿主会跳过该插件而面板说「已豁免」。
+      'tainted-list@4.0.0': ['0.2.0-rc.1', 'latest'],
     }, null, 2))
     const exempted = versionExemptionFor(profile, '0.2.0-rc.1')
     assert.equal(exempted('granted-plugin', '2.0.0'), true, 'an exact name@version grant naming this runtime exempts')
@@ -231,6 +246,7 @@ check('6. versionExemptionFor reads the host compatibility.json grants (same rec
     assert.equal(exempted('granted-plugin', '2.0.1'), false, 'a different plugin version is a different key')
     assert.equal(exempted('absent-plugin', '1.0.0'), false, 'an unlisted package is not exempted')
     assert.equal(exempted('bad-shape', '3.0.0'), false, 'a non-list value reads as absent (conservative)')
+    assert.equal(exempted('tainted-list', '4.0.0'), false, 'one non-semver entry voids the record, exactly as the host reads it')
     assert.equal(exempted('granted-plugin', null), false, 'an unreadable installed version is never exempted')
     assert.equal(versionExemptionFor(profile, '0.1.9')('granted-plugin', '2.0.0'), true, 'the runtime version is the predicate parameter, not ambient state')
   } finally {

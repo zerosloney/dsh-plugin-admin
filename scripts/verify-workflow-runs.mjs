@@ -1502,6 +1502,15 @@ await check('a dead-pid claim is crash residue: the fallback path still presents
   assert.equal((await r.stop(id, 'stopped')).reason, 'not running', 'stop treats a dead-pid claim as unowned')
 })
 
+await check('stop rejects an out-of-grammar run id instead of reading files outside the runs dir', async () => {
+  const bundle = makeCtx()
+  const r = makeRegistry(bundle.ctx, join(tmpBase, 'stop-shape'))
+  for (const bad of ['../../etc/passwd', '..\\..\\x', 'wf_1_ok/../../x', '']) {
+    const outcome = await r.stop(bad, 'stop')
+    assert.deepEqual(outcome, { stopped: false, reason: 'not running' }, `id ${JSON.stringify(bad)} is refused before any disk probe`)
+  }
+})
+
 await check('record.error is capped at the record-field budget', async () => {
   const bundle = makeCtx()
   const home = join(tmpBase, 'errcap')
@@ -1516,6 +1525,28 @@ await check('record.error is capped at the record-field budget', async () => {
   assert.ok(rec.error.endsWith('…[截断]'), 'the truncation marker is honest')
   const journal = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.json'), 'utf8'))
   assert.ok(journal.error.length <= 8_192 + '…[截断]'.length, 'the journaled error is bounded too')
+})
+
+await check('record.label and record.args are capped at the record-field budget', async () => {
+  const bundle = makeCtx()
+  const home = join(tmpBase, 'labelcap')
+  const r = makeRegistry(bundle.ctx, home)
+  const { id } = await r.start({
+    script: 'return 1',
+    label: 'L'.repeat(100_000),
+    args: { payload: 'A'.repeat(200_000) },
+    parent: { id: 'sess-labelcap' },
+  })
+  const rec = await runToDone({ id }, r)
+  assert.ok(rec.label.length <= 8_192 + '…[截断]'.length, `the label is bounded, got ${rec.label.length}`)
+  assert.ok(rec.label.endsWith('…[截断]'), 'the label marker is honest')
+  // An oversized args payload degrades to the truncation-preview shape and is
+  // flagged in the journal — the surface every persist rewrites — exactly like
+  // a stalled step outcome (the list/get projection never carried args).
+  const journal = JSON.parse(readFileSync(join(home, 'workflows', 'runs', id + '.json'), 'utf8'))
+  assert.equal(typeof journal.args, 'string', 'an oversized args payload is stored as a bounded preview')
+  assert.ok(journal.args.length <= 8_192 + '…[截断]'.length, `the args preview is bounded, got ${journal.args.length}`)
+  assert.equal(journal.argsTruncated, true, 'the preview is flagged so a resume can tell reality from a cut')
 })
 
 await check('pendingQuestion.text is capped at the record-field budget', async () => {

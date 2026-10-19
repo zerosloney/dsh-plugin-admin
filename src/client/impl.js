@@ -464,7 +464,11 @@ function setupMenuInjection(call, refreshSessions) {
     // ——不认它，归档会话的行菜单就一个注入项都拿不到。
     var isSession = text.indexOf('归档会话') !== -1 || text.indexOf('Archive session') !== -1
       || text.indexOf('取消归档') !== -1 || text.indexOf('Unarchive session') !== -1
-    var isWorkspace = !isSession && (text.indexOf('删除') !== -1 || text.indexOf('Delete workspace') !== -1)
+    // The workspace menu is recognised by its exact 「删除工作区」 item, not by
+    // a bare 删除: any other menu carrying a 「删除」 entry (a chat message, for
+    // one) would otherwise be taken for a workspace menu and get a fake "open
+    // in explorer" item resolved against the nearest sidebar row.
+    var isWorkspace = !isSession && (text.indexOf('删除工作区') !== -1 || text.indexOf('Delete workspace') !== -1)
     if (!isSession && !isWorkspace) return
 
     var viewport = menuEl.querySelector('[role="presentation"]')

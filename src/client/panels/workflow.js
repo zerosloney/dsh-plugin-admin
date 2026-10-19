@@ -171,7 +171,10 @@ export function WorkflowSection(props) {
       // 网关把宿主返回包在 { ok, value | error } 里；写路径一律先解包再读业务字段。
       var r = res && res.ok ? res.value : null
       if (r && r.id) {
-        patch({ editorBusy: false, editor: null, tab: 'runs', openRunId: r.id })
+        patch({ editorBusy: false, editor: null, tab: 'runs', openRunId: r.id, runDetail: null, answerText: '' })
+        // A detail request for the PREVIOUS run may still be in flight; its
+        // answer must not land under the new openRunId's card.
+        detailSeq.current++
         showToast('success', dshT('🚀 工作流已启动'))
         reload()
       } else {
@@ -219,7 +222,8 @@ export function WorkflowSection(props) {
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
       if (r && r.id) {
-        patch({ editorBusy: false, editor: null, openRunId: r.id })
+        patch({ editorBusy: false, editor: null, openRunId: r.id, runDetail: null, answerText: '' })
+        detailSeq.current++
         showToast('success', dshT('✏️ 已基于旧步骤缓存重建工作流'))
         reload()
       } else {
@@ -261,7 +265,7 @@ export function WorkflowSection(props) {
       runActionBusy.current = false
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
-      if (r && r.id) { patch({ openRunId: r.id }); showToast('success', dshT('▶️ 已从断点续跑')); reload() }
+      if (r && r.id) { patch({ openRunId: r.id, runDetail: null, answerText: '' }); detailSeq.current++; showToast('success', dshT('▶️ 已从断点续跑')); reload() }
       else showToast('error', messageOf((res && res.error) || (r && r.error)))
     }, function (e) {
       runActionBusy.current = false
@@ -279,7 +283,7 @@ export function WorkflowSection(props) {
       runActionBusy.current = false
       if (!alive.current) return
       var r = res && res.ok ? res.value : null
-      if (r && r.id) { patch({ tab: 'runs', openRunId: r.id }); showToast('success', dshT('🚀 已启动：') + name); reload() }
+      if (r && r.id) { patch({ tab: 'runs', openRunId: r.id, runDetail: null, answerText: '' }); detailSeq.current++; showToast('success', dshT('🚀 已启动：') + name); reload() }
       else showToast('error', messageOf((res && res.error) || (r && r.error)))
     }, function (e) {
       runActionBusy.current = false

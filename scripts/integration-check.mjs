@@ -714,6 +714,42 @@ const PROBES = [
     ],
   },
   {
+    id: 'plugin admission rule (engines.dsh first, else dsh peers)',
+    // lib/peer-compat.js mirrors the host's admission rule. The host added an
+    // `engines.dsh` branch that DECIDES ALONE (peers ignored); the mirror did
+    // not, so a package failing engines.dsh got a clean precheck while the
+    // host skipped it at boot. Pin the branch so the next upstream change
+    // fails this probe instead of shipping a silent mismatch.
+    file: 'packages/boot/app-boot/src/plugin-compatibility.ts',
+    checks: [
+      ['an own engines.dsh range decides alone', t => t.includes("if (Object.hasOwn(engines, 'dsh')) {")],
+      ['peerDependencies are then skipped entirely', t => t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return {}")],
+    ],
+  },
+  {
+    id: 'tool-subagent rejects persona / toolFilter (0.2.1+)',
+    // lib/subagent-admin.js gates persona/toolFilter on the host version: a
+    // config carrying either key makes that row's apply() throw on 0.2.1+,
+    // so the panel must refuse to write them there.
+    file: 'packages/subagent/tool-subagent/src/index.ts',
+    checks: [
+      ['apply() hard-rejects the two removed keys', t => t.includes("for (const field of ['persona', 'toolFilter']) {")],
+      ['the rejection names Agent Preset as the replacement', t => t.includes('configure persona and tool plugins in an Agent Preset')],
+    ],
+  },
+  {
+    id: 'dsh GitRunner environment discipline (untrusted repositories)',
+    // lib/session-admin.js runs git in session workspaces, which are
+    // untrusted checkouts. It mirrors the host's own defence: ambient
+    // GIT_CONFIG_KEY_n is neutralised (count 0) and terminal prompts/locks
+    // stay off.
+    file: 'packages/deliverables/workspace-changes/src/git.ts',
+    checks: [
+      ['GIT_CONFIG_COUNT=0 is injected so ambient config keys are ignored', t => t.includes("GIT_CONFIG_COUNT: '0'")],
+      ['terminal prompts and optional locks stay off', t => t.includes("GIT_TERMINAL_PROMPT: '0'") && t.includes("GIT_OPTIONAL_LOCKS: '0'")],
+    ],
+  },
+  {
     id: 'slots.inject lifetime contract (client panels)',
     // src/client/impl.js:858 wraps every panel registration in
     // `ctx.slots.inject(slot, () => ctx.slots.register(options, component))` and

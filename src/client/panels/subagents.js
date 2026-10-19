@@ -143,7 +143,9 @@ export function validateDraft(draft, isCreate, otherToolNames, providerMeta, can
       return dshT('后端 "') + draft.provider + dshT('" 无法执行数值 maxDepth；请勾选「交由后端管理」或换后端')
     }
   }
-  if (draft.maxTokens !== '' && !/^\d+$/.test(draft.maxTokens)) return dshT('maxTokens 必须是正整数')
+  // "0" passes /^\d+$/ but the host requires a positive integer (1..MAX):
+  // letting it through here only moved the rejection to the final click.
+  if (draft.maxTokens !== '' && (!/^\d+$/.test(draft.maxTokens) || Number(draft.maxTokens) < 1)) return dshT('maxTokens 必须是正整数')
   var filterNames = (draft.allow || []).concat(draft.deny || [])
   for (var fi = 0; fi < filterNames.length; fi++) {
     var tname = filterNames[fi]
@@ -764,6 +766,11 @@ export function CliBackendCard(props) {
   var missingPackages = backend.missing || []
   var depsMissing = missingPackages.length > 0
   var missingLabel = missingPackages.join(' + ')
+  // A stored row with no permissionMode shows the first offered mode. The
+  // draft is seeded with that same value (see cliDraftFromConfig's callers),
+  // so what the user sees is what a save sends — the display used to fall
+  // back while the draft kept '', which the host rejects with a message about
+  // a value the user never chose.
   var modeValue = backend.permissionModes.indexOf(draft.permissionMode) !== -1
     ? draft.permissionMode
     : backend.permissionModes[0]
@@ -1038,9 +1045,17 @@ export function CliPanel(props) {
     /** @type {Record<string, any>} */
     var next = {}
     ;(result.backends || []).forEach(function (/** @type {Record<string, any>} */ backend) {
-      next[backend.id] = backend.kind === 'generic'
-        ? cliDraftFromGeneric(backend)
-        : cliDraftFromConfig(backend.config)
+      if (backend.kind === 'generic') {
+        next[backend.id] = cliDraftFromGeneric(backend)
+        return
+      }
+      var draft = cliDraftFromConfig(backend.config)
+      // Seed an EMPTY permissionMode with the mode the card will display, so
+      // a save sends what the user sees instead of '' (which the host rejects
+      // with a message about a value that was never on screen).
+      var modes = Array.isArray(backend.permissionModes) ? backend.permissionModes : []
+      if (draft.permissionMode === '' && modes.length > 0) draft.permissionMode = modes[0]
+      next[backend.id] = draft
     })
     setDrafts(next)
     setBusy({})

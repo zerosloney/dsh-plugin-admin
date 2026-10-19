@@ -333,6 +333,41 @@ check('gitBaselineDecision separates an unborn HEAD from a rev-parse fault', () 
   assert.equal(gitBaselineDecision(false, null).ref, null, 'an unclassifiable failure is a fault too')
 })
 
+// The sessions this plugin inspects are UNTRUSTED repositories: a checkout can
+// ship `.git/config` with `core.fsmonitor = <command>` (status/diff refresh the
+// index) and run it with the host's privileges the moment the todo dock polls.
+// The git child therefore runs with the host GitRunner's own discipline —
+// fsmonitor disabled, ambient GIT_CONFIG_KEY_n injection neutralised.
+await checkAsync('git children do not execute a repository-controlled fsmonitor', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-git-fsmon-'))
+  const marker = join(repo, 'PWNED')
+  const gitIn = (/** @type {string[]} */ args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  gitIn(['init', '-q'])
+  gitIn(['config', 'user.email', 'a@b.c'])
+  gitIn(['config', 'user.name', 'a'])
+  writeFileSync(join(repo, 'a.txt'), 'one\n')
+  gitIn(['add', '.'])
+  gitIn(['commit', '-qm', 'init'])
+  const evil = process.platform === 'win32'
+    ? `cmd /c echo pwned> "${marker}"`
+    : `/bin/sh -c 'echo pwned > "${marker}"'`
+  gitIn(['config', 'core.fsmonitor', evil])
+  writeFileSync(join(repo, 'a.txt'), 'two\n')
+  try {
+    // Control: a bare `git status` really does execute it here, so the
+    // assertion below cannot pass for the wrong reason.
+    execFileSync('git', ['status', '--porcelain'], { cwd: repo, stdio: 'ignore' })
+    assert.ok(existsSync(marker), 'control: the fixture repo can execute code through fsmonitor')
+    rmSync(marker, { force: true })
+    const mounted = await makeGitCtxFor(repo)
+    await mounted.service.fileStats('s1')
+    await mounted.service.gitDiff('s1')
+    assert.equal(existsSync(marker), false, "the plugin's git calls never ran the repository's fsmonitor command")
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
 // End-to-end through the real service: a staged-but-never-committed repo (the
 // unborn-HEAD case the empty tree exists for) still folds to real stats —
 // status succeeds, the baseline resolves to the empty tree, the staged file

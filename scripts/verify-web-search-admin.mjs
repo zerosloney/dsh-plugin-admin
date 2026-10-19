@@ -557,9 +557,10 @@ const cfg13 = await service.config('perplexity')
 assert.equal(cfg13.providerId, 'perplexity')
 assert.equal(cfg13.namespace, 'web-search-perplexity', 'the provider namespace is reported')
 assert.equal(cfg13.source, 'row', 'no settings namespace mounted → the cordis row is the source')
-// 行源 revision 是 web 行块指纹（stale-write 守卫）；本夹具没有 web 行 → null
-// （无从指纹，守卫跳过）。指纹形状与对账行为在 scenario 23 覆盖。
-assert.equal(cfg13.revision, null, 'no web row → no fingerprint to guard with')
+// 行源 revision 是**该 provider 自己那一行**的指纹（stale-write 守卫针对
+// writeRowConfig 真正重写的字节）。夹具里 perplexity 行存在 → 给出指纹；
+// 指纹的对账行为在 scenario 23 覆盖。
+assert.match(cfg13.revision, /^[0-9a-f]{16}$/, 'the provider row itself fingerprints as the row-source revision')
 assert.equal(cfg13.restartRequired, true, 'a row write needs a restart')
 const fields13 = Object.fromEntries(cfg13.fields.map((f) => [f.key, f]))
 assert.deepEqual(Object.keys(fields13), ['apiKey', 'baseURL', 'model', 'maxTokens', 'searchRecency'], 'the field list is the provider Config key set')
@@ -879,9 +880,9 @@ console.log('scenario 22 OK: the update-only fallback host refuses unset loudly 
 
 // ---------- Scenario 23: the row source carries a stale-write fingerprint ---
 // settings 源有宿主 revision 检查，行源此前完全没有——双开面板（或面板 + 手编）
-// 后写直接覆盖前写。config() 现在回 web 行块的 sha256 短指纹；保存时在锁内
-// 对账，对不上拒绝。缩进锚同场景覆盖：块内更深的同名 `config:` / `searchProvider:`
-// 不再被当成行配置读写。
+// 后写直接覆盖前写。指纹必须跟着 writeRowConfig 真正重写的那块字节走：
+// deepseek-official 没有自己的行时写的是 web 行，所以这里的外部编辑落在 web 行。
+// （独立 provider 行存在时指纹取那一行——scenario 23b 钉住这条。）
 writeFileSync(patchPath, [
   '# test patch',
   '- id: web',
@@ -919,6 +920,42 @@ assert.ok(/searchProvider: deepseek-official/.test(readFileSync(patchPath, 'utf8
 // 不带 revision 的手写 RPC 刻意跳过守卫（与 settings 源同语义）。
 await service.saveConfig('deepseek-official', { model: 'deepseek-v4-flash' }, [])
 console.log('scenario 23 OK: the row source refuses stale fingerprints in the lock and lands fresh ones')
+
+// ---------- Scenario 23b: the fingerprint follows the PROVIDER row ---------
+// writeRowConfig rebuilds the provider's own row when one exists, so the guard
+// must hash THAT row. Anchoring it on `web` made the guard blind to the bytes
+// it was protecting: a hand edit of the provider row (or a second panel) was
+// silently overwritten while the save reported ok.
+writeFileSync(patchPath, [
+ '# test patch',
+ '- id: web',
+ " name: '@deepseek-ai/dsh-web'",
+ ' config:',
+ ' searchProvider: exa',
+ ' fetchProvider: http',
+ '',
+ '- insert:',
+ '  - id: web-search-exa',
+ "    name: '@deepseek-ai/dsh-web-search-exa'",
+ '    config:',
+ '      searchType: keyword',
+ '',].join('\n'), 'utf8')
+const cfg23bExa = await service.config('exa')
+assert.equal(cfg23bExa.source, 'row', 'exa has no settings namespace → the row is the source')
+assert.match(cfg23bExa.revision, /^[0-9a-f]{16}$/, 'the provider row itself carries the fingerprint')
+// 手编 provider 行（web 行一个字节没动）：旧指纹必须被拒，外部编辑保持原样。
+writeFileSync(patchPath, readFileSync(patchPath, 'utf8').replace('searchType: keyword', 'searchType: neural'), 'utf8')
+await assert.rejects(
+ () => service.saveConfig('exa', { searchType: 'auto' }, [], cfg23bExa.revision),
+ /已被其他界面或手工编辑修改/,
+ 'a hand edit of the PROVIDER row invalidates the fingerprint even though the web row is untouched',
+)
+assert.ok(/searchType: neural/.test(readFileSync(patchPath, 'utf8')), 'the hand edit survived the refusal')
+// 刷新后（新指纹）照常写入。
+const cfg23cExa = await service.config('exa')
+await service.saveConfig('exa', { searchType: 'auto' }, [], cfg23cExa.revision)
+assert.ok(/searchType: "auto"/.test(readFileSync(patchPath, 'utf8')), 'the fresh fingerprint save lands')
+console.log('scenario 23b OK: the stale-write guard follows the provider row it rewrites')
 
 // ---------- Scenario 24: the config: anchor is the row's own 2-space key ----
 // 合法 YAML 里更深的子映射先携带同名 `config:`（与块内更深的 `searchProvider:`）

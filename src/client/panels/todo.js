@@ -150,6 +150,24 @@ export function formatElapsed(ms) {
 }
 
 /**
+ * Whether two file-change row lists render the same thing. Compares the
+ * fields the dock shows (path / status / ± lines); identity or length alone
+ * would miss an in-place swap that keeps the totals equal.
+ * @param {any} a - the previously rendered rows.
+ * @param {Array<Record<string, any>>} b - the freshly polled rows.
+ * @returns {boolean}
+ */
+function sameChangedRows(a, b) {
+  if (!Array.isArray(a) || a.length !== b.length) return false
+  for (var i = 0; i < b.length; i++) {
+    var x = a[i] || {}
+    var y = b[i] || {}
+    if (x.path !== y.path || x.status !== y.status || x.added !== y.added || x.removed !== y.removed) return false
+  }
+  return true
+}
+
+/**
  * Render the todo dock: progress bar, todo rows (done section collapsible),
  * the git file-change section with branch badge, footer.
  * @param {Array<Record<string, any>>} list - the host-projected todo rows.
@@ -540,14 +558,19 @@ export function TodoAdminDock(props) {
           return
         }
         setStats(function (/** @type {Record<string, any> | null} */ prev) {
+          var changed = Array.isArray(value.changed) ? value.changed : []
           if (prev && prev.files === value.files && prev.added === value.added && prev.removed === value.removed
-            && prev.branch === (typeof value.branch === 'string' ? value.branch : null)) return prev
+            && prev.branch === (typeof value.branch === 'string' ? value.branch : null)
+            // The per-file rows are the section's content: a swap that keeps
+            // the totals identical (one file's +100 replaced by another's)
+            // still changes what the user sees, so it must not bail out.
+            && sameChangedRows(prev.changed, changed)) return prev
           return {
             files: value.files,
             added: value.added,
             removed: value.removed,
             branch: typeof value.branch === 'string' && value.branch !== '' ? value.branch : null,
-            changed: Array.isArray(value.changed) ? value.changed : [],
+            changed: changed,
           }
         })
       }).catch(function () {})

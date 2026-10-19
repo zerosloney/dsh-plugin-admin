@@ -187,7 +187,7 @@ export function SessionsSection(props) {
       if (done >= plan.length) {
         patchSession({ bulkBusy: false, bulk: null, bulkDone: 0 })
         if (failures > 0) {
-          patchSession({ error: dshT('批量删除完成，') + String(failures) + dshT(' 个会话删除失败（详见交付历史/宿主日志）') })
+          patchSession({ error: dshT('批量删除完成，') + String(failures) + dshT(' 个会话删除失败（详见宿主日志）') })
         }
         if (props.refreshSessions) props.refreshSessions()
         return reloadSessions()
@@ -259,11 +259,26 @@ export function SessionsSection(props) {
     callRemote('sessionAdmin/list', {}).then(function (result) {
       if (!alive.current || seq !== listSeq.current) return
       if (result.ok) {
+        var listed = (result.value && result.value.sessions) || []
         patchSession({
           busy: false,
-          sessions: (result.value && result.value.sessions) || [],
+          sessions: listed,
           workspaces: (result.value && result.value.workspaces) || [],
         })
+        // Pins are a local id whitelist with no host counterpart: a deleted
+        // session would otherwise keep its id forever, inflating the
+        // 「已置顶(N)」 count and pinning nothing. Prune against a
+        // NON-EMPTY list only — an empty answer (filtering, transient host
+        // state) must not wipe the user's pins.
+        if (listed.length > 0) {
+          setPinnedIds(function (/** @type {string[]} */ cur) {
+            if (!cur || cur.length === 0) return cur
+            var live = /** @type {Record<string, boolean>} */ ({})
+            for (var i = 0; i < listed.length; i++) live[listed[i].id] = true
+            var kept = cur.filter(function (/** @type {string} */ id) { return live[id] === true })
+            return kept.length === cur.length ? cur : kept
+          })
+        }
       } else {
         patchSession({ busy: false, error: dshT('加载会话失败：') + messageOf(result.error) })
       }
