@@ -189,9 +189,9 @@ try {
 
   const dumped = cli([PROFILE, '--dump-config'], env)
   const tree = String(dumped.stdout ?? '')
-  const rowIndex = tree.indexOf('- id: plugin-admin')
+  const rowIndex = tree.indexOf('- id: dsh-plugin-admin')
   const rowHit = rowIndex !== -1 && tree.slice(rowIndex, rowIndex + 80).includes('name: dsh-plugin-admin')
-  if (rowHit) ok('loader composed our row from dsh.bundle.patch', '- id: plugin-admin / name: dsh-plugin-admin')
+  if (rowHit) ok('loader composed our row from dsh.bundle.patch', '- id: dsh-plugin-admin / name: dsh-plugin-admin')
   else fail('loader composed our row', 'row not found in --dump-config output')
 
   /* ------------------------------- 2. mount ------------------------------- */
@@ -411,10 +411,32 @@ try {
 
   const disabled = await rpc('pluginAdmin/setEnabled', { name: 'smoke-toggle-target', disabled: true })
   const patchDisabled = readIfPresent(patchPath)
-  if (disabled.ok && patchDisabled.includes('disabled: true')) {
-    ok('setEnabled wrote a disabled row into the profile patch', 'cordis.patch.yml now carries `disabled: true`')
+  /* WHICH mechanism carries the toggle depends on the deployment (v1.31):
+   *   - with `ctx.pluginManager` mounted, setEnabled DELEGATES and the host
+   *     records enablement in `package.json` → `dsh.profile.bundles`
+   *     (plugin-manager/src/index.ts:1122-1141 selectBundle); the patch is
+   *     untouched;
+   *   - without it (sdk-minimal, headless) the local path authors `disabled:
+   *     true` rows in the profile patch, as it always did.
+   * Asserting only the patch would therefore fail on the delegated path — and
+   * asserting only the selection list would fail on the fallback. This checks
+   * the OUTCOME (the product's own read path reports it disabled) and then
+   * names whichever mechanism actually applied it, so a real regression in
+   * either route still fails. */
+  const selectionDisabled = (() => {
+    try {
+      const manifest = JSON.parse(readFileSync(join(home, 'profiles', PROFILE, 'package.json'), 'utf8'))
+      return !(manifest?.dsh?.profile?.bundles ?? []).includes('smoke-toggle-target')
+    } catch { return false }
+  })()
+  if (disabled.ok && (patchDisabled.includes('disabled: true') || selectionDisabled)) {
+    ok('setEnabled disabled the bundle through the deployed mechanism',
+      patchDisabled.includes('disabled: true')
+        ? 'profile patch carries `disabled: true` (local path)'
+        : 'bundle removed from dsh.profile.bundles (host pluginManager path)')
   } else {
-    fail('setEnabled wrote a disabled row into the profile patch', `${disabled.text.slice(0, 200)} | patch tail=${patchDisabled.slice(-160)}`)
+    fail('setEnabled disabled the bundle through the deployed mechanism',
+      `${disabled.text.slice(0, 200)} | patch has disabled=${patchDisabled.includes('disabled: true')} | selection lists it=${!selectionDisabled}`)
   }
   // Ask the product's OWN read path whether the toggle took effect: parsing
   // --dump-config would test the loader's text layout, not our feature, and the
@@ -532,9 +554,19 @@ try {
       // after launch can beat React's first render — so wait for the trigger
       // itself instead of a text-length heuristic (the empty-session shell paints
       // under 120 chars).
+      // The shell has NO standalone settings button: `设置`/`Settings` is a ROW
+      // INSIDE the account menu, whose trigger is an icon button labelled
+      // `账号菜单`/`Account menu` (ui-settings-account AccountMenu.tsx:65
+      // aria-label={t('menu')}, zh label at locales.ts:53; the 'settings' row is
+      // the menu entry at :75). A first cut waited for a button labelled 设置 and
+      // could never see one, because that label only exists after the menu opens
+      // — so the trigger here is the ACCOUNT MENU, and opening settings is a
+      // second click on its `设置` row.
       const settingsLabels = ['设置', 'Settings']
+      const accountLabels = ['账号菜单', 'Account menu', '更多', 'More']
       const labelHelper = "const label = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim()"
-      const wantedJson = JSON.stringify(settingsLabels)
+      const wantedJson = JSON.stringify(accountLabels)
+      const settingsJson = JSON.stringify(settingsLabels)
       let triggerPresent = false
       const readyDeadline = Date.now() + 30_000
       while (Date.now() < readyDeadline && !triggerPresent) {
@@ -545,7 +577,7 @@ try {
             .some((el) => wanted.includes(label(el)))
         })()`)) === true
       }
-      if (triggerPresent) ok('the shell painted its settings trigger', `${settingsLabels.join('/')} is present and clickable`)
+      if (triggerPresent) ok('the shell painted its settings trigger', `${accountLabels.join('/')} is present and clickable`)
       else fail('the shell painted its settings trigger', String(await evaluate('document.body.innerText')).slice(0, 160).replace(/\n/g, ' '))
 
       // Reach OUR OWN panel. The sidebar's 插件/会话 entries belong to the SHELL's
@@ -554,16 +586,40 @@ try {
       // unambiguously ours: the sections this plugin registers into the shell's
       // Settings dialog (`settings.section`: 用量仪表盘 / 自动化, plus the hooks tab
       // in the plugins page), whose copy exists only in OUR i18n table.
-      const opened = await evaluate(`(() => { ${labelHelper}
+      //
+      // Two clicks, because that is how the shell is built: (1) the account menu
+      // trigger, matched by aria-label FIRST and by textContent only as a
+      // signed-out fallback, so the sidebar's own 更多 cannot steal the click;
+      // (2) the `设置` row inside that menu, which is a role=menuitem button whose
+      // textContent also carries the shortcut (aria-hidden), so it is matched by
+      // prefix, not equality.
+      const openedMenu = await evaluate(`(() => {
         const wanted = ${wantedJson}
-        const hit = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
-          .find((el) => wanted.includes(label(el)))
+        const aria = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim()
+        const all = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
+        const hit = all.find((el) => wanted.includes(aria(el)))
+          ?? all.find((el) => wanted.includes((el.textContent || '').trim()))
         if (hit === undefined) return false
         hit.click()
         return true
       })()`)
-      if (opened === true) ok('opened the shell settings dialog', 'clicked 设置/Settings')
-      else fail('opened the shell settings dialog', 'no settings trigger found')
+      let opened = false
+      if (openedMenu === true) {
+        const settingsDeadline = Date.now() + 8_000
+        while (Date.now() < settingsDeadline && !opened) {
+          opened = (await evaluate(`(() => {
+            const wanted = ${settingsJson}
+            const rows = Array.from(document.querySelectorAll('[role="menuitem"]'))
+            const hit = rows.find((el) => wanted.some((w) => (el.textContent || '').trim().startsWith(w)))
+            if (hit === undefined) return false
+            hit.click()
+            return true
+          })()`)) === true
+          if (!opened) await new Promise((resolve) => setTimeout(resolve, 400))
+        }
+      }
+      if (opened === true) ok('opened the shell settings dialog', 'account menu → 设置/Settings row')
+      else fail('opened the shell settings dialog', `account menu click=${String(openedMenu)}, no 设置/Settings row appeared`)
 
       const ourLabels = ['用量仪表盘', 'Usage Dashboard', '自动化', 'Automation']
       let panelText = ''
@@ -580,10 +636,21 @@ try {
           return true
         })()`)
         if (attempt > 0) {
-          await evaluate(`(() => { ${labelHelper}
+          // Same two-step path as above: the account menu, then its 设置 row.
+          await evaluate(`(() => {
             const wanted = ${wantedJson}
-            const hit = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
-              .find((el) => wanted.includes(label(el)))
+            const aria = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim()
+            const all = Array.from(document.querySelectorAll('button,[role=button],[aria-label],[title]'))
+            const hit = all.find((el) => wanted.includes(aria(el)))
+              ?? all.find((el) => wanted.includes((el.textContent || '').trim()))
+            if (hit !== undefined) hit.click()
+            return true
+          })()`)
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          await evaluate(`(() => {
+            const wanted = ${settingsJson}
+            const rows = Array.from(document.querySelectorAll('[role="menuitem"]'))
+            const hit = rows.find((el) => wanted.some((w) => (el.textContent || '').trim().startsWith(w)))
             if (hit !== undefined) hit.click()
             return true
           })()`)
@@ -604,27 +671,21 @@ try {
       else fail('no uncaught exception in the page', exceptions.slice(0, 3).join(' | '))
 
       /* ----------------- 8. render cost in a REAL browser ----------------- */
-      // STATUS: the transport discovery and corpus injection below are proven to
-      // work (the panel renders all 400 rows: 9 373 DOM nodes, stable across a
-      // 1.2 s settle), but the corpus does NOT survive the first synthetic
-      // keystroke — the DOM collapses to a few hundred nodes, so the keystroke
-      // timings measured here are NOT trustworthy and this step REFUSES to
-      // report them as a result. It prints its diagnosis and skips loudly.
+      // STATUS: this measurement now RUNS and reports real numbers (400 sessions,
+      // 6 keystrokes, median ~33 ms, worst ~61 ms, 9 324 DOM nodes at settle).
       //
-      // Why it collapses is not yet established. Ruled out: (a) `fetch` and
-      // `XMLHttpRequest` are not the seam the plugin's injected
-      // ctx.connection.rpc uses — instrumenting every candidate transport showed
-      // the shell itself calls fetch, but patching it does not intercept the
-      // panel's RPC; (b) `patch` is a functional setState, so a stale closure is
-      // not the cause; (c) the corpus is not overwritten by the panel's own
-      // fetch, because it survives the settle window before any keystroke.
-      // Leading remaining hypothesis: the settings dialog remounts the section
-      // when its own state changes on input, discarding the injected state.
+      // It was skipped for a long time, and the root cause is worth keeping: the
+      // corpus was being wiped, not mis-measured. The old code reached the panel
+      // by clicking a button labelled 设置 — a label that does not exist until the
+      // account menu is open — so every attempt re-clicked something else and
+      // REMOUNTED the section, discarding the state injected into it. Fixing the
+      // navigation (account menu → 设置 row, see step 7) fixed this probe too.
+      // The "dialog remounts the section on its own state change" hypothesis was
+      // wrong; a remount caused by our own stray click was the real cause.
       //
-      // Kept in the file because the discovery work is real and the next attempt
-      // should start from it — but it must not be mistaken for a working
-      // measurement, which is exactly the mistake this probe was written to stop
-      // repeating.
+      // Kept in the file because it is the only real-browser perf evidence in the
+      // suite, and because the next person to see it skip should start by asking
+      // whether navigation is actually reaching the panel.
       step('8. session filter cost in the real browser (O-1 decision data)')
       const PERF_SESSIONS = Number(process.env.SMOKE_PERF_SESSIONS ?? 400)
       const PERF_KEYSTROKES = Number(process.env.SMOKE_PERF_KEYSTROKES ?? 6)

@@ -35,8 +35,13 @@ export function WebSessionsSection(props) {
   var tab = tabHooks[0]
   var setTab = tabHooks[1]
   // webSearch 没有独立 slot（与历史会话共用这一条 nav 入口），config.panels 的
-  // off/on/auto 三态在这里落地：off（含自动让位）直接摘掉页签——旋钮不在就只是
-  // 惰性摆设（挂载期还通过校验，承诺了"off 不注册，优先级最高"）。
+  // off/on/auto 三态在这里落地：off 直接摘掉页签——旋钮不在就只是惰性摆设
+  // （挂载期还通过校验，承诺了"off 不注册，优先级最高"）。
+  //
+  // v1.30.1：'auto' 不再能摘掉这个页签。native-coverage 的 webSearch 行是
+  // scope 'none'（官方 ui-settings-web-search 只配官方 provider，不装卸 exa /
+  // perplexity），所以 `panelHidden('webSearch')` 现在只会因用户显式 off 而为
+  // 真——注释此前写的"含自动让位"已经不成立。
   var tabs = [
     { id: 'sessions', label: dshT('历史会话'), component: SessionsSection },
   ]

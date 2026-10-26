@@ -19,7 +19,10 @@ jobs:
   test:
     strategy:
       matrix:
-        node: [22, 24]
+        # The plugin only ever runs inside dsh, whose own floor is node >=24.9.0
+        # (deepseek-harness root package.json engines.node). A Node 22 lane would
+        # test a combination no user can have.
+        node: [24]
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # npm test is 8-15 min on a 2-core runner; 30 min is double headroom. The
@@ -40,7 +43,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.2.0-rc.1
+          ref: dsh-v0.2.1-rc.2
           path: .dsh-checkout
           fetch-depth: 1
 
@@ -84,7 +87,7 @@ jobs:
 
       # Pinned to the release this plugin is verified against (docs/COMPAT.md).
       - name: Install the pinned dsh CLI
-        run: npm install --global @deepseek-ai/dsh@0.2.0-rc.1
+        run: npm install --global @deepseek-ai/dsh@0.2.1-rc.2
 
       # `dsh plugin … add` materialises the profile with pnpm, which the runner
       # does not ship: without it the install step dies with exit 127.
@@ -105,6 +108,20 @@ jobs:
           # `::error::` annotations, and inheriting the preload would run it inside
           # dsh/pnpm and pollute the output the script reports on failure.
         run: npm run smoke:real-host
+
+      # N-16: the OTHER deployment shape. smoke:real-host boots the full web
+      # profile, where every seam exists — so it can never falsify the README
+      # claim "缺服务逐面板降级". sdk-minimal is the bundle that genuinely lacks
+      # typert / subagents / commands / shell (its patch header: "this insert is
+      # the complete Cordis tree"), and v1.29.0's `inject=[]` regression was
+      # invisible to all 45 self-built gates while breaking the whole RPC surface
+      # on a real host. This step is that missing layer, and it carries a
+      # positive control: a deliberately broken row must be REPORTED on the same
+      # bundle, otherwise "no output" would not prove our row activated.
+      - name: Mount on a degraded host (sdk-minimal, missing seams)
+        env:
+          SMOKE_REQUIRE_DSH: '1'
+        run: npm run smoke:degraded-host
 
   # The multi-version matrix runs the same probe over several checkouts, so
   # "supported dsh versions" is a loop over directories instead of a promise in
@@ -128,7 +145,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.2.0-rc.1
+          ref: dsh-v0.2.1-rc.2
           path: .dsh-release
           fetch-depth: 1
 
@@ -158,4 +175,10 @@ jobs:
           # An explicit list makes "nothing to probe" a failure, so a typo here
           # cannot pass as a green matrix (see scripts/check-matrix.mjs).
           DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-floor,${{ github.workspace }}/.dsh-main
+          # The `master` row is an EARLY WARNING, not a gate: routine upstream
+          # refactors are expected to pass, but churn there must not turn this
+          # job red — a permanently red gate is not a gate (v1.29.0 audit's own
+          # lesson). Its drift is reported and annotated, while the baseline and
+          # the support floor still decide pass/fail.
+          DSH_EARLY_WARNING: .dsh-main
         run: npm run test:matrix

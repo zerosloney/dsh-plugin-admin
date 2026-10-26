@@ -738,9 +738,12 @@ try {
     // transcript_path degrades to '' and the hook still runs.
     const shell = makeShell()
     const noLocateCtx = makeStubCtx(shell, null)
+    // Capture the stub's own get FIRST: assigning through the same property and
+    // calling `noLocateCtx.get(...)` from the replacement recurses forever.
+    const baseGet = noLocateCtx.get
     noLocateCtx.get = (name) => (name === 'sessionPersistence'
       ? { /* no locate */ }
-      : noLocateCtx.get(name))
+      : baseGet(name))
     applyProjectHooks(noLocateCtx, { settings: { projectHooksTrust: 'allow-all' } })
     const nlAgent = makeAgent('s-no-locate', projectDir)
     writeHooks({ PreToolUse: [{ matcher: 'Bash', hooks: [{ command: 'no-locate.sh' }] }] })

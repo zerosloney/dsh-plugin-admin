@@ -19,14 +19,23 @@
  * The zh-CN source strings ARE the keys: dshT() returns them verbatim in
  * Chinese and the I18N_EN mapping in English, falling back to the source for
  * any untranslated key — so the UI can never break while coverage grows.
- * Without the service, the language comes from localStorage
- * 'dsh-admin-lang', else navigator.language ("en…" → English, else
- * Chinese), and setAdminLang() persists + reloads.
+ *
+ * The language is the SHELL's whenever the shell has one: dshT() rides the
+ * bound namespace, and switching goes through the shell's public
+ * locale.setLocale() (see setAdminLang) — the plugin writes no language
+ * preference of its own and never reloads the page.
+ *
+ * The one private key that survives is READ-ONLY: 'dsh-admin-lang' is honoured
+ * solely as the pre-service approximation for a mount with no locale plugin
+ * (headless jsdom mounts and the repo's verify scripts seed it to pin copy
+ * language). Nothing in src/client writes it, and once the locale service is
+ * bound activeLanguage() reads the shell's active id and ignores it — so there
+ * is still exactly one persisted language source, the shell's.
  */
 var I18N_LANG = (function () {
   try {
     var saved = window.localStorage && window.localStorage.getItem('dsh-admin-lang')
-    if (saved === 'en' || saved === 'zh') return saved
+    if (typeof saved === 'string' && saved !== '') return /^en\b/i.test(saved) ? 'en' : 'zh'
   } catch (e) { /* private-mode storage: fall through to navigator */ }
   return /^en\b/i.test(String((typeof navigator !== 'undefined' && navigator.language) || '')) ? 'en' : 'zh'
 })()
@@ -60,25 +69,15 @@ var I18N_EN = {
   "Webhook 触发": "Webhook Triggers",
   "Web 与会话": "Web & Sessions",
   "Web 搜索": "Web Search",
-  "❌ 无法加载会话列表": "❌ Failed to load the session list",
-  "❌ 无法加载会话列表：": "❌ Failed to load the session list: ",
-  "❌ 未找到匹配的会话": "❌ No matching session found",
-  "❌ 存在 ": "❌ Found ",
-  " 个同名会话，无法确定要删除的目标；请在 设置 → 历史会话 中按会话 ID 删除": " sessions with the same name — target is ambiguous; delete by session ID under Settings → Session history",
-  " 个同名会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作": " sessions with the same name — target is ambiguous; use the session ID under Settings → Session history",
-  " 个匹配会话，无法确定目标；请在 设置 → 历史会话 中按会话 ID 操作": " matching sessions — target is ambiguous; use the session ID under Settings → Session history",
-  " 个同名工作区，无法确定目标；请在 设置 → Web 与会话 中按路径操作": " workspaces with the same name — target is ambiguous; operate by path under Settings → Web & Sessions",
-  "复制会话 ID": "Copy session ID",
   "删除会话": "Delete session",
   "🗑️ 会话已删除": "🗑️ Session deleted",
   "⚠️ 会话已删除，但跨进程护栏未生效：": "⚠️ Session deleted, but the cross-process guard was skipped: ",
   "❌ 删除会话失败：": "❌ Failed to delete the session: ",
   "⚠️ 再点一次确认删除（在线会话将先关停）": "⚠️ Click again to confirm deletion (live sessions are closed first)",
+  "⚠️ 以下面板因 slot 注册失败未挂载：": "⚠️ These panels did not mount because slot registration failed: ",
   "在资源管理器打开": "Open in file manager",
   "❌ 打开失败：未找到工作区路径": "❌ Open failed: no workspace path found",
   "❌ 打开失败：": "❌ Open failed: ",
-  "❌ 打开失败：无法加载工作区列表": "❌ Open failed: could not load the workspace list",
-  "❌ 打开失败：无法加载工作区列表（": "❌ Open failed: could not load the workspace list (",
   "加载插件失败：": "Failed to load plugins: ",
   "调用失败：": "Call failed: ",
   "检查更新失败：": "Update check failed: ",
@@ -746,6 +745,8 @@ var I18N_EN = {
   " 到剪贴板（在 composer 直接粘贴即可调用）": " to the clipboard (paste it in the composer to invoke)",
   "📋 复制 /name": "📋 Copy /name",
   "界面语言": "Interface language",
+  "界面语言由宿主的语言设置控制，当前宿主没有提供切换入口": "Interface language follows the host's language setting; this host exposes no switch entry",
+  "宿主没有接受这次语言切换": "The host did not accept that language switch",
   "在系统资源管理器中打开 SKILL.md 所在目录（": "Open the SKILL.md directory in the system file manager (",
   "📂 打开目录": "📂 Open directory",
   "何时用：": "When to use: ",
@@ -1029,7 +1030,18 @@ export function installLocaleRuntime(ctx) {
   var dispose = null
   try {
     dispose = locale.register(I18N_NS, { zh: I18N_ZH, en: I18N_EN })
-  } catch (e) { dispose = null }
+  } catch (e) {
+    // Never silent: swallowing this was how an English session could render
+    // source strings with no diagnostic anywhere. The benign case is a second
+    // mount of this bundle (HMR, a test harness mounting twice) — the namespace
+    // is already registered, and bind() below picks that shared table up, so the
+    // mount still succeeds. The reason is logged either way.
+    dispose = null
+    var reason = e && e.message ? e.message : String(e)
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[dsh-plugin-admin] locale.register(' + I18N_NS + ') failed: ' + reason)
+    }
+  }
   boundTranslate = locale.bind(I18N_NS)
   localeActiveId = readActiveLocaleId(locale)
   localeSetLocale = typeof locale.setLocale === 'function'
@@ -1077,14 +1089,33 @@ function i18nSource(s) {
   return s
 }
 
-/** Switch the panel language: through the shell service when bound (live, no
- * reload), else persist and reload so every panel re-reads.
- * @param {string} lang */
+/** Whether the shell exposes its language switch, so the pill can be disabled
+ * instead of silently doing nothing. */
+function canSwitchLanguage() {
+  return localeSetLocale !== null
+}
+
+/** Switch the UI language through the SHELL's public setting, never privately.
+ *
+ * locale.setLocale(id) is the shell's only user-preference write entry: it
+ * validates the id against the locales it actually registered, persists the
+ * choice as a durable user preference (so it survives a reload by itself) and
+ * publishes, which repaints every subscriber — this module's included.
+ *
+ * @param {string} lang - 'en' or 'zh'.
+ * @returns {boolean} whether the shell accepted the switch.
+ */
 function setAdminLang(lang) {
   var next = lang === 'en' ? 'en' : 'zh'
-  try { window.localStorage.setItem('dsh-admin-lang', next) } catch (e) { /* ignore */ }
-  if (localeSetLocale !== null) { localeSetLocale(next); return }
-  window.location.reload()
+  if (localeSetLocale === null) return false
+  try { localeSetLocale(next) } catch (e) {
+    var reason = e && e.message ? e.message : String(e)
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[dsh-plugin-admin] locale.setLocale(' + next + ') rejected: ' + reason)
+    }
+    return false
+  }
+  return true
 }
 
 /** The language the panel copy currently renders in ('en' or 'zh'). */
@@ -1092,4 +1123,4 @@ export function currentLanguage() {
   return activeLanguage()
 }
 
-export { I18N_EN, I18N_LANG, I18N_ZH, dshT, i18nSource, setAdminLang }
+export { I18N_EN, I18N_LANG, I18N_ZH, canSwitchLanguage, dshT, i18nSource, setAdminLang }

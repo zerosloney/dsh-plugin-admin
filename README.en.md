@@ -1,11 +1,11 @@
 # dsh-plugin-admin
 
-Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness): eleven management panels inside dsh's built-in settings UI (three standalone settings pages — Web & Sessions 27 / Usage Dashboard 28 / Automation 29; six tabs — Extensions inside the Plugins page, and Skills / MCP Servers / Subagents / Commands / Hooks inside the Built-in Plugins page; one floating dock above the composer. The eleventh panel is the third tab inside the Automation page — Cron Tasks / Webhook / Workflows, three tabs in one page). Zero dsh imports — everything rides the live Cordis Context; a missing dsh service degrades that one panel instead of failing the mount.
+Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness): eleven management panels inside dsh's built-in settings UI (three standalone settings pages — Web & Sessions 27 / Usage Dashboard 28 / Automation 29; six tabs — Extensions inside the Plugins page, and Skills / MCP Servers / Subagents / Commands / Hooks inside the Built-in Plugins page; one floating dock above the composer. The eleventh panel is the third tab inside the Automation page — Cron Tasks / Webhook / Workflows, three tabs in one page). Zero `@deepseek-ai/dsh-*` imports on the host side — the browser half reuses the official `@deepseek-ai/dsh-client-ui-primitives` atoms — and everything else rides the live Cordis Context: `inject` is empty, so a missing dsh service retires only the panel that needs it (one warning at mount) instead of failing the mount.
 
 Panel copy ships in Simplified Chinese and English and rides dsh's own locale service (`ctx.locale`): the 🌐 switch sets the language of the whole interface, and these panels repaint live — no reload.
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.27.0 · MIT · supports dsh **≥ 0.1.7-rc.2** (verification baseline **0.2.0-rc.1**, see [docs/COMPAT.md](docs/COMPAT.md))
-**CI:** test matrix Node 22/24 on every push; tagged releases publish to npm with provenance.
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.32.0 · MIT · supports dsh **≥ 0.1.7-rc.2** (verification baseline **0.2.1-rc.2**; declared upper bound **< 0.3.0**, see [docs/COMPAT.md](docs/COMPAT.md))
+**CI:** the full gate plus the real-host smoke on every push (Node 24 — dsh itself requires >= 24.9.0); tagged releases publish to npm with provenance.
 **🇨🇳 中文文档:** [README.md](./README.md)
 
 ## The eleven panels

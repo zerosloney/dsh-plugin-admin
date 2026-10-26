@@ -4,6 +4,246 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.32.0] - 2026-10-26
+
+N-14/N-15 收口。结论是**不批量 token 化**，但这次是**量化后**的决定，不是「本轮没能力」。
+v1.29.0 跳过这件事的理由（「状态色换 token 会改浅色色相，而本轮没有截图回归能力」）方向对但不可复核；
+本轮补上截图能力并把那条判断算了出来。
+
+### Added
+
+- **截图基线**（`scripts/screenshot-panels.mjs`，`npm run screenshots`，中等）：
+  起真实 web profile + headless Chromium（原生 CDP，零依赖），逐面板 × 亮/暗两套主题截图到 `.screenshots/`。
+  这是**采集器不是闸门**：没有入库基准图，字体/渲染差异会让像素闸门 flaky；升级成闸门需要先定基准图放哪。
+  实现上踩了三个 shell 的坑，都按 `smoke-real-host` 已记录的做法修：`dsh <profile> --port 0 --no-open`
+  （`dsh --profile X web` 会被拒：`too many arguments`）、必须打开**带 launch token 的 URL**、
+  设置对话框要「账号菜单 → 设置行」两次点击且先关掉首启声明。另外 CDP 的 `sessionId` 必须是顶层字段，
+  塞进 `params` 会让浏览器回 `'Page.enable' wasn't found`。
+
+### 实测后决定不做（附完整数据）
+
+- **裸色值批量 token 化（N-14）**：普查口径先校正——322 处十六进制字面量里 **168 处位于 `var(--token, <fallback>)` 的兜底位**，
+  那是正确写法不是债；真正无 token 的裸值 **161 处**。三条各自独立的理由否掉批量替换：
+  1. **没有语义正确的 token**：裸值绝大多数是「实心徽章」的固定底色 + 固定白字（`.danger-solid` `#b91c1c`+`#fff`、
+     `.tag.plugin` `#15803d`+`#fff`、toast `rgba(16,185,129,.95)`+`#fff`）。上游只有 `state-*-primary/secondary/tertiary`
+     这类**文字色**与 `*-tertiary` 浅填充，**没有**「状态容器底色」别名。
+  2. **只换字色会让深色主题崩掉**：唯一字面值精确相等的候选是 `--dsw-alias-label-primary-foreground`
+     （浅 `rgb(255,255,255)` / 深 `rgb(15,17,21)`）。WCAG 实测：28 处 `#fff` 换成它后，深色主题下
+     「字/底」对比度 **7/7 全部下降**，5 处跌破 4.5（`#b91c1c` 6.47→2.92、`#991b1b` 8.31→2.27、
+     `#1d4ed8` 6.70→2.82、`#6d28d9` 7.10→2.66）——**从可读变不可读**。
+  3. **`#ef4444` 与 `state-error-primary` 不等值**：浅色下后者是 `rgb(236,19,19)`，替换即改色相。
+- **深色主题（N-15）不是缺陷**：实心徽章的「字/底」对比度在两套主题下**相同**（6.47/8.31/5.02/6.70/7.10，全部 ≥4.5），
+  因为字与底都不随主题移动——这是自洽，不是 bug。徽章与页面底色的对比度在深色下确实下降（1.89–3.13），
+  但那是图形边界而非文字可读性，色块本身仍清晰可见。`--dsw-alias-*` 已自适应，插件只补 token 表达不了的两处
+  （原生控件 `color-scheme`、工具栏投影），维持现状。
+
+**将来重做的前提写在 `docs/COMPAT.md`**：上游若提供「状态容器」别名（如 `state-error-container`），
+才能把徽章底色 + 字色**成对**迁移；只改一半就是本轮算出来的那次对比度崩塌。
+
+### 说明
+
+- 本轮新增两个脚本（`screenshot-panels` / 上一轮的 `smoke-degraded-host`）都不进 `npm test`：它们要真实 dsh + 浏览器，
+  属于「重量级但承重」的独立闸门。`smoke:degraded-host` 已接进 CI，`screenshots` 按需手动跑。
+
+## [1.31.0] - 2026-10-26
+
+第三轮：把上一轮清单里剩下的五项收口。两项做完，两项**实测后决定不做**（理由在下面，不是搁置）。
+
+### Changed
+
+- **插件安装/卸载/启停委托给宿主的 `ctx.pluginManager`**（新增 `lib/plugin-manager-bridge.js`，`lib/plugin-admin.js`，重要）：
+  三个写动词（`install` / `remove` / `setEnabled`）在 `pluginManager` 在场时改由宿主执行——它有自己的 pinned package manager、
+  自己的兼容闸门、自己的 build-script 审批流，以及比我们更细的结果模型（`ChangeResult.application`：
+  applied / restart-required / overridden / failed / cancelled）。**没有** manager 的部署（`sdk-minimal`、headless）继续走原有
+  pnpm + profile-patch 路径，所以 C-2/C-3/C-8/C-9 那四类风险在**委托路径上**不再承重，而在回落路径上原样保留。
+  **极性**是这里最容易错的地方：我方 RPC 说 `disabled: boolean`，宿主说 `setBundleEnabled(name, enabled)`——写反会让
+  每一次开关静默取反，因此单独加注释并单独测试。委托前**我方拒绝规则仍然先跑**（operand 白名单、install-script 策略、
+  「内置组合层不可卸」），宿主不会替我们执行这些面板规则。
+  `host-check` 的委托断言 0 → 12 checks：manager 在场时真的被调用、极性正确、`failed` 抛错、`overridden` **不**抛错（那是要展示的事实）、
+  无 manager 时回落且真的写了 disable 行；并用**极性负控**（把 `disabled !== true` 改成 `=== true`）确认测试会红。
+
+### Fixed
+
+- **委托 `setEnabled` 后 `pluginAdmin/list` 读不到禁用状态**（`lib/plugin-admin.js`，重要；**由 `smoke:real-host` 抓到，自建闸门全绿**）：
+  两套机制读的是两个不同的地方——本插件一直靠 profile patch 的 `disabled: true` 行表达禁用，
+  而宿主的 `setBundleEnabled` **不碰 patch**，它把 bundle 从 `package.json` → `dsh.profile.bundles` 里加/删
+  （`plugin-manager/src/index.ts:1122-1141` `selectBundle`）。于是委托后 `setEnabled` 回 `applied`，
+  而 `list()` 仍报 `disabled: false`——面板会显示一个刚被禁用的插件「仍然启用」。
+  `listLayers()` 现在**同时**读两个真相源（patch 的 disable 行 + profile 的 selection 列表），
+  `disabled` 取两者之或，并新增 `disabledBy: 'patch' | 'host-selection' | null` 让面板能说明是哪种机制生效；
+  候选行也改为「依赖 ∪ 选择列表」，这样宿主禁用的 bundle 仍留在列表里而不是消失。
+  `smoke:real-host` 那条断言同时被修正：它原本硬性要求「patch 里出现 `disabled: true`」，把**实现细节**当成了契约，
+  而委托路径根本不写 patch。现在断言的是**结果**（产品自身读路径报告 disabled）再点名实际机制——
+  真机输出直接显示 `bundle removed from dsh.profile.bundles (host pluginManager path)`，既证明委托生效，也不放过回落路径的回归。
+- **`check-matrix` 的预警档不再失败**（`scripts/check-matrix.mjs`、`.github/workflows/ci.yml`、`seam-early-warning.yml`，重要）：
+  `docs/COMPAT.md` 一直把 `master` 档称为「预警行：例行重构应当通过，契约变化必须先在这里响」，但实现里**任何漂移都 hard fail**。
+  这正是 v1.29.0 审计自己批评过的「恒红的闸门等于没有闸门」：例行上游改动会让每日预警长期变红，真正的契约破坏就淹在噪声里。
+  新增 `DSH_EARLY_WARNING`（默认匹配 `.dsh-main`）：命中的 checkout 漂移**报告并计数，但不让整次运行失败**，基线与支持下限仍然决定成败。
+  默认标记**只取目录名、绝不取仓库名**——匹配 `deepseek-harness` 会把本地基线 checkout 也降级成预警，真实漂移就不再失败。
+  实测：`.dsh-main` 漂移 → exit 0 且打印预警；同一漂移放在非预警路径 → exit 1。
+- **CI 的 dsh pin 与文档基线对齐，并加闸门防复发**（`.github/workflows/*.yml`、`scripts/verify-doc-claims.mjs`，重要）：
+  审计 `ci.yml`（此前从未被读过）发现三处真实不一致：`host-smoke`、`release.yml` 的 `smoke-published`、
+  `seam-early-warning.yml` 都还装着 `@deepseek-ai/dsh@0.2.0-rc.1`，而声明的验证基线早已是 `0.2.1-rc.2`。
+  这是最糟的漂移形态：流水线在验证一个**文档已不再声称**的版本，而支持下限那一档根本没人跑。
+  三处 pin 全部对齐，并新增 `verify-doc-claims` 第 13 → 14 项检查——**扫描 workflow 里的 `@deepseek-ai/dsh@X` 与 `ref: dsh-vX`，
+  要求等于 COMPAT 的验证基线（或支持下限）**。负控已验证：把 pin 改回 rc.1 立刻红。
+
+### Added
+
+- **降级宿主的真机验证**（`scripts/smoke-degraded-host.mjs` + CI 步骤，重要）：README 承诺「缺服务逐面板降级，绝不整插件不加载」，
+  而在此之前**所有**闸门都在服务齐全的 ctx 上验证它（host-check 塞桩、self-check 用 jsdom、smoke 跑完整 web profile）。
+  v1.29.0 的教训正是这一层缺失：`inject=[]` 让整条 RPC 面静默消失，45 步自建闸门全绿，只有真宿主能看见。
+  新脚本在 **sdk-minimal**（其 patch 自述「this insert is the complete Cordis tree」，确实不含 typert / subagents / commands / shell）
+  上装本插件并启动，断言：插件挂载、缺服务集合被报告、无裸 `TypeError`。
+  **关键是正控**：脚本会另建一个只含坏行的 profile，先证明「宿主**会**报告无法激活的行」——否则 sdk-minimal 安静启动这件事
+  根本不能证明我们的行挂上了。实测 11/11 通过。
+  顺带：本机 `npm run smoke:real-host` 实测 **32/32 通过**（dsh `0.2.1-rc.2`），该路径此前被记为「从未跑通」，现已证实可用。
+
+### 实测后决定不做（附数据，不是搁置）
+
+- **面板 chunk 拆分（N-4）**：用 esbuild 实测，单 chunk 现为 **499.6 KB**；按 12 个面板拆开后每个都要内联
+  `context.js` + `shared.js`，合计 **1201 KB**，重复 **701.5 KB**；即便把共享代码抽成独立 chunk，12 个合计仍 **367.8 KB**。
+  首次打开成本确实从 499.6 KB 降到 75.7 KB + 单面板（80–165 KB），但**总下载量上升**，且要改 loader 契约
+  （chunk 之间**不能**同步 `require` 兄弟 chunk：`system.ts:47` 的 chunk id 是 owner 限定的，`:328-338` 的同步 `require`
+  只认种子表与已 materialize 的模块）、构建脚本与全部测试夹具。**这是权衡而非纯收益**，应作为独立决策。
+- **i18n 字典分片（N-6）**：字典确实是入口包体积的主因——137 KB 里 **89.1 KB（65%）** 是 `I18N_EN`。
+  但它**必须**在 `apply()` 时就注册进 `ctx.locale`（`installLocaleRuntime` 调 `locale.register(ns, { zh, en })`），
+  否则英文环境下**面板标题在启动那一刻就会回退成中文源串**——正是 v1.29.0 修掉的 B-2 竞态。
+  所以它不能延迟加载；上一轮「字典随 chunk 分片」的建议**在架构上不成立**，本轮撤销。
+
+## [1.30.1] - 2026-10-26
+
+自查轮：v1.30.0 的让位粒度改动只做了一半，本版补齐并加闸门防复发。详见下方 v1.30.0 节末尾的「v1.30.1 自查轮」。
+
+## [1.30.0] - 2026-10-26
+
+第二轮对照上游的收口（`analysis/00-SUMMARY.md` 之后的复核：`deepseek-harness` HEAD `22ddee3792`，rc.3 之后 1533 个提交）。
+主题是**「覆盖」不等于「等价」**：v1.29.0 的让位表把任何探测命中都当成整页被官方取代，于是三处官方只覆盖了一半的地方，
+插件把上游**根本没有**的功能一起交了出去；其中 `automation` 那一处是功能消失，不是重复。
+
+### Changed
+
+- **让位粒度从「面板」改为三档（`scope`）**（`src/client/native-coverage.js`、`src/client/impl.js`、`src/client/panels/context.js`、`src/client/panels/automation.js`，重要）：
+  每一行现在声明命中之后让出什么——`panel`（官方页就是等价管理页，整页不注册）、`tabs`（官方只覆盖列出的页签，面板照常注册）、
+  `none`（官方有相近面但不等价，全部保留并在挂载日志里记一条）。导入期对未知 `scope` 与空的 `tabs` 失败大声报错，
+  `self-check` 用「官方 schedule 在场 → automation 仍注册」等 6 条断言钉住粒度。
+- **三行的结论随之修正**：
+  - `automation` → `tabs: ['cron']`。`ui-schedule` 是宿主级任务页（`schedule/catalog` 读全量 Host reminders + cron 编辑 UI），
+    只覆盖「定时任务」这一页；**Webhook 入站与工作流上游没有任何页面**（`packages/hooks`、`packages/mcp` 连 `src/client` 半都没有），
+    旧行为会让装了官方任务页的用户永久失去这两项，且无任何提示。
+  - `subagents` → `none`。官方 `plugins.item/subagent` 卡只配深度/容量/模型；插件做的是编写侧（具名委派实例 / persona / 工具约束 / CLI 后端）。
+  - `webSearch` → `none`。官方 `plugins.item/web-search` 卡只配官方 provider；插件做的是 provider 装卸与切换。
+- **`engines.dsh` 补上界：`>=0.1.7-rc.2 <0.3.0-0`**（`package.json`，重要）：v1.29.0 只补了下界，而上界缺席同样危险——
+  宿主闸门一旦看到 `engines.dsh` 就「it decides alone」（忽略 peerDependencies），没有上界等于对未来每个 minor 无条件放行。
+  **上界必须带 `-0` 围栏**：实测 semver 7.7.4 在宿主的 `includePrerelease: true` 下，裸 `<0.3.0` 仍放行 `0.3.0-rc.1`，
+  即第一个未验证 minor 的候选版正好从这道闸门里走过去。`verify-peer-compat` 新增第 8 项，把「下界 + 上界 + `-0` 围栏」三件事
+  连同负向对照（`0.3.0-rc.1` / `0.3.0` / `1.0.0` / `0.1.7-rc.1` 必须被拒）一起钉住。
+- **`settings.plugins.tab` 的回退去掉 1200ms 盲等**（`src/client/impl.js`，中等）：旧实现在 tab slot 上注册后等 1.2 秒，
+  超时才把页面搬到 `settings.section`——一次可见的位置跳动，且时机是猜的。现在改为「按当前已声明的 slot 决定」+
+  `ctx.slots.subscribe` 双向修订（tab 迟到就升级、消失就降级），无定时器、无盲等；`fallbackTimers` 及其清理代码一并删除。
+- **首屏体积从「文档目标」变成「构建期断言」**（`scripts/build-client.mjs`，中等）：`ENTRY_BUDGET_BYTES = 150 KB`，
+  超限即构建失败并指明「把代码移进面板 chunk」。此前这个目标只活在 CHANGELOG 的一句话里，没人重测（实测 129.7 KB → 现在 134.0 KB）。
+  同时 `docs/ARCHITECTURE.md` 里指向面板实现的旧文件路径修正为现在的目录 `src/client/panels/`（闸门要求最新一节点名的路径真实存在）。
+
+### Fixed
+
+- **`host-check` 第二次运行必红**（`scripts/host-check.mjs`，重要）：三处环境相关的脆弱点，都在闸门自己身上，与被测代码无关。
+  ① junction 是 reparse point 不是目录，非递归 `rmSync` 摘不掉它，下一次 `symlinkSync` 报 EEXIST —— 首次通过、每次重跑失败；
+  改为 `clearJunction()` 用 `unlinkSync` 摘 reparse 点，并把「本机建不出该夹具」按 skip 处理（它本来就有 skip 分支）。
+  ② 整树清理会扫到刚创建、删不掉的 junction，改用 link-aware 的 `removeTreeWithLinks()`。
+  ③ **账本段依赖「上一轮把 `usage-ledger.json` 删掉了」**：该文件在共享的 `$DSH_HOME` 里，`rmSync` 是否真删取决于环境
+  （本仓库曾在拒绝部分删除的 fs shim 下运行），失败时闸门会继承上一轮残留的 14 行并报
+  「the sweep records the session it found: 14 !== 1」——一条与插件行为无关的红灯。改为每段一个 `mkdtempSync` 的新 home，
+  「空账本」从希望变成断言。
+- **`SESSION_QUERY_SEARCH_DISABLED` 的存在性首次被闸门钉住**（`scripts/integration-check.mjs`，中等）：
+  会话面板的「一键启用全文检索」横幅只在宿主以这个 code 报错时出现（`lib/session-admin.js:2031` 读 `error.code`）；
+  上游改名即横幅永久失效，而那是**死 UI 不是报错**。新增两条探针（声明处 `service-boundary.ts` + 抛出点 `session-query-sqlite`），
+  接缝契约 148 → **150**。
+
+### Changed（续）
+
+- **用量数字改用官方 `tokenUsage` 投影，日志折叠降为兜底**（`lib/session-admin.js`，中等）：仪表盘此前靠 `deriveSessionSummary`
+  折叠 `assistant/message` 的 usage 算总量——那是宿主 token-meter 已经在做的事的**第二份实现**，两侧任一方改了桶定义或
+  扫描帽截断了长会话，数字就会分叉。现在优先读 `sessionProjectionCache.cachedSnapshot(header).values.tokenUsage`
+  （`packages/llm/token-meter/src/projection.ts:13`，四个桶与日志 usage 语义相同：`inputTokens` 就是 uncached input），
+  投影缺席或尚未记录时仍走原来的折叠。**全零投影不算测量**（= 还没记录），此时回退折叠，避免把会话报成零 token。
+  `host-check` 新增三条断言：投影在场时以投影为准、全零投影回退折叠、无投影缓存时走折叠。
+
+- **修正「官方 schedule 是会话级」这个已过时的判断**（`lib/cron-admin.js`、`docs/COMPAT.md`，中等）：
+  `cron-admin` 的模块注释用「that package is session-scoped (reminders live and die with one agent, minimum 300s, every-only)」
+  解释为什么不用 `ctx.schedule`——这句话现在**已经不成立**：`schedule/catalog` 读的是
+  「all active and inactive Host reminders」（`schedule/src/index.ts:307-319`），存储在 `storageDomain`，
+  `ui-schedule` 提供宿主级任务页 + cron 编辑，选择器也有 cron。继续照抄会让下一位维护者基于错误前提做决定。
+  **真正还成立的差异只有一条**：`create(sessionId, request)` 必须绑定会话（`:256`，`list()` 也按 sessionId 过滤 `:298-304`），
+  所以「无会话绑定的任务」确实没有官方路径——这正是本插件 cron 的剩余价值。注释与 COMPAT 矩阵改成这个口径，
+  并新增 3 条探针（create 的签名、catalog 的宿主级语义、cron 选择器）：哪天上游把 sessionId 变成可选，
+  cron 面板的理由就消失了，探针会立刻指出该重新评估而不是默默保留。接缝契约 150 → **153**。
+
+### Fixed（v1.30.1 自查轮：v1.30.0 自己引入的三处）
+
+发布前对 v1.30.0 的逐项复核发现，让位粒度的改动只做了一半。
+
+- **覆盖结论被冻结在 `apply()` 时点，`scope: 'tabs'` 因此在真实宿主上基本不生效**（`src/client/impl.js`、`src/client/native-coverage.js`，重要）：
+  `coverage` 算一次就再没重算过。对 `scope: 'panel'` 的代价是「面板多注册一轮，重载自愈」——可接受；
+  但 v1.30.0 把 `automation` 改成 `tabs` 之后，代价变成了**「定时任务页签永远不消失」**，
+  因为 `hiddenTabs` 从不更新，而 `impl.js` 里那段「页签翻转就重挂载」的补救逻辑读的也是同一个已冻结的值，
+  于是它只会得出「没变」。等于用「整页消失」换来了「页签不消失」。
+  **改法**：每行新增 `signals` 字段（探测读了哪些 slot 键），`native-coverage.js` 导出 `COVERAGE_SLOT_KEYS`
+  （由表派生、去重排序），`impl.js` 订阅这些键并在变动时 `recomputeCoverage()` + 对账；
+  `sameCoverageVerdict()` 保证只有真正翻转才重规划（同 key 上第三方注册不该触发）。
+  导入期新增一道闸门：**有真探测却没有 `signals`、或 `signals` 里的键没被 `detect()` 真的读到，直接抛错**——
+  「结论被冻结」正是这个 bug 的成因，不允许静默复发。
+  验证：`self-check` 的夹具改成可变 slot 表 + 可触发的 `subscribe`，新增两条用例
+  （`panel` 行晚到声明必须退场、`tabs` 行晚到声明必须保面板），并做了负控——把订阅改回 no-op 后该用例确实变红。
+- **`notes` 生成了但从未被消费**（`src/client/impl.js`，中等）：`resolveNativeCoverage` 自 v1.30 就返回 `notes`，
+  注释写「for the mount log」，但全仓没有任何读取。于是一个同时看到我们的 子智能体 页和官方卡片的运维，
+  无从得知这种重复是**刻意的**。改为 `reportCoverage()` 统一输出三类结论（让位面板 / 让出页签 / 相近但不等价而保留），
+  并让 `self-check` 断言这三条日志都真的写出来（`logger.info` 改为可捕获）。
+- **两处文档仍在说「官方 schedule 是会话级」**（`docs/ARCHITECTURE.md:76`、`docs/COMPAT.md`，中等）：
+  v1.30.0 只改了 `lib/cron-admin.js` 与 COMPAT 矩阵，漏了 ARCHITECTURE 同一句话；
+  且 COMPAT 的「五个真探测里只有两个应当让位」在 `scope` 落地后已变成**只有扩展插件一个**（`todo` 也是 `panel`，
+  但原文把 `automation` 算进了让位）。两处都改到与新表一致，并把 `COMPAT` 的「装配时点」风险行更新为「v1.30.1 起已收敛」。
+
+### 说明
+
+- `analysis/` 下的审计与修复记录保持原样（它们记录的是当时的事实）；本版新增的结论写在这里与 `docs/COMPAT.md`。
+- 本轮**没有**改动任何 RPC 面（仍 91 方法 / 14 命名空间），所以 `host-check` 的 D1/D2 断言、`rpc-manifest` 与 `rpc-schema` 一字未动。
+
+## [1.29.0] - 2026-10-25
+
+独立审查（4 路并行：宿主接缝 / 客户端接缝 / 打包与安全 / 自检闸门，逐条到 dsh `0.2.1-rc.3` 源码复核）后的修复轮：3 严重 + 6 重要 + 19 中等。
+
+这一轮的主题是**让失明变成可见**。插件的架构选择是"零 `@deepseek-ai/dsh-*` 导入 + duck-type 的 Cordis Context"，代价是任何上游改名都不会编译失败、不会测试失败，只会静默降级；本轮把这条通道逐处接上观测，并让会红的地方真的红。
+
+### Changed
+
+- **`inject` 从 6 个服务的硬依赖改为空数组**（`lib/index.js` + 新增 `lib/host-seams.js`，严重）：Cordis 的数组形式 `inject` 是"全部必需"（`vendor/cordis/src/registry.ts` 的 `Inject.resolve` 把它展开成 name→undefined 的依赖表），六项里少一项 `apply()` 就永不运行。于是 `@deepseek-ai/dsh-sdk-minimal` 这类不含 typert/subagents/commands/shell 的 bundle 上，插件是**整插件静默消失**，而 README 承诺的是"缺服务逐面板降级"。改后所有服务经 `ctx.get()` 可选读，缺一个只让对应面板退场，挂载时用一条 warn 报出缺失集合；只有 typert 缺失时提前返回（没有它就没有任何 RPC 面），并说明原因。
+- `assertPersistenceShape()` → `persistenceShapeProblems()`（`lib/index.js`）：不再从 `apply()` 抛出打断挂载，改为返回缺失成员数组，由会话面板在调用点报错。`ctx.baseUrl` 同样改成惰性求值，缺它只影响 profile patch 写操作。
+- **文件锁默认从 fail-open 改为 fail-closed**（`lib/patch-utils.js`，重要）：等不到跨进程锁就拒绝这次写并抛 `lockWaitTimeout`（含锁路径、持有者 pid、目标文件与重试建议），显式 `{ onTimeout: 'proceed' }` 才放宽且每锁路径只告警一次。审计链（`lib/audit-log.js`）是唯一显式 opt-in 的调用方：丢一条审计行比丢一次修剪更糟。
+- **pnpm 走 profile 的 `packageManager` pin**（`lib/plugin-admin.js`，重要）：不再直接用 PATH 上的 pnpm；缺 pin 时用内置默认 `11.28.5`（对齐 dsh 根 `packageManager`）并告警一次，非 pnpm / 非精确版本仍然报错。
+- **`/api` 的参数边界从"只查类型"收紧到有体积上限**（`lib/rpc-schema.js`，中等）：`text` 此前是裸 `typeof value === 'string'`，`json` 只限深度（512）不限宽，于是多百兆的 prompt 正文 / 工作流脚本 / 安装 spec 能穿过 schema 再被写进 JSON store 或交给 pnpm。现在 `text` 上限 1M 字符、`json` 的字符串总量上限 8M 字符，超限时的拒绝信息点明是哪个上限（不是笼统的"类型不符"）。路径 / URL / 安装 spec 的语义校验仍留在各 handler（`lib/workspace-path.js`、`assertPnpmOperand`）——把 `assertRevealablePath` 搬进 codec 会复制一份规则、让 gateway 承担领域知识并改变 91 个方法的失败面，本轮故意不做，作为残余债务写进修复记录。
+- `engines` 对齐宿主（`package.json`）：`node >= 24.9.0`（dsh 自身地板），新增 `dsh >= 0.1.7-rc.2`——宿主 `packages/boot/app-boot/src/plugin-compatibility.ts` 只认 `engines.dsh`，且它一旦存在就独自决定、忽略 peerDependencies。CI 去掉 Node 22 lane，checkout pin 从 `dsh-v0.2.0-rc.1` 提到 `dsh-v0.2.1-rc.2`。
+
+### Fixed
+
+- **自检闸门自己没有跟着上游走**（`scripts/integration-check.mjs`，严重）：`npm test` 在这份 baseline+1 的 checkout 上是红的，而 5 条红里有 3 条是探针过时（`packages/core/tools/src/index.ts` 早已变成 barrel 再导出、`cachedSnapshot` 多了可选第二参、webServer 路由表改成了私有前缀表），不是真实漂移。探针改为跟随 barrel 再导出、按参数表断言不变量、只断言公开注册面；148 条契约一条没删，并用 5 个负控变异证明还能变红。
+- **会话行菜单不再抓 DOM**（`src/client/impl.js`，严重）：旧实现靠 `aria-label` 找菜单、按菜单矩形几何反推被点的行、用「归档会话」/「Delete workspace」字面量分类、再拿标题模糊匹配反查会话 id——宿主改文案就失效，模糊匹配还可能命中**别的**会话。改为注册官方 slot `sidebar.workspaces.session.menu.item`，owner props 直接带 `sessionId`；上游已有"复制会话 ID"条目，插件同款条目删除以免重复。
+- **界面语言不再依赖启动顺序**（`src/client/i18n.js` + `src/client/impl.js`，重要）：改用 `ctx.inject(['locale'], …)` 等语言服务到达再安装，`register()` 失败不再被吞掉；语言开关只调宿主 `locale.setLocale()`，不再私存 `localStorage` 语言键、不再整页 reload，宿主拒绝时给可见提示而不是假装成功。
+- **让位探测器从 2 行真 9 行假，补到 5 行真**（`src/client/native-coverage.js` + `docs/COMPAT.md`）：subagents / webSearch / automation 现在按上游真实注册的 slot 探测；其余 6 行上游确实没有等价管理页，保持 false 并在代码与文档两处写明理由。
+- 宿主侧散文再也不能引用不存在的老 API：`agentPresets.standingKeyFor`（从未存在，作用域只走 `acquireScope`，`lib/skills-admin.js`）、`settings.installSection`（实际是 `settings.configure`/`describe`，`lib/web-search-admin.js`）、`subagents.start(name, request)`（`dsh 0.2.1-alpha.4` 之后由 `startActivation` 取代，`lib/workflow-engine.js` 的分支据此标注为"旧宿主活路径"而非死代码）、`SubagentCapabilities` 的自造成员（`lib/subagent-admin.js` 的内建 provider 现在只声明上游那四个成员）。
+- `cordis.patch.yml` 的插入行 id 从裸 `plugin-admin` 改为带命名空间的 `dsh-plugin-admin`，不再与可能的同名包抢占。
+- **win32 的 pnpm 命令行注入面下沉到运行器**（`lib/patch-utils.js` 新增 `assertPnpmArgv`，`lib/plugin-admin.js` 的 `runPnpm` 调用它）：此前安全性等于"每个调用点都记得先 `assertPnpmOperand`"，运行器本身不校验。现在每个非旗标 argv 元素必须在 `PNPM_OPERAND_ALLOWED` 字符集内（`--`/`-` 开头的 pnpm 自己的旗标放行），新调用点绕不过去。今天没有找到注入路径（`%`/`!`/`"`/空白/`& | < > ( )` 本来都被排除），这是纵深防御而非补洞。
+- **webhook 入站的信任模型写进文档并定为"不签名"**（`docs/COMPAT.md` 新增「Webhook 入站的信任模型（C-5）」）：静态共享密钥 + 默认仅本机 + 每调用方预算 + 认证失败刹车 + 1 MiB JSON body + 调用方自报 delivery id 去重。不加 HMAC / 时间戳的理由写清（能读 secret 的本地进程本就能直接走 `/api`；远程面默认关闭且应由 TLS 承担；重放被去重集与动作幂等性限制），并留下前置条件：**一旦要开 `webhookAllowRemote`，先补 body 签名与时间戳**。
+
+### Verification
+
+- 自检闸门自身纳入英文 README（`scripts/verify-doc-claims.mjs`）：版本/基线一致性从此覆盖 `README.en.md`，检查项 12 → 13 checks。
+- `scripts/verify-service-injects.mjs` 的规则随架构反转：旧的"每个 `ctx.<service>` 直读都必须在 inject 里"变成"inject 必须为空 + 宿主模块不得有直读 + 六个可选接缝都必须真的被读到"，静态扫描覆盖 40 个宿主文件、45 处可选读。
+- `scripts/host-check.mjs` 的替身 ctx 现在像 Cordis 一样从**被挂载的那个 ctx** 解析服务（此前从闭包里的那个 ctx 解析，复制 ctx 的用例会看错对象）。
+- **`inject` 清空之后必须显式等待 `typert`，否则整条 RPC 面静默消失**（`lib/index.js`，严重——本轮自己引入又自己抓到的回归）：`inject=[]` 让 Cordis 不再因为缺服务而拒绝挂载，但也**不再替我们急切解析**这六个服务，于是 `typert` 在网关里从未被实例化，21 个命名空间的方法描述符一个都没注册，真宿主上每个 `/api` 调用都回 `not found`（而全部 45 步自建闸门依然是绿的——它们用替身 ctx 直接塞服务，看不到这个差别）。修法：在 `apply()` 里用子 fiber `ctx.inject(['typert'], …)` 等它到达，**不是**退回硬 inject；`workflow-admin` 同一病灶（挂载时早退）一并修掉。
+- **`smoke:real-host` 从 17/50 恢复到 32/32，并第一次真正测出渲染成本**（`scripts/smoke-real-host.mjs`）：真 dsh 进程 + 真网关 + 真 Chromium（Edge）上，21 个只读端点全部 `ok:true`、13 个命名空间全覆盖、写路径（cron 落盘 + 审计链 + 插件禁用/启用往返）全部往返成功、本插件的两个 settings 分组在真 shell 里画出（`用量仪表盘` / `自动化`）、页面零未捕获异常；步骤 8 的会话过滤重渲染实测 **400 行 / 6 次按键 / 中位 33 ms / 最差 61 ms / 9324 DOM 节点**（此前长期 SKIP）。
+- 同一条探针里两处**导航写法**是它长期红的真因，与插件无关：shell 没有独立"设置"按钮，`设置` 是账号菜单（触发按钮 aria-label 为 `账号菜单`，`packages/client/ui-settings-account/src/client/AccountMenu.tsx`）里的**一行**，旧探针等一个文案为"设置"的按钮，永远等不到；而这个错点还**重挂载**了面板、冲掉了步骤 8 注入的语料——所以步骤 8 的"对话框会重挂载分组"旧假设是错的，真因是我们自己乱点。
+
 ## [1.28.0] - 2026-10-19
 
 独立审查（9 路并行深审 + 逐条到 dsh 源码复核）后的修复轮：3 严重 + 6 安全/数据 + 12 中等 + 11 轻微。

@@ -1,10 +1,10 @@
 # dsh-plugin-admin
 
-dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力，共**十一个管理面板**（3 个独立设置页：Web 与会话 27 / 用量仪表盘 28 / 自动化 29；6 个页签：扩展插件在「插件」页内，技能、MCP 服务器、子智能体、命令、钩子 在「内置插件」页内；1 个输入框上方浮层：待办清单。第 11 个面板是「自动化」页内的第三个页签——定时任务 / Webhook / 工作流一页三页签）。零 dsh 导入，全部骑运行时 Cordis Context；缺服务逐面板降级，绝不整插件不加载。
+dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 dsh 缺失的管理能力，共**十一个管理面板**（3 个独立设置页：Web 与会话 27 / 用量仪表盘 28 / 自动化 29；6 个页签：扩展插件在「插件」页内，技能、MCP 服务器、子智能体、命令、钩子 在「内置插件」页内；1 个输入框上方浮层：待办清单。第 11 个面板是「自动化」页内的第三个页签——定时任务 / Webhook / 工作流一页三页签）。宿主半零 `@deepseek-ai/dsh-*` 导入（浏览器半只复用官方 UI 原子组件），其余全部骑运行时 Cordis Context：`inject` 为空，缺哪个服务就只让用到它的面板不可用并告警一次，绝不整插件不加载。
 
-面板文案内置简体/English 双语，接在 dsh 自己的语言服务上（`ctx.locale`）：工具栏 🌐 切换整个界面的语言，面板即时重绘、无需刷新。
+面板文案内置简体/English 双语，唯一的真相源是 dsh 自己的语言服务（`ctx.locale`）：插件不另存语言状态，工具栏 🌐 写入宿主语言设置本身，面板即时重绘、无需刷新。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.28.0 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（验证基线 **0.2.1-rc.2**，见 [docs/COMPAT.md](docs/COMPAT.md)）
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.32.0 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（验证基线 **0.2.1-rc.2**；声明上界 **< 0.3.0**，见 [docs/COMPAT.md](docs/COMPAT.md)）
 **🇬🇧 English documentation:** [README.en.md](./README.en.md)
 
 ## 十一个管理面板

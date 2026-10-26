@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-admin",
-  "version": "1.28.0",
+  "version": "1.32.0",
   "type": "module",
   "description": "dsh Web UI admin plugin: eleven management panels (extensions, skills, MCP servers, subagents, commands, hooks, automation - cron / webhook / workflow, sessions & web search, usage dashboard, todo dock) inside the official dsh settings UI",
   "main": "lib/index.js",
@@ -26,7 +26,9 @@
     "check:lint": "oxlint lib src scripts",
     "build:client": "node scripts/build-client.mjs",
     "test:matrix": "node scripts/check-matrix.mjs",
-    "smoke:real-host": "node scripts/smoke-real-host.mjs"
+    "smoke:real-host": "node scripts/smoke-real-host.mjs",
+    "smoke:degraded-host": "node scripts/smoke-degraded-host.mjs",
+    "screenshots": "node scripts/screenshot-panels.mjs"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -70,6 +72,7 @@
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": ">=24.9.0",
+    "dsh": ">=0.1.7-rc.2 <0.3.0-0"
   }
 }

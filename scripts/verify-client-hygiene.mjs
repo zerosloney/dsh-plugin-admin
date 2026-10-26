@@ -70,11 +70,17 @@ check('2. localStorage map readers reject arrays and __proto__, and walks use ow
   }
 })
 
-check('3. workspace menu heuristic keys on the exact host label', () => {
-  assert.ok(impl.includes("text.indexOf('删除工作区') !== -1"),
-    'the zh branch matches the host\'s exact 删除工作区 item')
-  assert.ok(!/text\.indexOf\('删除'\) !== -1/.test(impl),
-    'a bare 删除 no longer classifies a menu as the workspace menu')
+check('3. the session row menu uses the official slot, not a DOM classifier', () => {
+  // The host menu used to be located by an aria-label selector and classified by
+  // its own label text ('删除工作区' / 'Delete workspace'), then mapped back to a
+  // session id with a fuzzy title match. All of that is gone: the row menu item
+  // is registered into the documented slot, so the owner props carry the id.
+  assert.ok(impl.includes('sidebar.workspaces.session.menu.item'),
+    'the row menu item is registered into the documented upstream slot')
+  assert.ok(!/删除工作区/.test(impl) && !/Delete workspace/.test(impl),
+    'no host menu label classifies the menu any more')
+  assert.ok(!/(querySelector|closest)\([^)\n]*aria-label/.test(impl),
+    'no aria-label selector hunts the menu down')
 })
 
 check('4. maxTokens rejects 0 before the host does', () => {

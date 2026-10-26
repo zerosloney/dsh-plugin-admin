@@ -1,5 +1,5 @@
 /** plugins — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, UiPill, createElement, currentLanguage, dshT, messageOf, sectionState, setAdminLang, showToast, useEffect, useRef } from './context.js'
+import { UiButton, UiInput, UiPill, canSwitchLanguage, createElement, currentLanguage, dshT, messageOf, sectionState, setAdminLang, showToast, useEffect, useRef } from './context.js'
 import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateReminders, updateCheckNote } from './mcp.js'
 
 /**
@@ -618,14 +618,25 @@ export function renderPluginsView(view, patch, install, remove, checkUpdates, up
         onClick: function () { patch({ needle: '' }) },
       }, '✕') : null
     ),
-    // Language switch for ALL plugin panels (module-level state + reload).
+    // Language switch: a shortcut into the SHELL's language setting, never a
+    // private one. It calls locale.setLocale(), which validates the id and
+    // persists the choice as the shell's own user preference, then repaints the
+    // panels through the locale subscription. When the mounted shell does not
+    // expose that entry the control is disabled and says so — previously this
+    // wrote localStorage['dsh-admin-lang'] and reloaded the page, which fought
+    // the shell's language picker and threw away every other panel's state.
     createElement('select', {
       key: 'lang-switch',
       className: 'input',
-      style: { flex: 'none', width: 'auto', cursor: 'pointer' },
-      title: dshT('界面语言'),
+      style: { flex: 'none', width: 'auto', cursor: canSwitchLanguage() ? 'pointer' : 'not-allowed' },
+      title: canSwitchLanguage()
+        ? dshT('界面语言')
+        : dshT('界面语言由宿主的语言设置控制，当前宿主没有提供切换入口'),
+      disabled: !canSwitchLanguage(),
       value: currentLanguage(),
-      onChange: function (/** @type {PluginsInputEvent} */ e) { setAdminLang(e.target.value) },
+      onChange: function (/** @type {PluginsInputEvent} */ e) {
+        if (!setAdminLang(e.target.value)) showToast(dshT('宿主没有接受这次语言切换'))
+      },
     },
       createElement('option', { value: 'zh', key: 'zh' }, '中文'),
       createElement('option', { value: 'en', key: 'en' }, 'English')

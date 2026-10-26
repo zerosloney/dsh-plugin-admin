@@ -50,6 +50,15 @@ const PLATFORM_BASELINE = [
 ]
 const checkOnly = process.argv.includes('--check')
 
+/**
+ * Entry-bundle ceiling in bytes (v1.30, N-5). 150 KB is the Phase B2 goal; it
+ * used to live only in a CHANGELOG line, so "达成 ≤150 KB" was a claim nobody
+ * re-measured. Measured at 129.7 KB when this assertion landed, i.e. there is
+ * ~20 KB of headroom before it starts failing — enough for a new slot row, not
+ * enough to accidentally re-inline a panel.
+ */
+const ENTRY_BUDGET_BYTES = 150 * 1024
+
 /** One artifact: the entry, where it lands, and its loader registration. */
 const ARTIFACTS = [
   { entry: 'src/client/index.js', out: 'lib/client.js', chunk: null },
@@ -117,8 +126,20 @@ for (const artifact of ARTIFACTS) {
     writeFileSync(outPath, next)
     console.log(`build-client: wrote ${artifact.out} (${next.split('\n').length} lines from ${artifact.entry})`)
   }
+  // Budget assertion (v1.30, N-5). The entry bundle is the one every page pays
+  // for, and the 150 KB ceiling was a PHASE GOAL that only a human compared
+  // against a CHANGELOG line. It is now enforced where the size is produced:
+  // the goal is a property of the artifact, so it belongs in the build, not in
+  // prose. (The panel chunk is deliberately unbudgeted — it is lazy, and its
+  // size is paid only by a user who opens an admin surface.)
+  if (artifact.chunk === null && Buffer.byteLength(next, 'utf8') > ENTRY_BUDGET_BYTES) {
+    const kb = (Buffer.byteLength(next, 'utf8') / 1024).toFixed(1)
+    console.error(`build-client: ${artifact.out} is ${kb} KB, over the ${ENTRY_BUDGET_BYTES / 1024} KB entry budget `
+      + '— keep the entry to slot registrations + the locale table and move code into the panel chunk')
+    process.exit(1)
+  }
 }
 if (checkOnly) {
   if (stale) process.exit(1)
-  console.log(`build-client OK: ${ARTIFACTS.length} artifacts match src/client/**`)
+  console.log(`build-client OK: ${ARTIFACTS.length} artifacts match src/client/** (entry budget ${ENTRY_BUDGET_BYTES / 1024} KB)`)
 }

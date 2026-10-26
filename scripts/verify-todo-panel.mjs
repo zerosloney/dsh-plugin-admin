@@ -176,9 +176,16 @@ const fileCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { fileCtx.provided ??= {}; fileCtx.provided[key] = service },
   effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
-  // Services resolve through ctx.get(); the workspace registry is optional
-  // (web-app only) and this deployment has one.
-  get: (name) => (name === 'workspaceRegistry' ? fileCtx.workspaceRegistry : undefined),
+  // Services resolve through ctx.get() — the plugin declares no inject deps, so
+  // every seam is read this way. `function`+this[name] mirrors real Cordis
+  // (the reflect proxy answers for the ctx the mount was given); an arrow
+  // closing over fileCtx would answer for the wrong ctx in derived mounts.
+  get: function (name) { return this[name] },
+  // apply() ends with `ctx.inject(['typert'], cb)` to mount the RPC surface on a
+  // child fiber (lib/index.js; vendor/cordis registry.ts:300). The fake ctx has to
+  // answer it, or the mount throws before the panel behaviour under test exists.
+  // Running the callback on THIS ctx keeps `this[name]` resolution faithful.
+  inject: function (names, cb) { return cb(this) },
   on: () => () => {},
   logger: { info: () => {}, warn: () => {} },
   commands: { register: () => () => {} },
@@ -218,7 +225,11 @@ async function makeGitCtxFor(cwd) {
     baseUrl: pathToFileURL(join(here, '..')).href,
     provide: (key, service) => { ctx.provided ??= {}; ctx.provided[key] = service },
     effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
-    get: () => undefined,
+    get: function (name) { return this[name] },
+    // apply() ends with `ctx.inject(['typert'], cb)` (lib/index.js; vendor/cordis
+    // registry.ts:300). Every derived mount needs the stub too, or apply() throws
+    // before the service this fixture returns is ever provided.
+    inject: function (names, cb) { return cb(this) },
     on: () => () => {},
     logger: { info: () => {}, warn: () => {} },
     commands: { register: () => () => {} },
@@ -506,6 +517,7 @@ const exportCtx = {
   provide: (key, service) => { exportCtx.provided ??= {}; exportCtx.provided[key] = service },
   effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
   get: (name) => (name === 'workspaceRegistry' ? exportCtx.workspaceRegistry : undefined),
+  inject: function (names, cb) { return cb(this) },
   on: () => () => {},
   logger: { info: () => {}, warn: () => {} },
   commands: { register: () => () => {} },
@@ -637,6 +649,7 @@ const searchCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
   provide: (key, service) => { searchCtx.provided ??= {}; searchCtx.provided[key] = service },
   effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : undefined },
+  inject: function (names, cb) { return cb(this) },
   on: () => () => {},
   logger: { info: () => {}, warn: () => {} },
   commands: { register: () => () => {} },

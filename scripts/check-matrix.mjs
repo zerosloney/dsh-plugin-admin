@@ -33,6 +33,30 @@ const checker = join(here, 'integration-check.mjs')
 const explicit = process.env.DSH_CHECKOUTS !== undefined || process.env.DSH_CHECKOUT !== undefined
 const requireProbe = explicit || (process.env.CI !== undefined && process.env.CI !== '')
 const raw = process.env.DSH_CHECKOUTS ?? process.env.DSH_CHECKOUT ?? join(here, '..', '..', 'deepseek-harness')
+
+// EARLY-WARNING ROWS (v1.31). docs/COMPAT.md calls the `master` checkout an
+// "early-warning row: routine upstream refactors are expected to pass, a
+// contract change must trip here first" — but the matrix used to treat every
+// drift as a hard failure, so routine churn on master turned the gate red and
+// taught maintainers to ignore it. That is exactly the "a permanently red gate
+// is not a gate" failure the v1.29.0 audit called out.
+//
+// A checkout whose path contains one of these markers is probed and REPORTED,
+// but its drift does not fail the run: the baseline and the support floor still
+// decide pass/fail. Annotate the master checkout with `DSH_EARLY_WARNING`
+// (a comma list of path substrings) — the default matches the `.dsh-main` path
+// ci.yml and seam-early-warning.yml both use, so nothing has to be passed twice.
+// ONLY the checkout directory name — never a repository name. Matching
+// `deepseek-harness` would also demote a local baseline checkout (the sibling
+// fallback, and this repo's own dev path) to a warning, so real drift against
+// the version we claim to support would stop failing the gate.
+const EARLY_WARNING_MARKERS = (process.env.DSH_EARLY_WARNING ?? '.dsh-main')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry !== '')
+/** @param {string} path @returns {boolean} */
+const isEarlyWarning = (path) => EARLY_WARNING_MARKERS.some((marker) => path.includes(marker))
+
 const checkouts = raw
   .split(/[,;]/)
   .map((entry) => entry.trim())
@@ -46,6 +70,7 @@ if (checkouts.length === 0) {
 
 const results = []
 let failed = 0
+let warned = 0
 let probed = 0
 let skipped = 0
 for (const checkout of checkouts) {
@@ -66,8 +91,12 @@ for (const checkout of checkouts) {
     results.push('✅ ' + checkout + ' — ' + (summary === null ? 'ok' : summary[1] + ' contracts'))
     continue
   }
-  failed += 1
-  results.push('❌ ' + checkout)
+  probed += 1
+  const earlyWarning = isEarlyWarning(checkout)
+  if (earlyWarning) warned += 1
+  else failed += 1
+  results.push((earlyWarning ? '⚠️  ' : '❌ ') + checkout
+    + (earlyWarning ? ' — upstream drifted (early-warning row, does not fail the run)' : ''))
   for (const line of output.split('\n')) {
     const trimmed = line.trimEnd()
     if (trimmed.startsWith('  ✗') || trimmed.startsWith('integration-check FAILED')) results.push('    ' + trimmed)
@@ -90,4 +119,11 @@ if (probed === 0) {
   console.log('check-matrix OK: 0 checkout(s) probed, ' + skipped + ' skipped — ' + why + ' (implicit fallback, not a failure)')
   process.exit(0)
 }
-console.log('check-matrix OK: ' + probed + ' checkout(s) probed, ' + skipped + ' skipped, no contract drift')
+if (warned > 0) {
+  // Visible, but not a failure: the early-warning row is EXPECTED to drift first.
+  // CI turns this into an annotation through the step summary (see the workflow).
+  console.log('check-matrix: ' + warned + ' early-warning checkout(s) drifted — upstream changed; '
+    + 'review the probes above and either adapt the plugin or refresh the pinned baseline')
+}
+console.log('check-matrix OK: ' + probed + ' checkout(s) probed, ' + skipped + ' skipped, '
+  + failed + ' drifted, ' + warned + ' early-warning drift')

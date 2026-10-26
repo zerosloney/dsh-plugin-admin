@@ -92,6 +92,13 @@ interface DshContext {
   on(event: string, listener: (...args: any[]) => unknown): () => void
   get(key: string): any
   provide(key: string, service: unknown): void
+  /** Start a child fiber once `deps` are available (vendor/cordis
+   * registry.ts:300 `inject(inject, callback)` → `this.plugin({ inject, apply })`).
+   * The plugin uses it to mount the RPC surface only where `typert` exists
+   * without making typert a hard requirement of the whole plugin. Like `on` and
+   * `get`, this is a Context method every real Cordis context has, so it is
+   * declared required rather than reached for through `ctx.get`. */
+  inject(deps: string[], callback: (ctx: DshContext) => unknown): unknown
   typert?: DshTypertRegistry
   sessionPersistence?: DshSessionPersistence
   workspaceRegistry?: DshWorkspaceRegistry

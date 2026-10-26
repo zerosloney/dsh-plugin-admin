@@ -96,8 +96,8 @@ await check('apply() registers the 子智能体 settings section', () => {
   // Phase B2: the stylesheets ride with the panel chunk (injected in configure()).
   assert.deepEqual(
     injectedSlots.map((slot) => slot.name).sort(),
-    ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
-    'unified apply injects the three settings sections + six plugins-page tabs + the todo dock',
+    ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
+    'unified apply injects the three settings sections + six plugins-page tabs + the todo dock + the session row menu item',
   )
 
   injectedSlots.forEach((slot) => slot.factory())

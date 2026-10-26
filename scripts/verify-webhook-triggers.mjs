@@ -1083,11 +1083,13 @@ await checkAsync('two processes saving rules into one store lose no rule', async
       if (!ids.has('a-rule-' + i)) missing.push('a-rule-' + i)
       if (!ids.has('b-rule-' + i)) missing.push('b-rule-' + i)
     }
-    // Same contract as the cron twin: the lock is fail-open after 3s by design,
-    // so a stall may lose one write; an unlocked read-merge-write loses many.
+    // Same contract as the cron twin: the lock is fail-closed after 3s (it throws
+    // lockWaitTimeout instead of writing unlocked), so contention rejects the RPC
+    // and its worker exits non-zero — run() turns that into a hard failure with
+    // the real error, never a silent lost rule. No loss is tolerated.
     assert.ok(
-      missing.length <= 1,
-      `an unlocked read-merge-write drops rules; the lock may only lose 1 to its documented fail-open — lost ${missing.length}: ${missing.slice(0, 8).join(',')}`,
+      missing.length === 0,
+      `an unlocked read-merge-write drops rules; with the fail-closed lock no rule may be lost at all — lost ${missing.length}: ${missing.slice(0, 8).join(',')}`,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })

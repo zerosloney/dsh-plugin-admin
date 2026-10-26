@@ -54,6 +54,89 @@ function readSource(rel) {
   return existsSync(path) ? readFileSync(path, 'utf8') : null
 }
 
+/** Resolve an `export … from './x.ts'` specifier against the importing file. */
+function resolveSpecifier(fromRel, specifier) {
+  const parts = fromRel.split('/').slice(0, -1)
+  for (const segment of specifier.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') parts.pop()
+    else parts.push(segment)
+  }
+  const path = parts.join('/')
+  return /\.(?:[cm]?[jt]s)$/.test(path) ? path : `${path}.ts`
+}
+
+/**
+ * A package ENTRY POINT's public type surface: the file itself plus every
+ * module it re-exports with `export * from './x.ts'` / `export { … } from
+ * './x.ts'`.
+ *
+ * Why: upstream moves declarations into their own module and keeps the entry
+ * point as a barrel. 45568662 "refactor(tools): separate scoped executors from
+ * tool registration" moved the tool decision unions from
+ * packages/core/tools/src/index.ts into contracts.ts and left index.ts:407 as
+ * `export * from './contracts.ts'` — the entry point the plugin's types
+ * resolve through, and the contract, are unchanged. A probe that greps only
+ * the barrel file therefore reports a false drift. Probes opt in with
+ * `followReexports: true` (the merged text is only correct for probes whose
+ * checks are all positive assertions; the rest stay single-file).
+ *
+ * Bounded to two re-export levels, each module read once, so a cycle cannot
+ * loop. Returns null when the entry point itself is absent.
+ */
+function readBarrel(rel) {
+  const merge = (sourceRel, depth, seen) => {
+    if (depth < 0 || seen.has(sourceRel)) return ''
+    const text = readSource(sourceRel)
+    if (text === null) return ''
+    seen.add(sourceRel)
+    let merged = text
+    for (const match of text.matchAll(/export\s+(?:\*|\{[^}]*\})\s*from\s*'(\.[^']+)'/g)) {
+      merged += `\n${merge(resolveSpecifier(sourceRel, match[1]), depth - 1, seen)}`
+    }
+    return merged
+  }
+  const path = join(CHECKOUT, ...rel.split('/'))
+  return existsSync(path) ? merge(rel, 2, new Set()) : null
+}
+
+/**
+ * The top-level parameters of a `callee(…)` declaration: comma-split at
+ * nesting depth 0 so generic and object parameter types survive. Returns null
+ * when the callee is not declared or its parentheses do not balance.
+ */
+function paramsOf(text, callee) {
+  const at = text.indexOf(`${callee}(`)
+  if (at === -1) return null
+  const open = at + callee.length
+  let depth = 0
+  let close = -1
+  for (let index = open; index < text.length; index++) {
+    if (text[index] === '(') depth++
+    else if (text[index] === ')' && --depth === 0) {
+      close = index
+      break
+    }
+  }
+  if (close === -1) return null
+  const params = []
+  let current = ''
+  let nesting = 0
+  for (const ch of text.slice(open + 1, close)) {
+    if (ch === '(' || ch === '[' || ch === '{' || ch === '<') nesting++
+    else if (ch === ')' || ch === ']' || ch === '}') nesting--
+    else if (ch === '>' && nesting > 0 && !current.trimEnd().endsWith('=')) nesting--
+    if (ch === ',' && nesting === 0) {
+      params.push(current.trim())
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current.trim() !== '') params.push(current.trim())
+  return params
+}
+
 /**
  * The body of a top-level declaration: from its header line to the first
  * column-0 closing brace (TypeScript top-level blocks are not indented).
@@ -136,6 +219,12 @@ const PROBES = [
   {
     id: 'tool decision unions',
     file: 'packages/core/tools/src/index.ts',
+    // index.ts is a BARREL: 45568662 moved these declarations into
+    // contracts.ts and left `export * from './contracts.ts'` behind, so the
+    // probing text is the entry point's whole public surface — exactly what the
+    // plugin's types resolve through — not just the one file that used to hold
+    // it.
+    followReexports: true,
     checks: [
       ['PreToolDecision deny/ask', t => {
         // dsh 0.1.6-alpha.2 added an optional `info?: ToolErrorInfo` after the
@@ -167,13 +256,72 @@ const PROBES = [
     ],
   },
   {
+    // N-19: the 全文搜索 banner in the sessions panel only appears when the
+    // host reports this exact code. The plugin reads `error.code` off the thrown
+    // value (lib/session-admin.js:2031) and turns it into a message prefix the
+    // client matches. If upstream renames the code the banner silently dies —
+    // a dead UI, not an error — so the literal is pinned on both the declaration
+    // and the throw site.
+    id: 'session-query search-disabled error code',
+    file: 'packages/experimental/tool-session-query/src/service-boundary.ts',
+    checks: [
+      ['SESSION_QUERY_SEARCH_DISABLED is a declared boundary code',
+        t => /SESSION_QUERY_SEARCH_DISABLED\s*:\s*\{/.test(t) && /code:\s*'SESSION_QUERY_SEARCH_DISABLED'/.test(t)],
+    ],
+  },
+  {
+    // The other half of N-19: the code has to be THROWN by the backend the
+    // plugin actually calls, not merely declared in a type table.
+    id: 'session-query search-disabled throw site',
+    file: 'packages/session-query/session-query-sqlite/src/index.ts',
+    checks: [
+      ['the sqlite backend throws SESSION_QUERY_SEARCH_DISABLED', t => t.includes("'SESSION_QUERY_SEARCH_DISABLED'")],
+    ],
+  },
+  {
+    // P1-C: the ONE remaining reason this plugin still ships its own cron
+    // instead of delegating to ctx.schedule. The official service is HOST-level
+    // (catalog reads every reminder, storage is durable) and ships a cron
+    // selector — so "it is session-scoped" is no longer a valid argument, and
+    // docs/COMPAT.md used to say exactly that. What still holds is that
+    // `create()` takes a sessionId: a task with no session binding has no
+    // official path. If this signature ever gains an optional sessionId, the
+    // cron panel's justification collapses and it should be reconsidered (not
+    // silently kept).
+    id: 'schedule create() is bound to a Session',
+    file: 'packages/schedule/schedule/src/index.ts',
+    checks: [
+      ['create(sessionId, request) — a session-less task has no official path',
+        t => /async\s+create\(\s*sessionId\s*:\s*SessionId/.test(t)],
+      ['catalog() reads the whole Host catalogue, not one session',
+        t => /@Remote\('catalog'\)/.test(t)],
+      ['create() accepts a cron selector',
+        t => /request\.cron\s*!==\s*undefined/.test(t)],
+    ],
+  },
+  {
     id: 'projection-cache checkpoint',
     file: 'packages/session/session-projection-cache/src/index.ts',
     checks: [
-      // dsh 0.1.7 dropped the inheritedEventCount cut parameter: the second
-      // argument is now the optional projection-keys filter. The plugin's
-      // title lookup calls cachedSnapshot(header) with NO second argument.
-      ['cachedSnapshot(meta, keys?) signature (inheritedEventCount removed)', t => /cachedSnapshot\(\s*\n\s*meta: SessionHeader,\s*\n\s*keys\?: readonly/.test(t)],
+      // dsh 0.1.7 dropped the inheritedEventCount cut parameter; 0.2.1 renamed
+      // and widened the remaining one to `keys?: ProjectionKeySelection`. The
+      // plugin's title lookup calls `cachedSnapshot(header)` with NO second
+      // argument (lib/session-admin.js:1025), so the load-bearing contract is
+      // CALL COMPATIBILITY, not the literal parameter text: the first parameter
+      // is still the session header and everything after it is optional.
+      ['cachedSnapshot(meta, keys?) — the plugin\'s one-argument call stays valid', t => {
+        const params = paramsOf(t, 'cachedSnapshot')
+        if (params === null || params.length === 0) return false
+        if (!/^meta\??\s*:\s*SessionHeader$/.test(params[0])) return false
+        // A parameter after `meta` must be optional (or defaulted) or
+        // `cachedSnapshot(header)` stops type-checking on the next upgrade.
+        const rest = params.slice(1)
+        if (!rest.every(param => /\?\s*:/.test(param) || param.includes('='))) return false
+        // When a second parameter exists it must remain the projection-key
+        // filter: a re-added event-count cut would silently change what
+        // `cachedSnapshot(header)` means even though the call still compiles.
+        return rest.length === 0 || /ProjectionKey/.test(rest[0])
+      }],
       ['identityOf only rejects non-zero cut on unseeded headers', t => /!header\.isSeeded && cut !== 0/.test(t)],
     ],
   },
@@ -589,7 +737,15 @@ const PROBES = [
     checks: [
       ['WebRouteKind covers prefix matching', t => t.includes("export type WebRouteKind = 'exact' | 'prefix'")],
       ['WebRoute handler receives (req, res)', t => t.includes('handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>')],
-      ['prefix routes are stored by path', t => t.includes('private readonly prefixes = new Map<string, WebRoute>()')],
+      // The plugin calls the PUBLIC `register({ kind: 'prefix', path, handler })`
+      // and returns the disposer as its cordis effect teardown; it never reads
+      // the private tables. 73931626be widened the prefix map's value type to
+      // `WebRoute | WebResourceRoute` and added readResource — neither reaches
+      // the plugin — so pin the registration surface and the longest-prefix
+      // dispatch it rides, not the Map's literal generic.
+      ['register(prefix route) returns the disposer and longest-prefix wins', t => t.includes('register(route: WebRoute | WebResourceRoute): () => void {')
+        && t.includes("route.kind === 'exact' ? this.exact : this.prefixes")
+        && t.includes('prefix.length > best.path.length')],
     ],
   },
   {
@@ -818,10 +974,13 @@ for (const probe of PROBES) {
   let text = null
   let usedFile = null
   for (const candidate of candidates) {
-    const source = readSource(candidate)
+    // `followReexports` widens the probe to the entry point's whole public
+    // surface (the file plus what it re-exports), so a declaration that moved
+    // into its own module behind a barrel keeps being enforced.
+    const source = probe.followReexports === true ? readBarrel(candidate) : readSource(candidate)
     if (source !== null) {
       text = source
-      usedFile = candidate
+      usedFile = probe.followReexports === true ? `${candidate} + re-exports` : candidate
       break
     }
   }

@@ -1,6 +1,10 @@
 # dsh-plugin-admin 改进方案
 
 > 状态：**已执行**——A→G 各阶段主体工作完成（16 轮推进，每轮 `npm test` 全绿）。剩余项见文末"仍开放"。
+>
+> **v1.30.0 追加（第二轮对照上游的收口）**：`analysis/00-SUMMARY.md` 的 28 条收口之后，再对照
+> `deepseek-harness` HEAD（`22ddee3792`，rc.3 之后 1533 个提交）复核，处置了 A→G 阶段留下的 5 项与 2 项新发现。
+> 逐条结论见 `CHANGELOG.md` 的 `[1.30.0]` 节；本节只记状态。
 > 基线校验：`npm test` 全绿（exit 0，tsc / oxlint / 产物一致性 / 34 个脚本）；`integration-check` **93 条契约**探针通过；`npm run test:matrix` 支持多 checkout。
 
 ## 执行状态（滚动更新）
@@ -185,6 +189,60 @@
 1. **目标宿主范围 —— 已决策：不保 0.1.6。** 支持范围定在 **dsh ≥ 0.1.7-rc.2**（v1.25.0 起生效，记录在 `docs/COMPAT.md` 的"版本策略"）。依据：客户端已经静态引用平台共享模块与 `ctx.locale`，0.1.6 上缺 seed 是整包加载失败而非降级 —— 保留回落分支的代价（约 +0.5 人日）换不回"可用"，只会让版本承诺与代码继续不符。CI 按该范围跑（pin `dsh-v0.1.7-rc.2` + `master` 预警）。
 2. **面板配额默认值**：Phase E 默认"自动让位"还是"仅提示、不隐藏"？后者更保守、体验更可预期。
 3. **是否启动 F3 审计日志**：这会把插件从"管理面板"推进为"带审计面的管理面板"，涉及产品定位，需你确认边界。
+
+---
+
+## v1.30.0 追加轮状态（对照上游 HEAD 的复核）
+
+| 项 | 状态 | 落点 | 验证 |
+|---|---|---|---|
+| **N-1/N-2 让位粒度** | ✅ 完成 | `src/client/native-coverage.js` 加 `scope: 'panel' \| 'tabs' \| 'none'`；`automation` 改 `tabs:['cron']`，`subagents`/`webSearch` 改 `none`；`impl.js` 新增 `tabHiddenResolver`，`panels/context.js` 暴露 `tabHidden`，`panels/automation.js` 按它过滤页签 | `self-check` 新增 6 条（官方 schedule 在场时 automation 仍注册、`plugins.item` 命中不让位、per-row scope 不互相干扰）；`verify-i18n` 放行新日志文案 |
+| **N-3 `engines.dsh` 上界** | ✅ 完成 | `>=0.1.7-rc.2 <0.3.0-0`；COMPAT 版本策略头与两份 README 同步声明上界 | `verify-peer-compat` 新增第 8 项：下界 + 上界 + **`-0` 围栏**，负向对照 `0.3.0-rc.1`/`0.3.0`/`1.0.0`/`0.1.7-rc.1` 必须被拒。实测裸 `<0.3.0` 在宿主 `includePrerelease` 下放行 `0.3.0-rc.1`，故围栏是必需的而非装饰 |
+| **N-11 去掉 1200ms 盲等** | ✅ 完成 | `impl.js` 的 `preferredSettingsSlot()` + 双向 `slots.subscribe`；删 `TAB_SLOT_GRACE_MS`/`fallbackTimers`/`noteSlotMissing` | 全闸门（`self-check` 的 tab/fallback 用例） |
+| **N-5 体积进闸门** | ✅ 完成 | `build-client.mjs` 的 `ENTRY_BUDGET_BYTES = 150 KB` 构建期断言；`ARCHITECTURE.md` 修正 `src/client/panels.js` → `src/client/panels/` 并写明断言 | `build-client --check` 输出带预算；实测 134.0 KB |
+| **N-19 全文搜索错误码** | ✅ 完成 | `integration-check` 加 2 条探针（`service-boundary.ts` 声明 + `session-query-sqlite` 抛出点） | 148 → 150 |
+| **P1-B 用量投影** | ✅ 完成 | `lib/session-admin.js` 新增 `projectionTokensOf()`，投影优先、日志折叠兜底；**全零投影不算测量** | `host-check` 3 条新断言（投影优先 / 全零回退 / 无缓存回退） |
+| **P1-C cron 判断修正** | ✅ 完成 | `lib/cron-admin.js` 模块注释与 `docs/COMPAT.md` 矩阵改成「唯一差异是 create 必须绑定会话」 | 150 → 153；探针已用只读方式做负控（变异 `sessionId?` 后正则不再匹配） |
+| **闸门自身健壮性** | ✅ 完成 | `host-check.mjs`：`clearJunction()`（junction 是 reparse point，非递归 `rmSync` 摘不掉 → 二次运行必红）、`removeTreeWithLinks()`、账本段改用 `mkdtempSync` 独立 home（不再依赖「删掉上一轮文件」） | 连续两次 `host-check` 均通过 |
+
+### v1.30.1 自查轮（v1.30.0 自己引入的三处 + 两处文档）
+
+| 项 | 状态 | 落点 | 验证 |
+|---|---|---|---|
+| **覆盖结论冻结在 apply()** | ✅ 完成 | `native-coverage.js` 每行加 `signals`，导出 `COVERAGE_SLOT_KEYS`；`impl.js` 的 `coverage` 改为 `recomputeCoverage()`，订阅 4 个 slot 键，`sameCoverageVerdict()` 避免无谓重规划 | `self-check` 夹具改可变 slot 表 + 可触发 `subscribe`，新增「panel 行晚到声明必须退场」「tabs 行晚到声明必须保面板」两条用例；**负控已做**（把订阅改回 no-op → 用例变红） |
+| **导入期防复发闸门** | ✅ 完成 | 有真探测却无 `signals`、或 `signals` 键未被 `detect()` 读到 → 导入即抛错 | 导入期校验（`node -e` 实测 `COVERAGE_SLOT_KEYS` 为 4 个键） |
+| **`notes` 未被消费** | ✅ 完成 | `impl.js` 新增 `reportCoverage()`，输出让位面板 / 让出页签 / 相近但不等价三类日志 | `self-check` 三条日志断言（`ctx.logger.info` 改为可捕获） |
+| **两处「会话级」残留 + COMPAT 自相矛盾** | ✅ 完成 | `docs/ARCHITECTURE.md:76` 改写并标注「不要这么说」；`COMPAT.md` 的「两个让位」改为与新 `scope` 表一致，风险行标为「v1.30.1 起已收敛」 | `verify-doc-claims` + `verify-line-anchors` |
+
+**v1.30.1 的教训（值得单独记）**：v1.30.0 把让位粒度从 panel 改成 tabs，**只改了一半**——粒度是新的，但结论仍是
+`apply()` 时点的快照。对 `panel` 这无伤（多注册一轮、重载自愈），对 `tabs` 就等于「页签永不消失」。
+**粒度细化会把「快照」这个既有缺陷的代价从良性放大成可见**，所以改粒度必须同时改求值时机。
+这轮加的两道导入期闸门（`signals` 必须存在且被 `detect()` 真的读到）就是为了让同类「只改一半」在下次直接报错。
+
+### v1.32：N-14/N-15 收口（量化后决定不批量 token 化）
+
+| 项 | 状态 | 结论 |
+|---|---|---|
+| **截图基线** | ✅ 完成 | `scripts/screenshot-panels.mjs`（`npm run screenshots`）：真机 web profile + headless Chromium + 原生 CDP，逐面板 × 亮/暗截图到 `.screenshots/`。**采集器不是闸门**（无入库基准图，像素闸门会 flaky）。实现踩了三个坑并按 `smoke-real-host` 已记录的做法修：`dsh <profile> --port 0 --no-open`、必须用带 launch token 的 URL、设置对话框是「账号菜单 → 设置行」两次点击且要先关首启声明；另 CDP `sessionId` 必须在顶层而非 `params`。 |
+| **N-14 裸色值 token 化** | ⛔ **实测后不做** | 普查口径校正：322 处十六进制里 **168 处是 `var(--token, fallback)` 的兜底位**（正确写法），真正无 token 的裸值 **161 处**。三条独立理由否掉批量替换：① 无语义正确的 token（裸值多是实心徽章的固定底+固定白字，上游只有文字色与浅填充，没有「状态容器底色」别名）；② 只换字色会让深色主题崩——`--dsw-alias-label-primary-foreground` 深色是 `rgb(15,17,21)`，WCAG 实测 7/7 对比度下降、5 处跌破 4.5（`#b91c1c` 6.47→2.92、`#991b1b` 8.31→2.27、`#1d4ed8` 6.70→2.82、`#6d28d9` 7.10→2.66），从可读变不可读；③ `#ef4444` 与 `state-error-primary`（浅色 `rgb(236,19,19)`）不等值，替换即改色相。 |
+| **N-15 深色主题验收** | ✅ 完成（结论：非缺陷） | 实心徽章的「字/底」对比度两套主题下**相同**（6.47/8.31/5.02/6.70/7.10，全 ≥4.5），因为字与底都不随主题移动——自洽而非 bug。徽章与页面底色的对比度在深色下降到 1.89–3.13，但那是图形边界不是文字可读性，色块仍清晰。`--dsw-alias-*` 已自适应，插件只补 token 表达不了的两处，维持现状。 |
+
+**将来重做的前提**（已写进 `docs/COMPAT.md`）：上游若提供「状态容器」别名（如 `state-error-container`），
+才能把徽章底色 + 字色**成对**迁移；只改一半就是本轮算出来的那次对比度崩塌。
+
+**清单已清空**：v1.31 的「仍开放」只剩 N-14/N-15，本轮收口后没有遗留项。
+
+### v1.31 完成与「实测后不做」的决定
+
+| 项 | 状态 | 结论 |
+|---|---|---|
+| **P1-A 委托 `ctx.pluginManager`** | ✅ 完成 | 新增 `lib/plugin-manager-bridge.js`：`install`/`remove`/`setEnabled` 三个写动词在 `pluginManager` 在场时委托，缺席时走原 pnpm 路径。**极性**是本轮最易错处：我方 RPC 说 `disabled`，宿主说 `enabled`，已用注释+测试双重钉住。`host-check` 新增 10 条断言（含 `failed` 抛出 / `overridden` 不抛 / 无 manager 回落），并做了**极性负控**（写反后测试变红）。 |
+| **N-17 CI 审计** | ✅ 完成 | 发现并修掉三处真实不一致：`host-smoke`、`smoke-published`、`seam-early-warning` 仍钉 `0.2.0-rc.1`，而验证基线是 `0.2.1-rc.2`。新增 `verify-doc-claims` 第 14 项，把 **workflow 里的 dsh pin 与 COMPAT 基线绑定**（负控已验证：改回 rc.1 即红）。 |
+| **N-17 预警行语义** | ✅ 完成 | `check-matrix` 原本对任何漂移都 hard fail，与 COMPAT 承诺的「master 是预警行」相反——这正是修复轮批评过的「恒红闸门」。新增 `DSH_EARLY_WARNING`（默认 `.dsh-main`）：预警档漂移**报告但不失败**，基线与下限仍决定成败。实测两种行为：`.dsh-main` 漂移 → exit 0；同样漂移放在非预警路径 → exit 1。 |
+| **N-16 降级档** | ✅ 完成 | 新增 `scripts/smoke-degraded-host.mjs` + CI 步骤：在 **sdk-minimal**（真正缺 typert/subagents/commands/shell 的 bundle）上挂载本插件。11/11 通过。**关键是正控**：故意插一个坏行，证明宿主**会**报告未激活行，所以「我们的行没有这种报告」才算挂载证据。另外本机 `smoke:real-host` 实测 **32/32 通过**（dsh 0.2.1-rc.2）——这条路径此前被记为「从未跑通」，现已证实可用。 |
+| **N-18 逐行读 `plugin-admin.js`** | ✅ 完成 | 1562 行读完：导出面 23 项、三个写动词（`:1376 install` / `:1446 remove` / `:1501 setEnabled`）、模块级预算（`PNPM_TIMEOUT_MS` 等）在 `applyPluginAdmin` 里 retune。这为 P1-A 提供了准确的替换点。 |
+| **N-4 面板 chunk 拆分** | ⛔ **实测后不做** | 用 esbuild 实测：单 chunk 现在 **499.6 KB**；拆成 12 个 chunk 后**每个都要内联** `context.js`+`shared.js`，合计 **1201 KB**，重复 **701.5 KB**；即使抽出共享 chunk，12 个合计仍 **367.8 KB**。首次打开成本确实从 499.6 → 75.7 + 单面板（80–165 KB），但**总量上升**，且需要改 loader 契约（chunk 之间不能同步 `require` 兄弟 chunk，见 `system.ts:47/:328-338`）、构建脚本与全部测试夹具。**这是权衡不是纯收益**，应作为独立决策而非顺手做掉。 |
+| **N-6 字典分片** | ⛔ **实测后不做（且原建议有误）** | 字典确实是入口包的主因：137 KB 里 **89.1 KB（65%）** 是 `I18N_EN`。但它**必须**在 `apply()` 时注册进 `ctx.locale`（`installLocaleRuntime` 调 `locale.register(ns, {zh, en})`），否则英文环境下**面板标题在启动时就会回退成中文源串**——这正是 v1.29.0 修掉的 B-2 竞态。因此它不能延迟加载；我上一轮「字典随 chunk 分片」的建议**在架构上不成立**。 |
 
 ---
 

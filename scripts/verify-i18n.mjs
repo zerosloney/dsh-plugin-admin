@@ -141,6 +141,8 @@ const ALLOWED_BARE_CJK = [
   { file: 'impl.js', text: 'button[aria-label*="工作区" i][aria-label*="操作" i]', why: '宿主 aria-label 选择器探针（按 currentLanguage 显式分支）' },
   // Host-side log lines are not UI chrome; zh logs are the file's convention.
   { text: '官方已覆盖，让位面板：', why: '宿主日志文案，非界面 chrome' },
+  { text: '官方已覆盖部分页签，面板保留：', why: '宿主日志文案，非界面 chrome（v1.30 的 tab 级让位）' },
+  { text: '官方有相近界面但不等价，面板保留：', why: '宿主日志文案，非界面 chrome（v1.30.1 消费 notes）' },
   // The language picker shows each language in its own name, like 'English'.
   { text: '中文', why: '语言选择器的语言自称（同 English）' },
   // Template seed content the user is expected to edit: cron/webhook prompt

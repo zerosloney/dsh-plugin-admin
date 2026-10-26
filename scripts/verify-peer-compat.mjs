@@ -19,7 +19,7 @@
  * Run: node scripts/verify-peer-compat.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -103,6 +103,18 @@ const SATISFIED = [
   ['2.0.0', '>1'],
   ['1.9.9', '<=1'],
   ['1.5.0', '>1.2'],
+  // The plugin's own declared range (package.json engines.dsh): the lower bound
+  // is the verified floor, the upper bound is the first UNVERIFIED minor. Both
+  // ends are load-bearing — the host's admission rule ignores peerDependencies
+  // once engines.dsh exists, so a missing upper bound admits every future minor.
+  ['0.1.7-rc.2', '>=0.1.7-rc.2 <0.3.0-0'],
+  ['0.2.1-rc.2', '>=0.1.7-rc.2 <0.3.0-0'],
+  ['0.2.9', '>=0.1.7-rc.2 <0.3.0-0'],
+  // The bare ceiling, pinned in the ADMIT direction on purpose: it is why the
+  // shipped range carries the `-0` fence. semver 7.7.4 with the host's own
+  // includePrerelease admits 0.3.0-rc.1 under `<0.3.0` — the next minor's first
+  // candidate would walk through the gate the bound exists to close.
+  ['0.3.0-rc.1', '>=0.1.7-rc.2 <0.3.0'],
 ]
 const REFUSED = [
   ['0.1.7-rc.2', '^0.1.8'],
@@ -144,6 +156,20 @@ const REFUSED = [
   ['1.0.0', '>=x-beta'],
   ['1.0.0', '<=x-beta'],
   ['1.0.0', '=x-beta'],
+  // N-3's negative control: the declared upper bound must actually bite. A
+  // range without it (the v1.29.0 shape) admitted all of these.
+  //
+  // The `-0` fence on the ceiling is NOT decoration: measured against semver
+  // 7.7.4 with the host's own `includePrerelease: true`
+  // (packages/boot/app-boot/src/plugin-compatibility.ts:52), a bare `<0.3.0`
+  // still admits `0.3.0-rc.1` — the next minor's first release candidate gets
+  // through the very gate the bound exists to close. `<0.3.0-0` excludes the
+  // whole 0.3 band. Both readings are pinned here so the fence cannot be
+  // "simplified" away.
+  ['0.3.0-rc.1', '>=0.1.7-rc.2 <0.3.0-0'],
+  ['0.3.0', '>=0.1.7-rc.2 <0.3.0-0'],
+  ['1.0.0', '>=0.1.7-rc.2 <0.3.0-0'],
+  ['0.1.7-rc.1', '>=0.1.7-rc.2 <0.3.0-0'],
 ]
 
 check('2. satisfiesDshRange mirrors the host admission rule (includePrerelease, workspace, fail closed)', () => {
@@ -265,6 +291,30 @@ check('7. versionExemptionFor treats a missing or broken compatibility.json as n
   } finally {
     rmSync(profile, { recursive: true, force: true })
   }
+})
+
+check('8. package.json engines.dsh carries BOTH a verified floor and an unverified-minor ceiling', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const declared = manifest?.engines?.dsh
+  assert.equal(typeof declared, 'string', 'package.json must declare engines.dsh — the host admission gate reads nothing else')
+  // Two independent invariants, because each one alone has already shipped broken:
+  //   (a) a floor  — absent in v1.28.0, so the gate admitted every runtime;
+  //   (b) a ceiling — absent in v1.29.0, so the gate admitted 0.3 and 1.0 too.
+  assert.ok(/>=/.test(declared), `engines.dsh needs a lower bound (got ${JSON.stringify(declared)})`)
+  assert.ok(/</.test(declared), `engines.dsh needs an upper bound (got ${JSON.stringify(declared)}) — without it the host gate admits every future minor`)
+  // A bare ceiling is a half-open promise: under includePrerelease it still
+  // admits the next minor's release candidates. Require the `-0` fence.
+  assert.ok(/<[^<]*?-0(\s|$)/.test(declared),
+    `engines.dsh 的上界必须带 -0 围栏（got ${JSON.stringify(declared)}）—— 裸 <0.3.0 在 includePrerelease 下仍放行 0.3.0-rc.1`)
+  assert.equal(satisfiesDshRange('0.1.7-rc.2', declared), true, 'the declared floor must admit the verified floor')
+  assert.equal(satisfiesDshRange('0.2.1-rc.2', declared), true, 'the declared range must admit the verification baseline')
+  assert.equal(satisfiesDshRange('0.3.0-rc.1', declared), false, 'the declared ceiling must reject the first unverified minor, rc included')
+  assert.equal(satisfiesDshRange('0.3.0', declared), false, 'the declared ceiling must reject the first unverified minor release')
+  // And the README/COMPAT surface states the same ceiling, so a user reading the
+  // badge is not told a wider promise than the gate enforces.
+  const compat = readFileSync(new URL('../docs/COMPAT.md', import.meta.url), 'utf8')
+  assert.ok(compat.includes('0.3.0'),
+    'docs/COMPAT.md 的版本策略头应声明与 engines.dsh 相同的上界（提到 0.3.0）')
 })
 
 console.log(results.join('\n'))

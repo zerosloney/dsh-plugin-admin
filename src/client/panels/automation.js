@@ -1,5 +1,5 @@
 /** automation — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { React, UiButton, UiCheckbox, UiInput, UiPill, createElement, dshT, messageOf, sectionState, useEffect, useState } from './context.js'
+import { React, UiButton, UiCheckbox, UiInput, UiPill, createElement, dshT, messageOf, sectionState, tabHidden, useEffect, useState } from './context.js'
 import { mergeObject, tabKeyDown } from './shared.js'
 import { WorkflowSection } from './workflow.js'
 
@@ -42,6 +42,13 @@ export function AutomationSection(props) {
     { id: 'webhook', label: dshT('Webhook'), component: WebhookSection },
     { id: 'workflow', label: dshT('工作流'), component: WorkflowSection },
   ]
+  // 页签级让位（Phase E，v1.30）：官方 ui-schedule 只覆盖「定时任务」这一页，
+  // Webhook 入站与工作流上游没有任何页面。旧实现按整面板让位，装了官方任务页
+  // 的用户会连这两个上游根本不存在的功能一起丢掉，且没有任何提示。现在只有被
+  // 官方覆盖的页签消失；剩下两页时页签条保留（用户在它们之间切换仍然需要）。
+  var visibleTabs = tabs.filter(function (entry) { return !tabHidden('automation', entry.id) })
+  if (visibleTabs.length === 0) visibleTabs = tabs.slice()
+  tabs = visibleTabs
   var selected = tabs.find(function (entry) { return entry.id === tab }) || tabs[0]
   return createElement('div', { 'data-cha-section': '' },
     createElement('div', { className: 'tabs', role: 'tablist', 'aria-label': dshT('自动化'),

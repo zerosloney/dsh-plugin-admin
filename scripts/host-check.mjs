@@ -33,12 +33,88 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
+/**
+ * Delete a temp tree that may contain a directory LINK (symlink or Windows
+ * junction).
+ *
+ * Why not a plain `rmSync(root, {recursive: true, force: true})`: a recursive
+ * rm on a tree holding a junction is not portable. Node's own implementation
+ * handles it, but an environment that shims `fs.rm` (this repo has been run
+ * under one) can abort the whole operation with "Some operations were
+ * aborted", which fails the GATE rather than the assertion — a red step that
+ * says nothing about the plugin. Removing the link FIRST (unlink on a link
+ * never touches its target) leaves a plain directory tree behind, so the
+ * recursive delete afterwards has nothing exotic to walk.
+ * @param {string} root
+ * @param {readonly string[]} [links] - link paths inside `root`, if known.
+ */
+/**
+ * Remove a directory LINK (symlink / Windows junction) without recursing into
+ * its target. Returns whether the path is now free.
+ *
+ * A junction is a reparse point, not a directory: a non-recursive `rmSync`
+ * leaves it behind, and the next `symlinkSync` on the same path answers EEXIST
+ * — the gate passes once and fails on every rerun. `unlinkSync` is the correct
+ * primitive, but a host with a shimmed fs may refuse it too; that is reported
+ * as "not free" so the caller can skip rather than fail.
+ * @param {string} path
+ * @returns {boolean} true when nothing occupies the path afterwards.
+ */
+function clearJunction(path) {
+  try {
+    if (!existsSync(path)) return true
+    if (lstatSync(path).isSymbolicLink()) unlinkSync(path)
+    else rmSync(path, { recursive: true, force: true })
+    return true
+  } catch {
+    return !existsSync(path)
+  }
+}
+
+function removeTreeWithLinks(root, links = []) {
+  for (const link of links) {
+    try {
+      if (existsSync(link) && lstatSync(link).isSymbolicLink()) unlinkSync(link)
+    } catch { /* best effort: the recursive delete below is the fallback */ }
+  }
+  try {
+    rmSync(root, { recursive: true, force: true })
+  } catch (error) {
+    // A shimmed rm can still refuse; the assertions have already run, so a
+    // leftover temp directory must not turn a green gate red. Report it and
+    // move on — `.host-check-tmp` is gitignored and recreated every run.
+    console.warn(`host-check: could not remove ${root} (${error instanceof Error ? error.message : String(error)}) — leaving it in place`)
+  }
+}
+
 // Every apply() call in this script mounts a command-hook fs.watch; collect
 // each mount's effect disposers so the final cleanup can release them all —
 // a live watcher on a since-deleted temp dir wedges the drain on Windows.
 const globalEffectDisposers = []
 
-const { apply, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows, shouldIgnoreScripts, withInstallScriptsPolicy, scrubbedPnpmEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
+const { apply: applyRaw, resolvePluginConfig, warnUnknownConfigKeys, VALIDATED_CONFIG_KEYS, PASSTHROUGH_CONFIG_KEYS, Config, localSpecPath, assertPnpmOperand, pnpmSpawnArgs, sessionLogDirFor, encodeSegmentOf, projectKeyOf, scrubbedProbeEnv, escapeCmdArg, compareSemver, bundleComposingRowIds, upsertDisableRows, removeDisableRows, shouldIgnoreScripts, withInstallScriptsPolicy, scrubbedPnpmEnv } = await import(new URL('../lib/index.js', import.meta.url).href)
+
+/**
+ * apply() ends by opening a child fiber for the RPC surface —
+ * `ctx.inject(['typert'], cb)` (lib/index.js; vendor/cordis registry.ts:300).
+ * A fake ctx without it throws, so every mount below goes through this wrapper,
+ * which adds the minimal faithful stub: Cordis runs the callback on a child
+ * context that resolves the named services; here the callback runs on the same
+ * ctx, so a spread fake ctx still answers `this[name]` from its own properties.
+ * The stub is installed in place (not copied) so `ctx.provided` assertions keep
+ * observing the very object that was mounted.
+ * @param {Record<string, any>} ctx - the fake context to mount on.
+ * @param {Record<string, any>} [config] - the raw Loader row.
+ * @returns {any} apply()'s return value.
+ */
+function apply(ctx, config) {
+  if (typeof ctx.inject !== 'function') {
+    ctx.inject = function (names, cb) {
+      return cb(this)
+    }
+  }
+  return applyRaw(ctx, config)
+}
 const { assertRevealablePath } = await import(new URL('../lib/workspace-path.js', import.meta.url).href)
 const { isRegistryInstallSpec, assertInstallSpecAllowed } = await import(new URL('../lib/plugin-admin.js', import.meta.url).href)
 
@@ -119,14 +195,19 @@ const fakeCtx = {
     if (typeof dispose === 'function') globalEffectDisposers.push(dispose)
   },
   // Real shape: services resolve through ctx.get(). `workspaceRegistry` is
-  // optional (web-app only) — this deployment has one. `subagents` is the
-  // workflow mount's hard gate (applyWorkflowAdmin early-returns without it,
-  // taking all twelve workflow endpoints out of the descriptor), so it must
-  // resolve here or the workflow surface silently goes untested.
-  get: (name) => {
-    if (name === 'workspaceRegistry') return fakeCtx.workspaceRegistry
+  // optional (web-app only) — this deployment has one. `subagents` gates the
+  // workflow *execution* path only: applyWorkflowAdmin keeps its descriptors
+  // without it (an early return would drop all twelve workflow endpoints from
+  // the descriptor, which on a real host 404s every workflowAdmin call), so this
+  // stub exercises the mounted-and-usable shape rather than a degraded one.
+  // `function` + this[name], not an arrow closing over fakeCtx: several blocks
+  // below mount `{ ...fakeCtx, typert: <own collector> }`, and an arrow would
+  // keep answering with the SHARED stub (which admits one registration per
+  // process), colliding with the legacy mount. this[name] reads the ctx the
+  // mount was actually given — what real Cordis does.
+  get: function (name) {
     if (name === 'subagents') return subagentsStub
-    return undefined
+    return this[name]
   },
   // project-agents / project-hooks listen on agent lifecycle events; the
   // host-check only needs the registration to be observable, the listeners
@@ -451,7 +532,11 @@ assert.deepEqual(nextState?.archivedSessionIds, ['session-stays'],
     provided: {},
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: () => () => {},
     typert: { register: () => () => {} },
     sessionPersistence: {
@@ -488,7 +573,11 @@ assert.deepEqual(nextState?.archivedSessionIds, ['session-stays'],
     provided: {},
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: () => () => {},
     typert: { register: () => () => {} },
     sessionPersistence: {
@@ -528,7 +617,7 @@ const listCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'workspaceRegistry' ? listCtx.workspaceRegistry : undefined),
+  get: function (name) { return ((name === 'workspaceRegistry' ? listCtx.workspaceRegistry : undefined)) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -612,7 +701,11 @@ let registryOnlyMounted = false
     provided: {},
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d); return d },
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: (name, fn) => () => {},
     typert: { register: () => () => {} },
     workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
@@ -877,7 +970,7 @@ assert.throws(() => assertRevealablePath(revealableFile + '"', 'reveal'), /contr
 // and the resolved UNC handed to explorer verbatim.
 if (process.platform === 'win32') {
   const localJunction = join(here, '..', '.host-check-tmp', 'reveal-gate-junction')
-  rmSync(localJunction, { force: true })
+  clearJunction(localJunction)
   symlinkSync(join(here, '..', '.host-check-tmp', 'reveal-gate'), localJunction, 'junction')
   try {
     assert.equal(
@@ -895,16 +988,29 @@ if (process.platform === 'win32') {
   // The refusal itself needs a junction that RESOLVES to a UNC spelling here —
   // an admin share may be visible yet not resolvable in this context (null
   // session, hardened loopback). Probe honestly; skip when unexercisable.
+  //
+  // The junction creation itself is also environment-dependent: a host whose
+  // fs is shimmed may refuse to unlink a reparse point, leaving the path taken
+  // so the next `symlinkSync` answers EEXIST. That is a broken ENVIRONMENT,
+  // not a broken gate — treat it like the "cannot resolve" case (skip with a
+  // reason) instead of failing the step for something the plugin never does.
   const uncJunction = join(here, '..', '.host-check-tmp', 'reveal-gate-unc-junction')
-  rmSync(uncJunction, { force: true })
-  symlinkSync('\\\\127.0.0.1\\C$\\Windows', uncJunction, 'junction')
   let resolvedUnc = null
+  let uncJunctionReady = clearJunction(uncJunction)
+  if (uncJunctionReady) {
+    try {
+      symlinkSync('\\\\127.0.0.1\\C$\\Windows', uncJunction, 'junction')
+      const resolved = realpathSync(uncJunction)
+      if (resolved.startsWith('\\\\') || resolved.startsWith('//')) resolvedUnc = resolved
+    } catch (error) {
+      uncJunctionReady = false
+      console.log(`  (skip: this host cannot create the junction→UNC fixture (${error.code ?? 'error'}) — the refusal case cannot be exercised)`)
+    }
+  } else {
+    console.log('  (skip: a stale junction fixture could not be removed on this host — the refusal case cannot be exercised)')
+  }
   try {
-    const resolved = realpathSync(uncJunction)
-    if (resolved.startsWith('\\\\') || resolved.startsWith('//')) resolvedUnc = resolved
-  } catch { /* not resolvable in this context */ }
-  try {
-    if (resolvedUnc !== null) {
+    if (uncJunctionReady && resolvedUnc !== null) {
       assert.throws(
         () => assertRevealablePath(uncJunction, 'reveal'),
         /network share/,
@@ -914,8 +1020,7 @@ if (process.platform === 'win32') {
       console.log('  (skip: the local admin share does not resolve to a UNC path here — the junction→UNC reveal case cannot be exercised)')
     }
   } finally {
-    try { unlinkSync(uncJunction) } catch { /* already gone */ }
-    try { rmSync(uncJunction, { force: true, recursive: true }) } catch { /* the cleanup sweep is the backstop */ }
+    clearJunction(uncJunction)
   }
 }
 // A path on ANOTHER DRIVE with no registry is still accepted: reveal is a
@@ -959,7 +1064,11 @@ const missingDirCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1005,7 +1114,11 @@ const statThrowsCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1057,7 +1170,11 @@ try {
     provided: {},
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: (name, fn) => () => {},
     typert: { register: () => () => {} },
     workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
@@ -1077,7 +1194,10 @@ try {
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME
   else process.env.DSH_HOME = originalHome
-  rmSync(symlinkHome, { recursive: true, force: true })
+  // The junction the assertion is ABOUT must be unlinked before the recursive
+  // delete: a shimmed fs.rm aborts on it and fails the gate for the wrong
+  // reason (see removeTreeWithLinks).
+  removeTreeWithLinks(symlinkHome, [linkedDir])
 }
 
 /* --------------- archive() validates session existence ---------------
@@ -1090,7 +1210,7 @@ const archiveCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'workspaceRegistry' ? archiveCtx.workspaceRegistry : undefined),
+  get: function (name) { return ((name === 'workspaceRegistry' ? archiveCtx.workspaceRegistry : undefined)) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1124,7 +1244,7 @@ const brokenCtx = {
  provided: {},
  provide: function (key, service) { this.provided[key] = service },
  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
- get: (name) => (name === 'workspaceRegistry' ? brokenCtx.workspaceRegistry : undefined),
+ get: function (name) { return ((name === 'workspaceRegistry' ? brokenCtx.workspaceRegistry : undefined)) || this[name] },
  on: (name, fn) => () => {},
  typert: { register: () => () => {} },
  workspaceRegistry: {
@@ -1154,18 +1274,28 @@ await assert.rejects(
 
 
 /* --------- apply() probes the persistence seam at mount ---------
- * A dsh version that drops list/stat/open must fail the plugin mount loudly
- * (mirroring the registry write-path probe above) instead of breaking every
- * session-admin call on first use.
+ * A dsh build that drops a member (list / stat / open) must NOT take the whole
+ * plugin down: apply() warns once and leaves the session-admin namespace
+ * failing loudly per call. It used to THROW here, which turned one moved member
+ * into "the whole plugin does not load" — the exact contradiction this release
+ * removed (inject is empty now; see lib/host-seams.js).
  */
+const brokenPersistenceWarnings = []
 const brokenPersistenceCtx = {
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  logger: { info: () => {}, warn: (message) => brokenPersistenceWarnings.push(String(message)), error: () => {} },
   baseUrl: pathToFileURL(join(here, '..')).href,
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+  // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+  // even when the property face below is a faithful stub. Resolve from the ctx's
+  // own properties, which is exactly what real Cordis does.
+  get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
+  // A private no-op typert: this probe only needs the mount to SUCCEED, and the
+  // shared stub below rejects a second registration of the same remote package
+  // (the plugin registers "dsh-plugin-admin" exactly once per process here).
   typert: { register: () => () => {} },
   workspaceRegistry: {
     list: () => [],
@@ -1178,7 +1308,19 @@ const brokenPersistenceCtx = {
     open: async () => ({ read: async () => [], close: async () => {} }),
   },
 }
-assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing members \[stat\]/, 'mount fails loudly on a partial persistence API')
+apply(brokenPersistenceCtx)
+assert.ok(brokenPersistenceCtx.provided?.sessionAdmin, 'a partial persistence face still mounts the plugin (per-panel degrade, not a mount failure)')
+assert.ok(
+  brokenPersistenceWarnings.some((message) => /session persistence missing members \[stat\]/.test(message)),
+  'the mount-time warning names the missing member',
+)
+const { requireSeamMembers } = await import(new URL('../lib/host-seams.js', import.meta.url).href)
+const fencedPersistence = requireSeamMembers(brokenPersistenceCtx, 'sessionPersistence', ['list', 'stat', 'open'], 'session-admin')
+await assert.rejects(
+  async () => fencedPersistence.stat('any-session'),
+  /missing member "stat"/,
+  'the call site names the missing member instead of throwing a bare TypeError on undefined',
+)
 
 /* -------- CLI / headless: no workspaceRegistry, plugin still mounts --------
  * `@deepseek-ai/dsh-workspace` is a web-app-only row, so a hard inject would
@@ -1195,7 +1337,11 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
     // No workspaceRegistry service at all (the CLI/headless shape).
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: (name, fn) => () => {},
     typert: { register: () => () => {} },
     sessionPersistence: {
@@ -1256,7 +1402,11 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
         provided: {},
         provide: (key, service) => { if (key === 'sessionAdmin') sessionSvc = service },
         effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-        get: () => undefined,
+        // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
         on: () => () => {},
         typert: { register: () => () => {} },
         sessionPersistence: {
@@ -1297,7 +1447,11 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
       provided: {},
       provide: function (key, service) { if (key === 'sessionAdmin') provided = service },
       effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-      get: () => undefined,
+      // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
       on: () => () => {},
       typert: { register: () => () => {} },
       sessionPersistence: {
@@ -1459,7 +1613,11 @@ assert.throws(() => apply(brokenPersistenceCtx), /session persistence missing me
     provided: {},
     provide: function (key, service) { this.provided[key] = service },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-    get: () => undefined,
+    // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
     on: () => () => {},
     typert: { register: () => () => {} },
     workspaceRegistry: {
@@ -1491,7 +1649,11 @@ const cacheCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1543,7 +1705,11 @@ const summaryFailureCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1580,7 +1746,7 @@ const becomingLiveCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => name === 'sessions' ? { get: (id) => liveAfterStat.get(id) } : undefined,
+  get: function (name) { return (name === 'sessions' ? { get: (id) => liveAfterStat.get(id) } : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -1626,9 +1792,9 @@ const agentsOnlyCtx = {
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
   // The session is live in `agents` ONLY — the exact window this guards.
-  get: (name) => name === 'agents'
+  get: function (name) { return (name === 'agents'
     ? { get: (id) => (id === 'session-agents-only' ? { session: { id } } : undefined) }
-    : name === 'sessions' ? { get: () => undefined } : undefined,
+    : name === 'sessions' ? { get: () => undefined } : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
@@ -1664,7 +1830,7 @@ const idempotentCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => name === 'sessions' ? { get: () => undefined } : undefined,
+  get: function (name) { return (name === 'sessions' ? { get: () => undefined } : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
@@ -1696,7 +1862,7 @@ const driftCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => name === 'sessions' ? { get: () => undefined } : undefined,
+  get: function (name) { return (name === 'sessions' ? { get: () => undefined } : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
@@ -1736,7 +1902,11 @@ const mcpCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   registry: {
@@ -2009,7 +2179,11 @@ const legacyCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2051,7 +2225,11 @@ const placeholderCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2238,7 +2416,9 @@ const scratchRoot = join(here, '../.host-check-tmp')
 if (existsSync(scratchRoot)) {
   for (const entry of readdirSync(scratchRoot)) {
     if (entry === 'dsh-home') continue
-    rmSync(join(scratchRoot, entry), { recursive: true, force: true })
+    // Through the link-aware helper: a leftover junction fixture from the
+    // reveal gate must not abort the sweep (a shimmed fs.rm refuses it).
+    removeTreeWithLinks(join(scratchRoot, entry))
   }
 }
 
@@ -2273,13 +2453,13 @@ const closeCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'sessions'
+  get: function (name) { return (name === 'sessions'
     ? { get: (id) => liveSessions.get(id) }
     : name === 'agents'
       ? fakeAgents
       : name === 'workspaceRegistry'
         ? closeCtx.workspaceRegistry
-        : undefined),
+        : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2316,13 +2496,13 @@ const noHandleCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: (name) => (name === 'sessions'
+  get: function (name) { return (name === 'sessions'
     ? { get: (id) => liveNoHandle.get(id) }
     : name === 'agents'
       ? fakeAgents
       : name === 'workspaceRegistry'
         ? noHandleCtx.workspaceRegistry
-        : undefined),
+        : undefined) || this[name] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2356,7 +2536,11 @@ const closeNonLiveCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2381,6 +2565,16 @@ assert.ok(!existsSync(closeNonLiveDir), 'closeSession on a non-live session remo
  * delete paths snapshot BEFORE the log goes, and a session missing from the
  * live read comes back flagged `deleted: true` with its last known numbers.
  */
+/* Every ledger assertion below starts from "no rows", and the ledger path is
+ * derived from $DSH_HOME. Deleting the file between sections used to be how
+ * that was arranged — but whether `rmSync` actually removes a file is an
+ * ENVIRONMENT property (this repo has been run under an fs shim that refuses
+ * some deletes), and when it silently failed the gate inherited the previous
+ * run's 14 rows and reported "the sweep records the session it found: 14 !== 1".
+ * A fresh home per section makes the precondition a fact instead of a hope. */
+const usageHome = mkdtempSync(join(tmpdir(), 'host-check-ledger-'))
+const originalUsageHome = process.env.DSH_HOME
+process.env.DSH_HOME = usageHome
 const usageHeader = { id: 'session-usage', cwd: 'E:/Demo/usage-project', createdAt: 1 }
 let usageHeaders = [{ header: usageHeader, revision: 'r-usage' }]
 const usageCtx = {
@@ -2389,7 +2583,11 @@ const usageCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2413,13 +2611,15 @@ const usageCtx = {
   },
 }
 apply(usageCtx)
-const ledgerPath = join(chaHome, 'usage-ledger.json')
-rmSync(ledgerPath, { force: true })
+const ledgerPath = join(usageHome, 'usage-ledger.json')
+// Not needed (the home is new) but kept as the contract statement: this section
+// assumes an empty ledger, and asserts it rather than trusting the filesystem.
+assert.ok(!existsSync(ledgerPath), 'the ledger section starts from an empty ledger (fresh $DSH_HOME)')
 
 const usageFirst = await usageCtx.provided.sessionAdmin.usageReport()
 assert.equal(usageFirst.rows.length, 1, 'the live session yields one dashboard row')
 assert.equal(usageFirst.rows[0].project, 'usage-project', 'the project falls back to the cwd basename')
-assert.equal(usageFirst.rows[0].input, 1000, 'the folded input tokens reach the dashboard')
+assert.equal(usageFirst.rows[0].input, 1000, 'the folded input tokens reach the dashboard (no projection cache on this ctx)')
 assert.equal(usageFirst.rows[0].cacheRead, 200, 'cache reads are accounted too')
 assert.equal(usageFirst.rows[0].deleted, false, 'a live row is not flagged deleted')
 assert.equal(usageFirst.retained, 0)
@@ -2442,6 +2642,89 @@ assert.equal(storedLedger.entries[0].deleted, true, 'the on-disk row is flagged 
 assert.equal(storedLedger.entries[0].output, 50, 'output tokens persist to disk')
 rmSync(ledgerPath, { force: true })
 
+/* ---------- P1-B: the official tokenUsage projection outranks the log fold ----------
+ * The dashboard's numbers used to come from folding assistant/message usage out
+ * of the log — a SECOND implementation of arithmetic the host already does in
+ * its token-meter projection. The host's is authoritative (it owns the bucket
+ * definitions and sees the whole log, not our scan cap), so it must win when it
+ * has a value, and the fold must remain the fallback when it does not.
+ */
+{
+  // One session id per case: the derived-summary cache is module-level and
+  // keyed by id, so reusing one id would let case (a)'s row answer case (b).
+  const makeProjCtx = (tokenUsage, sessionId) => {
+    const projHeader = { id: sessionId, cwd: 'E:/Demo/proj-project', createdAt: 1 }
+    return ({
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    baseUrl: pathToFileURL(join(here, '..')).href,
+    provided: {},
+    provide: function (key, service) { this.provided[key] = service },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+    get: function (seam) {
+      if (seam === 'sessionProjectionCache') {
+        return {
+          cachedSnapshot: () => ({ values: { title: '投影标题', tokenUsage } }),
+        }
+      }
+      return this[seam]
+    },
+    on: (name, fn) => () => {},
+    typert: { register: () => () => {} },
+    workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+    sessionPersistence: {
+      list: async () => [{ header: projHeader, revision: 'r-proj' }],
+      stat: async (id) => (id === sessionId ? { header: projHeader, revision: 'r-proj', sizeBytes: null } : undefined),
+      open: async () => ({
+        read: async () => ({
+          eventState: 'shared-frozen',
+          events: [
+            // The LOG says 1000 input / 50 output — deliberately different from
+            // the projection below, so "which one won" is observable.
+            { type: 'assistant/message', data: { usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 } } },
+          ],
+        }),
+        close: async () => {},
+      }),
+    },
+    })
+  }
+
+  // All three cases share one ledger file, so a row must be selected BY ID:
+  // `rows[0]` would be whichever session the previous case wrote first.
+  const rowOf = async (ctx, sessionId) => {
+    const report = await ctx.provided.sessionAdmin.usageReport()
+    const row = report.rows.find((entry) => entry.id === sessionId)
+    assert.ok(row !== undefined, `usage row for ${sessionId} present (saw ${report.rows.map((r) => r.id).join(',')})`)
+    return row
+  }
+
+  // (a) Projection present → its numbers, not the log's.
+  const projectedCtx = makeProjCtx({ uncachedInputTokens: 7777, outputTokens: 888, cacheReadTokens: 9, cacheWriteTokens: 3 }, 'session-proj-a')
+  apply(projectedCtx)
+  const projectedRow = await rowOf(projectedCtx, 'session-proj-a')
+  assert.equal(projectedRow.input, 7777, 'the official tokenUsage projection supplies the dashboard input (not the log fold)')
+  assert.equal(projectedRow.output, 888, 'and the output bucket')
+  assert.equal(projectedRow.cacheRead, 9, 'and cache reads')
+  assert.equal(projectedRow.cacheWrite, 3, 'and cache writes')
+
+  // (b) Projection present but empty (all four zero) → the LOG decides. An
+  // all-zero projection means "nothing recorded yet", which must not be
+  // reported as a measured zero-token session.
+  const emptyProjCtx = makeProjCtx({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, 'session-proj-b')
+  apply(emptyProjCtx)
+  const emptyProjRow = await rowOf(emptyProjCtx, 'session-proj-b')
+  assert.equal(emptyProjRow.input, 1000, 'an all-zero projection is not a measurement — the log fold still answers')
+
+  // (c) No projection cache at all → the fold, unchanged (the pre-P1-B path;
+  // also covered by the usage assertions above).
+  const noProjCtx = makeProjCtx(undefined, 'session-proj-c')
+  noProjCtx.get = function (seam) { return this[seam] }
+  apply(noProjCtx)
+  const noProjRow = await rowOf(noProjCtx, 'session-proj-c')
+  assert.equal(noProjRow.input, 1000, 'without the projection cache the log fold is the answer')
+}
+rmSync(ledgerPath, { force: true })
+
 /* ------------- usage ledger background sweep (no dashboard needed) -------------
  * The dashboard read is opportunistic, so a session deleted before anyone
  * opened the panel still lost its tokens. The sweep folds the whole session
@@ -2461,7 +2744,11 @@ const sweepCtx = {
     if (typeof d === 'function') { sweepDisposers.push(d); globalEffectDisposers.push(d) }
     return d
   },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -2521,7 +2808,11 @@ const observeCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d); return d },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => {
     const list = eventListeners.get(name) ?? []
     list.push(fn)
@@ -2593,7 +2884,12 @@ const retainedRow = retainedReport.rows.find((row) => row.id === 'session-live')
 assert.equal(retainedRow.deleted, true, 'a vanished protected session is flagged deleted by the read')
 assert.equal(retainedRow.input, 1500, 'and keeps the observer-owned totals')
 assert.equal(retainedReport.retained, 1)
-rmSync(ledgerPath, { force: true })
+// Close the ledger section: restore the shared temp home and drop the private
+// one. (Deletion is best-effort for the same reason as removeTreeWithLinks —
+// a shimmed fs may refuse, and a leftover temp dir is not a gate failure.)
+if (originalUsageHome === undefined) delete process.env.DSH_HOME
+else process.env.DSH_HOME = originalUsageHome
+removeTreeWithLinks(usageHome)
 
 /* ------------------- pluginAdmin.checkUpdates -------------------
  * The registry fetch is injected (fetchLatestVersion takes the registry base
@@ -2762,7 +3058,11 @@ const updateCtx = {
   provided: {},
   provide: function (key, service) { this.provided[key] = service },
   effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
-  get: () => undefined,
+  // The plugin reads every host service through ctx.get() (inject is empty; see
+    // lib/host-seams.js), so a fake ctx whose get() answers nothing blinds the mount
+    // even when the property face below is a faithful stub. Resolve from the ctx's
+    // own properties, which is exactly what real Cordis does.
+    get: function (seam) { return this[seam] },
   on: (name, fn) => () => {},
   typert: { register: () => () => {} },
   workspaceRegistry: {
@@ -3029,6 +3329,132 @@ await assert.rejects(() => ua.setEnabled('dsh-plain-tool', true), /未声明 bun
 
 rmSync(join(here, '../.host-check-tmp/updates'), { recursive: true, force: true })
 registryServer.close()
+
+/* ------------------- P1-A: delegation to the host plugin manager -------------------
+ * When dsh ships `ctx.pluginManager`, the write verbs go THERE instead of our own
+ * pnpm/patch path — the host owns its pinned package manager, its compatibility
+ * gate and its build-approval flow. Two things must hold, and neither is
+ * observable from a passing gate that only exercises one route:
+ *   1. a present manager is actually CALLED, with the right verb and flag polarity;
+ *   2. an absent (or partially-shaped) manager falls back to the local path
+ *      instead of throwing — sdk-minimal and headless profiles have no manager.
+ */
+{
+  const { pluginManagerOf, pluginManagerHas, delegatedOutcome, isFailureOutcome, DELEGATION_MEMBERS } =
+    await import(new URL('../lib/plugin-manager-bridge.js', import.meta.url).href)
+
+  // Pure layer: probing.
+  assert.equal(pluginManagerOf({ get: () => undefined }), null, 'a ctx without pluginManager yields null (fallback)')
+  assert.equal(pluginManagerOf({ get: () => { throw new Error('cannot get property "pluginManager" without inject') } }), null,
+    'a Cordis scope-guard throw reads as "not available", not as a crash')
+  assert.equal(pluginManagerHas(null, DELEGATION_MEMBERS.install), false, 'a null service is never delegable')
+  assert.equal(pluginManagerHas({ installBundle: () => {} }, DELEGATION_MEMBERS.install), true, 'a fully shaped service is delegable')
+  assert.equal(pluginManagerHas({ removeBundle: () => {} }, DELEGATION_MEMBERS.install), false,
+    'a service missing the needed verb is not delegable (a partial manager must not fail mid-operation)')
+
+  // Pure layer: outcome normalization + the failure vocabulary.
+  const applied = delegatedOutcome({ changed: true, application: 'applied', stage: 'install', target: 'x', version: '2.0.0' }, 'install')
+  assert.equal(applied.delegated, true)
+  assert.equal(applied.application, 'applied')
+  assert.equal(applied.compat, null, 'a delegated install reports no compat verdict (the host already gated it)')
+  assert.ok(applied.output.includes('2.0.0'), 'the summary carries the host-reported version')
+  assert.equal(isFailureOutcome('applied'), false)
+  assert.equal(isFailureOutcome('overridden'), false, 'overridden is a fact to show, not a failure to throw')
+  assert.equal(isFailureOutcome('failed'), true)
+  assert.equal(isFailureOutcome('cancelled'), true)
+
+  // Service layer: a present manager is called, and the panel answer keeps its shape.
+  const delegateProfile = join(here, '../.host-check-tmp/delegate/profile')
+  const delegatePkg = join(delegateProfile, 'node_modules/dsh-delegate-tool')
+  mkdirSync(delegatePkg, { recursive: true })
+  writeFileSync(join(delegatePkg, 'package.json'), JSON.stringify({
+    name: 'dsh-delegate-tool', version: '1.0.0',
+    dsh: { bundle: { patch: 'cordis.patch.yml' } },
+  }, null, 2), 'utf8')
+  writeFileSync(join(delegatePkg, 'cordis.patch.yml'), '- insert:\n    - id: delegate-tool\n      name: dsh-delegate-tool\n', 'utf8')
+  {
+    const manifestPath = join(delegateProfile, 'package.json')
+    const manifest = { name: 'delegate-profile', dependencies: {}, dsh: { profile: { bundles: [] } } }
+    manifest.dependencies['dsh-delegate-tool'] = '^1.0.0'
+    manifest.dsh.profile.bundles.push('dsh-delegate-tool')
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+  }
+
+  /** Build a ctx whose pluginManager records its calls. */
+  const delegateCtx = (manager) => {
+    const auditEntries = []
+    const ctx = {
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      baseUrl: pathToFileURL(delegateProfile).href,
+      provided: {},
+      provide: function (key, service) { this.provided[key] = service },
+      effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+      get: function (seam) {
+        if (seam === 'pluginManager') return manager
+        return this[seam]
+      },
+      on: () => () => {},
+      typert: { register: () => () => {} },
+      workspaceRegistry: { list: () => [], archivedSessionIds: [], unarchiveSession: async () => {} },
+      sessionPersistence: { list: async () => [], stat: async () => undefined, open: async () => ({ read: async () => [], close: async () => {} }) },
+    }
+    return { ctx, auditEntries }
+  }
+
+  // (a) setEnabled delegates with the INVERTED flag.
+  {
+    const calls = []
+    const manager = {
+      setBundleEnabled: async (name, enabled) => { calls.push({ name, enabled }); return { changed: true, application: 'applied', stage: 'enable', target: name } },
+    }
+    const { ctx } = delegateCtx(manager)
+    apply(ctx, { usageSnapshotIntervalMs: 0 })
+    const answer = await ctx.provided.pluginAdmin.setEnabled('dsh-delegate-tool', true)
+    assert.equal(calls.length, 1, 'a present pluginManager actually receives the toggle')
+    assert.deepEqual(calls[0], { name: 'dsh-delegate-tool', enabled: false },
+      'our `disabled: true` maps to the host\'s `enabled: false` (the polarity must not invert silently)')
+    assert.equal(answer.ok, true, 'the delegated answer keeps the panel contract (`ok`)')
+    assert.equal(answer.state, 'applied', 'and reports the host outcome as `state`')
+    assert.ok(Array.isArray(answer.rows), 'and still carries the re-read layer projection (`rows`)')
+    assert.equal(answer.delegated, true, 'the answer says it was delegated')
+  }
+
+  // (b) A FAILED host outcome throws (the panel must not show success).
+  {
+    const manager = {
+      setBundleEnabled: async (name) => ({ changed: false, application: 'failed', stage: 'enable', target: name, error: { code: 'plugin-manager/x', message: 'nope' } }),
+    }
+    const { ctx } = delegateCtx(manager)
+    apply(ctx, { usageSnapshotIntervalMs: 0 })
+    await assert.rejects(() => ctx.provided.pluginAdmin.setEnabled('dsh-delegate-tool', true), /could not disable/,
+      'a host `failed` outcome surfaces as an error instead of a fake success')
+  }
+
+  // (c) `overridden` does NOT throw: the change applied, something above wins.
+  {
+    const manager = {
+      setBundleEnabled: async (name) => ({ changed: true, application: 'overridden', stage: 'enable', target: name, warnings: ['a higher patch row wins'] }),
+    }
+    const { ctx } = delegateCtx(manager)
+    apply(ctx, { usageSnapshotIntervalMs: 0 })
+    const answer = await ctx.provided.pluginAdmin.setEnabled('dsh-delegate-tool', true)
+    assert.equal(answer.state, 'overridden', '`overridden` is reported, not thrown')
+    assert.ok(answer.output.includes('a higher patch row wins'), 'the host warning rides along in the summary')
+  }
+
+  // (d) NO manager → the local patch path still runs (the fallback is real).
+  {
+    const { ctx } = delegateCtx(null)
+    apply(ctx, { usageSnapshotIntervalMs: 0 })
+    const answer = await ctx.provided.pluginAdmin.setEnabled('dsh-delegate-tool', true)
+    assert.equal(answer.state, 'applied', 'without a host manager the local profile-patch path still applies the toggle')
+    assert.equal(answer.delegated, undefined, 'the fallback answer is not marked delegated')
+    const patchText = readFileSync(join(delegateProfile, 'cordis.patch.yml'), 'utf8')
+    assert.ok(patchText.includes('disabled: true'), 'the fallback really wrote the disable row')
+  }
+
+  rmSync(join(here, '../.host-check-tmp/delegate'), { recursive: true, force: true })
+}
 
 // resolveNpmRegistry honors the env override.
 process.env.npm_config_registry = 'https://registry.example.com'
@@ -3298,4 +3724,4 @@ delete process.env.DSH_HOME
 const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
-console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger; reconcileBundles keeps bundles whose exports omit ./package.json (prune loop does not excise them, join loop still adds them')
+console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed) + official tokenUsage projection outranks the log fold (and an all-zero projection does not); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger; reconcileBundles keeps bundles whose exports omit ./package.json (prune loop does not excise them, join loop still adds them')

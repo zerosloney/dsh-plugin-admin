@@ -288,7 +288,7 @@ export function WebSearchSection(props) {
   // ---------- Render ----------
   var elements = []
   elements.push(createElement('div', { className: 'hint', key: 'restart-banner',
-    style: { background: 'var(--dsw-alias-bg-layer-2)', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4))' } },
+    style: { background: 'var(--dsw-alias-bg-layer-2, #fff)', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4))' } },
     // 纯文本渲染（本面板无 markdown 层）：不写 ** 标记，星号会以字面出现。
     dshT('🔁 切换 provider / 安装 / 卸载 后需重启 dsh 生效；⚙ 配置里带 settings 命名空间的 provider 保存后即时生效，写 cordis 行的需重启'),
   ))
@@ -381,7 +381,11 @@ export function WebSearchSection(props) {
     elements.push(createElement('div', {
       className: 'card',
       key: 'ws-' + p.id,
-      style: { borderColor: isActive ? 'var(--dsw-alias-border-strong, rgba(120,120,200,0.6))' : undefined },
+      // 上游没有 `--dsw-alias-border-strong` 这个 token：packages/client/ui-theme/src/styles/
+      // design-platform.css 的浅色/深色别名表只声明了 border-l1..l4（浅色 :191-195、
+      // 深色 :314-318），全仓 grep 该名字零命中。激活卡片要的就是"最重的一档描边"，
+      // 因此换成真实存在的 border-l4；裸色兜底保留，宿主没注入主题时仍能看见选中态。
+      style: { borderColor: isActive ? 'var(--dsw-alias-border-l4, rgba(120,120,200,0.6))' : undefined },
     },
       createElement('div', { className: 'card-header', key: 'h' },
         createElement('span', { className: 'card-title', key: 'title-row' }, radioChildren),

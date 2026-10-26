@@ -4,7 +4,7 @@
 
 ## 1. 总体形态
 
-插件分两半，**零 dsh 导入**是一切的前提：宿主半与浏览器半都不 `import` 任何 `@deepseek-ai/dsh-*` 包，全部骑运行时的 Cordis Context（按服务键取服务 + 纯数据 typert 注册），这样插件才能跨 dsh 版本可活。降级是**分层**的：六个硬依赖服务（`typert` / `sessionPersistence` / `tools` / `subagents` / `commands` / `shell`，经 `inject` 声明）任一缺失时**整个插件不加载**（cordis 的 inject 等待语义，与 COMPAT.md「版本策略」的口径一致——不存在半可用状态）；在此之上，经 `ctx.get` 动态取的**可选**服务（`workspaceRegistry` / `webServer` / `jobs` / `webhookRuntime` / `sandboxPolicy` / agents 捕获等）才逐面板降级。
+插件分两半，**宿主半零 dsh 导入**是一切的前提：`lib/**` 不 `import` 任何 `@deepseek-ai/dsh-*` 包，全部骑运行时的 Cordis Context（按服务键取服务 + 纯数据 typert 注册）；浏览器半只复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的原子组件（经 `external` 用宿主那份实例，不打包副本），其余同样只走 Context。这样插件才能跨 dsh 版本可活。降级是**逐面板**的：`inject` 为空，六个宿主服务（`typert` / `sessionPersistence` / `tools` / `subagents` / `commands` / `shell`）与其余可选服务（`workspaceRegistry` / `webServer` / `jobs` / `webhookRuntime` / `sandboxPolicy` / agents 捕获等）一律经 `ctx.get` 在用的时候探测：缺哪个就只让用到它的面板/操作不可用并告警一次（`requireSeam` 给具名错误，而不是 Cordis 那句 `cannot get property "x" without inject`），**绝不整插件不加载**。这也是插件能在 `dsh-sdk-minimal` 这类没有 `typert`/`subagents`/`commands`/`shell` 的骨骼里挂载的前提。
 
 - **宿主半** `lib/*.js`：直接入库、无构建步骤。14 个管理 RPC 命名空间在 `lib/index.js` 底部的单次 `ctx.typert.register()` 发布，描述符由 `lib/rpc-manifest.js` 单一真相表生成（见 §6）。
 - **浏览器半** `src/client/` → 构建产物 `lib/client.js`（Phase B1 起）+ 懒加载面板 chunk `lib/client.panels.js`（Phase B2 起）：
@@ -13,7 +13,7 @@
 |---|---|
 | `src/client/index.js` | 入口：导出 `apply` 与 `inject`（dsh 模块加载器只读这两个键；`loadPanels` 随行导出供测试挂载面板 chunk） |
 | `src/client/impl.js` | slot 装配（即时注册 + 首次渲染时拉取面板 chunk 的包装器）、locale 运行时绑定与共享辅助函数（经 `configure()` 递给面板 chunk） |
-| `src/client/panels.js` | 十一个面板的实现，自成 chunk：主 bundle 只注册 slot，面板代码在设置页首次打开时按需加载（首屏 −80%） |
+| `src/client/panels/` | 十一个面板的实现，自成 chunk：主 bundle 只注册 slot，面板代码在设置页首次打开时按需加载（首屏 −80%）。**入口包的 150 KB 上限是构建期断言**（`scripts/build-client.mjs` 的 `ENTRY_BUDGET_BYTES`，v1.30 起），不再是 CHANGELOG 里的一句目标——超限即构建失败，所以「达成 ≤150 KB」可以被机器复核而不是靠人记 |
 | `src/client/native-coverage.js` | 官方覆盖探测表 + 自动让位策略（Phase E）：官方 UI 补齐的能力自动隐藏对应面板，localStorage `dsh-admin-panels` 可强制开关 |
 | `src/client/i18n.js` | 中英文案表与 `dshT()` |
 | `src/client/styles.js` | 四组注入样式与各自的一次性安装函数 |
@@ -27,11 +27,11 @@ npm run build:client -- --check # 校验产物与源码一致（npm test 会跑�
 
 ## 2. 写回、并发与降级
 
-所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（失败开放 / 过期回收），临界区在预算内完成的常态下双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒即 fail-open 继续写——「拒绝写入比丢更新更糟」的既定取舍；只有多实例并发写同一 profile 时才会出现这短暂停顿，单实例部署无争用。fail-open 是这条声明的边界而非例外条款：持锁方的临界区若被巨大 patch 文件 + AV 扫描/慢盘拖过 3 秒预算，或者两个竞争者对同一第三方持锁者同时超时，就会以 last-writer-wins 丢一次更新（temp+rename 仍保证文件不撕）。该锁在**本进程内可重入**：同文件嵌套调用直接执行，既不烧这 3 秒预算、也不提前释放外层仍需持有的锁——与「跨进程争用」是两条互不重叠的路径（前者是"我们已经持有"，后者是"别人持有"）。过期回收只认 ESRCH 这一种**确凿**的死亡证据：Windows 上 `process.kill(pid, 0)` 探 `System` / `csrss` / `wininit` / `services` 一律抛 EPERM（进程活着、只是无权发信号），把它读成死亡等于偷掉活锁。
+所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（默认失败关闭 / 过期回收；只有显式传 `{onTimeout:'proceed'}` 的调用点才失败开放），临界区在预算内完成的常态下双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒，随后**默认拒绝**这次写入——抛 `lockWaitTimeout`，报错点名锁文件、持锁 pid 与重试/清锁办法；只有多实例并发写同一 profile 时才会走到这条路径，单实例部署无争用。失败关闭是这条声明的边界而非例外条款：持锁方的临界区若被巨大 patch 文件 + AV 扫描/慢盘拖过 3 秒预算，本次操作以可读的等待超时失败、由用户或上层重试，而不是以 last-writer-wins 静默丢一次更新（temp+rename 仍保证文件不撕）；显式 opt-in 的失败开放只保留给「主错误已在传播、拒绝会掩盖诊断」的收尾路径（安装失败后的补丁回滚），且每个锁路径只 `emitWarning` 一次。该锁在**本进程内可重入**：同文件嵌套调用直接执行，既不烧这 3 秒预算、也不提前释放外层仍需持有的锁——与「跨进程争用」是两条互不重叠的路径（前者是"我们已经持有"，后者是"别人持有"）。过期回收只认 ESRCH 这一种**确凿**的死亡证据：Windows 上 `process.kill(pid, 0)` 探 `System` / `csrss` / `wininit` / `services` 一律抛 EPERM（进程活着、只是无权发信号），把它读成死亡等于偷掉活锁。
 
 一个刻意的例外：**会话删除/关停不在这条队列上，而是走一把模块内互斥锁**（`lib/session-admin.js` 的 `makeOperationMutex`）。它们**不能**入共享队列——删除序列里的用量台账写入（`usageLedger.upsert`）本身就入该队列，从队列槽位内部再入队会永久等待（已实测：嵌套 `serial()` 按构造即死锁）。互斥锁提供真正需要的那条性质（同一 id 的并发删除、删除与关停之间串行，活跃/包含性校验紧邻 `rm`），台账写入仍留在共享队列上。
 
-依赖的 dsh 服务缺失时**逐面板降级**提示，绝不整插件不加载。改动 profile 配置的操作（插件安装/卸载/启停、MCP 新增/删除、Web 搜索、Webhook 运行时、overlay 启用）需重启 dsh 生效；例外是 MCP 已挂载条目的**编辑**（见 §3）。
+宿主半在依赖的 dsh 服务缺失时**逐面板降级**提示、绝不整插件不加载（`inject` 为空，见 §1）；浏览器半仍是全有或全无：`slots` / `connection` 任一缺失 entry 不激活，dsh web 会把整个界面判为启动失败页。改动 profile 配置的操作（插件安装/卸载/启停、MCP 新增/删除、Web 搜索、Webhook 运行时、overlay 启用）需重启 dsh 生效；例外是 MCP 已挂载条目的**编辑**（见 §3）。
 
 ## 3. 面板机制细节
 
@@ -73,7 +73,7 @@ TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工
 命令保存即实时注册（fs.watch），会话里输入 `/名称 <输入>` 使用；JSON 导出/导入批量迁移（同名跳过）。钩子编辑 hooks.json 保存即热重启桥（写入与停用 sidecar `hooks.disabled.json` 同走**跨进程文件锁**，双实例共享 profile 时不再 last-writer-wins——这是钩子对补丁/JSON 店锁纪律的补齐）；「停用」移入 hooks.disabled.json；桥三态横幅（未安装 → ⚡ 安装并挂载 → 重启）；Codex 兄弟桥同页第二条状态条。项目 hooks 与官方 hooks 桥共用同一默认超时（单钩子 10 分钟，dsh 官方 hook 协议默认值；可用 hooks 配置里的 `timeout` 按钩子覆盖）——若干挂起的钩子会串行拖慢当前轮次，可用轮次取消中断。
 
 ### 🤖 定时任务（自动化 · 第一页签）
-**宿主级**语义：dsh 进程存活期间到点即触发，与任何会话无关（区别于 `dsh-schedule` 的会话级 every 语义；其 every 下限随 dsh 版本为 300s——旧版——或 60s——`MIN_EVERY_INTERVAL_SECONDS` 已下调的新版）。结构化频率编辑器（每小时 / 每天 / 每周 / 自定义）实时回显合成表达式；五字段语法支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`。
+**宿主级**语义：dsh 进程存活期间到点即触发，与任何会话无关。**注意不要把这条差异说成「官方是会话级」**——那是过时说法：`dsh-schedule` 的 `catalog` 读的是全量宿主任务、存储持久、`ui-schedule` 也有 cron 编辑页。仍然成立的唯一差异是 `create(sessionId, request)` **必须绑定会话**，所以「无会话绑定的任务」没有官方路径（详见 `docs/COMPAT.md` 的矩阵与 `lib/cron-admin.js` 的模块注释）。结构化频率编辑器（每小时 / 每天 / 每周 / 自定义）实时回显合成表达式；五字段语法支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`。
 
 调度细节：任务存 `~/.dsh/cron-tasks.json`（原子写 + fs.watch 镜像，面板外的编辑在 300ms 防抖窗口内进入镜像；存在但解析失败的文件先改名 `.corrupt` 留证再按空表继续，下一次写入不再销毁损坏现场）；每任务一个 timer，触发前重读**内存镜像**并复核到点时刻（timer 有上限 clamp，稀疏计划可能被提前唤醒，此时只重新挂表不执行）；插件卸载 / dsh 退出清理全部 timer；**进程停止期间到期的任务不补投**，恢复后重算下一个未来时刻（按本地墙钟推进：秋令时回拨日重复的墙钟分钟只投一次，与 POSIX cron 的投两次行为不同，属接受的偏差）。「▶ 立即触发」走与定时触发完全相同的路径。create 模式与 Webhook 共用 `@deepseek-ai/dsh-webhook` 运行时（先在 Webhook 页签安装并挂载 → 重启）：投递经 webhook 同款 `runRule` 管线——每次触发复核 workspacePath 信任与 preset 预解析，失败落进 cron 历史而不是只进宿主日志。**create 模式的 `ok:true` 表示「派发已受理」而非「会话已建成」**：`runtime.dispatch` 在回调落定前即返回，真实结果（信任复核、会话创建）随 runtime 规则的 run() 落历史行——steer 模式才是同步真结果。已知边界（接受）：触发按进程各自执行——两个 dsh 实例共享一个 `$DSH_HOME` 时同一任务每个实例各投一次（webhook 的盘上去重不覆盖 cron）；cron 的受支持形态是每 home 单实例。
 
@@ -108,7 +108,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 **会话工作区是不可信检出**，因此 git 子进程照抄宿主 GitRunner 的纪律：环境里注入 `GIT_CONFIG_COUNT=0`（忽略启动环境里的 `GIT_CONFIG_KEY_n` 注入）、`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0` 并剔除 `GIT_EXTERNAL_DIFF`；每次调用前置 `-c core.fsmonitor=false -c core.untrackedCache=false`——仓库自带的 `core.fsmonitor` 会让 `status`/`diff` 刷新索引时**执行任意命令**，是 `--no-ext-diff/--no-textconv` 覆盖不到的通道。
 
 ### 🌐 i18n
-面板文案内置简体/English 双语，**接在 dsh 自己的语言服务上**（`ctx.locale`）：工具栏 🌐 切换的是整个界面的语言，面板即时重绘、无需刷新；宿主未提供该服务时回落到「跟随浏览器语言 + 中文原文兜底」，永不出坏。
+面板文案内置简体/English 双语，**唯一的真相源是 dsh 自己的语言服务**（`ctx.locale`）：插件不另存语言状态（不写自己的 localStorage 键，也不 `location.reload()`），工具栏 🌐 写入的就是宿主语言设置本身，面板订阅 locale 变化即时重绘；宿主没有这个服务时不出 🌐，文案按浏览器语言挑一份内置字典。
 
 ## 4. 可调配置键（插件 config 行）
 
@@ -197,7 +197,7 @@ npm test   # 5 道静态闸门 + 40 个脚本（self-check / host-check / 39 个
 
 - `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**148 条断言**，覆盖全部管理 RPC 命名空间、workflow 引擎接缝，以及三处「镜像宿主行为」的上游规则——插件准入门 `engines.dsh` 优先分支、tool-subagent 对 persona/toolFilter 的硬拒绝、GitRunner 的 git 环境纪律；条数以 `npm test` 输出为准）。
 - **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（**28 项断言**，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**21 次只读调用覆盖 13/14 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
-- `verify-service-injects.mjs` 静态扫描 `lib/**`，断言每一处直接的 `ctx.<service>` 读取都在 `inject` 声明里 —— 少了这一条，真实宿主会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见（`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着）。
+- `verify-service-injects.mjs` 静态扫描 `lib/**`：断言**没有任何模块直接读 `ctx.<service>` 属性**（那在服务缺失时会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见——`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着），并要求命中集合非空、shell 调用点只用当前动词。`inject` 为空（见 §1），所以每个服务读取都必须经 `lib/host-seams.js` 的 `ctx.get()` 并在缺失时降级；本闸门现在报「45 处可选接缝读取 / 40 个宿主文件」。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。
@@ -206,4 +206,4 @@ npm test   # 5 道静态闸门 + 40 个脚本（self-check / host-check / 39 个
 
 RPC 契约同源：`lib/rpc-manifest.js` 是唯一真相表（**91 方法 / 14 命名空间**；以 `host-check` 输出为准），模块描述符从表生成（`invocationsFor`），87 个参数 wire 挂 `mode: 'strict'` 由网关在边界校验（零依赖手写校验器 `lib/rpc-schema.js`）；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）。
 
-多版本矩阵：`npm run test:matrix` 对 pin 住的 dsh release 与 master 两档 checkout 跑同一套探针（无 checkout 记 SKIP；CI 的 `seam-matrix` 作业显式列出目录，让"无可探测"变成失败而不是绿色静默）。
+多版本矩阵：`npm run test:matrix` 对三档 checkout（验证基线 / 支持下限 / master 预警） 跑同一套探针（无 checkout 记 SKIP；CI 的 `seam-matrix` 作业显式列出目录，让"无可探测"变成失败而不是绿色静默）。

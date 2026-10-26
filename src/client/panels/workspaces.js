@@ -268,6 +268,35 @@ export function WorkspacesSection(props) {
     })
   }
 
+  // ---------- Reveal in the OS file manager ----------
+
+  /**
+   * Open one workspace directory in the system file manager.
+   *
+   * This replaces the sidebar context-menu item that used to do it: upstream
+   * exposes no workspace row-menu slot (only the SESSION row menu), so the DOM
+   * scraper that guessed the workspace from the hovered row is gone (B-1). Here
+   * the row itself carries the path, so nothing is guessed — the old
+   * title→path fuzzy resolution and its duplicate-title refusal disappear with
+   * it. `fsAdmin/reveal` is this plugin's own host RPC and path-gated
+   * server-side (lib/workspace-path.js), read-only.
+   * @param {string} path - the workspace directory.
+   */
+  function revealWorkspace(path) {
+    if (typeof path !== 'string' || path === '') {
+      patch({ error: dshT('❌ 打开失败：未找到工作区路径') })
+      return
+    }
+    call('fsAdmin/reveal', { path: path }).then(function (result) {
+      if (!alive.current) return
+      if (!(result && result.ok)) patch({ error: dshT('❌ 打开失败：') + messageOf(result && result.error) })
+      else patch({ error: '' })
+    }, function (err) {
+      if (!alive.current) return
+      patch({ error: dshT('❌ 打开失败：') + messageOf(err) })
+    })
+  }
+
   // ---------- Bulk archive ----------
 
   function bulkUnarchive() {
@@ -393,6 +422,10 @@ export function WorkspacesSection(props) {
     if (!isRenaming) {
       actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', key: 'btn-rename', onClick: function () { openRename(ws.workspaceId, ws.title) } }, dshT('✎ 重命名')))
       actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', key: 'btn-status', title: dshT('检查目录是否仍存在（不修改记录）'), onClick: function () { checkStatus(ws.workspaceId) } }, dshT('🔎 检查状态')))
+      // The sidebar context-menu item for this action is gone (upstream has no
+      // workspace row-menu slot — see revealWorkspace above); the panel row is
+      // its supported home and it already knows the exact path.
+      actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', key: 'btn-reveal', title: dshT('在资源管理器打开'), onClick: function () { revealWorkspace(ws.path) } }, dshT('📂 打开目录')))
       actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', key: 'btn-up', disabled: isFirst || state.busy, onClick: function () { moveUp(ws.workspaceId, i) } }, '⬆'))
       actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', key: 'btn-down', disabled: isLast || state.busy, onClick: function () { moveDown(ws.workspaceId, i) } }, '⬇'))
       actionChildren.push(createElement(UiButton, { variant: 'outline', size: 'sm', className: 'danger', key: 'btn-del', onClick: function () { askDelete(ws.workspaceId) } }, isDeleting ? '✕' : dshT('删除')))

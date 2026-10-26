@@ -35,8 +35,12 @@
  *      suite that really prints that count — the numbers are read back from the
  *      verifier's own summary line, not retyped;
  *   5. the documented config-key counts equal `resolvePluginConfig`'s tables;
- *   6. the plugin version strings in README.md and docs/COMPAT.md equal the
- *      package.json version (release commits must move all three together);
+ *   6. the plugin version strings in README.md, README.en.md and docs/COMPAT.md
+ *      equal the package.json version, AND the dsh verification baseline /
+ *      support floor the two READMEs state equal docs/COMPAT.md's version
+ *      policy (release commits must move every one of them together — the
+ *      English README was the surface nobody checked, so it silently sat two
+ *      releases and one baseline behind);
  *   7. the documented RPC surface ("N 方法 / M 命名空间") equals
  *      `RPC_MANIFEST`'s real namespace/method counts.
  *
@@ -255,12 +259,17 @@ check('the documented validated/passthrough config counts match lib/index.js', (
 
 /* ── 6. the plugin version strings equal the package version ───────────────── */
 
+/** A plain release triple, optionally a prerelease tag (0.2.1-rc.2). */
+const VERSION = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?`
+
 check('README/COMPAT 的插件版本串等于 package.json version', () => {
   const version = JSON.parse(read('package.json')).version
   assert.ok(typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version), `package.json version is not a plain release triple: ${JSON.stringify(version)}`)
   for (const [file, pattern] of [
     // The npm badge line: "… · v1.27.5 · MIT · …"
     ['README.md', /·\s*v(\d+\.\d+\.\d+)\s*·\s*MIT/],
+    // The same badge in the English README: "… · v1.27.5 · MIT · supports …"
+    ['README.en.md', /·\s*v(\d+\.\d+\.\d+)\s*·\s*MIT/],
     // The COMPAT header: "… · 插件 v1.27.5。"
     ['docs/COMPAT.md', /插件\s*v(\d+\.\d+\.\d+)\s*[。.]/],
   ]) {
@@ -268,6 +277,77 @@ check('README/COMPAT 的插件版本串等于 package.json version', () => {
     assert.ok(match !== null, `${file} 没有可解析的插件版本串（期望 v${version}）`)
     assert.equal(match[1], version, `${file} 写的是 v${match[1]}，package.json 是 ${version} —— 发版时三处（含 package.json）一起改`)
   }
+})
+
+/**
+ * The first version-like token within 80 characters after `label`, or null.
+ * A window rather than one exact sentence: the README badges wrap the value in
+ * bold/plain markup differently per language ("验证基线 **X**" vs
+ * "verification baseline **X**"), and the claim is the VALUE, not the styling.
+ */
+function versionAfter(text, label) {
+  const at = text.indexOf(label)
+  if (at === -1) return null
+  const match = new RegExp(`(${VERSION})`).exec(text.slice(at + label.length, at + label.length + 80))
+  return match === null ? null : match[1]
+}
+
+check('README.md / README.en.md 的 dsh 基线与支持下限同 docs/COMPAT.md 一致', () => {
+  // docs/COMPAT.md 的版本策略头是基线/下限的事实源（两份 README 都指向它），
+  // 但 README 才是用户读到的那一行。只核插件版本会漏掉另一半：英文 README 曾经
+  // v1.27.0 + 基线 0.2.0-rc.1 双轴同时滞后，而闸门全绿。
+  const baseline = versionAfter(compat, '验证基线')
+  const floor = versionAfter(compat, '支持下限')
+  assert.ok(baseline !== null, 'docs/COMPAT.md 的版本策略头应声明「验证基线：dsh X」')
+  assert.ok(floor !== null, 'docs/COMPAT.md 的版本策略头应声明「支持下限：dsh ≥ Y」')
+  for (const [file, baselineLabel, floorLabel] of [
+    ['README.md', '验证基线', '支持 dsh'],
+    ['README.en.md', 'verification baseline', 'supports dsh'],
+  ]) {
+    const text = read(file)
+    const declaredBaseline = versionAfter(text, baselineLabel)
+    assert.ok(declaredBaseline !== null, `${file} 没有可解析的 dsh 验证基线（docs/COMPAT.md 是 ${baseline}）`)
+    assert.equal(declaredBaseline, baseline, `${file} 的验证基线是 ${declaredBaseline}，docs/COMPAT.md 是 ${baseline}`)
+    const declaredFloor = versionAfter(text, floorLabel)
+    assert.ok(declaredFloor !== null, `${file} 没有可解析的 dsh 支持下限（docs/COMPAT.md 是 ${floor}）`)
+    assert.equal(declaredFloor, floor, `${file} 的支持下限是 ${declaredFloor}，docs/COMPAT.md 是 ${floor}`)
+  }
+})
+
+check('CI 的 dsh pin 与 docs/COMPAT.md 的验证基线一致', () => {
+  // v1.31: the CI workflows and the compat doc had drifted apart without a
+  // single red gate — host-smoke, smoke-published and seam-early-warning all
+  // installed `@deepseek-ai/dsh@0.2.0-rc.1` while the declared verification
+  // baseline was `0.2.1-rc.2`. That is the worst shape of drift: the pipeline
+  // proves the plugin against a version the docs no longer claim, and the
+  // support floor gets exercised nowhere. A version string in a workflow is
+  // exactly as checkable as one in a README, so it is checked here.
+  const baseline = versionAfter(compat, '验证基线')
+  assert.ok(baseline !== null, 'docs/COMPAT.md 的版本策略头应声明「验证基线：dsh X」')
+  const workflows = readdirSync(join(here, '../.github/workflows'))
+    .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
+  assert.ok(workflows.length > 0, '.github/workflows should hold at least one workflow')
+  let pinned = 0
+  for (const name of workflows) {
+    const text = readFileSync(join(here, '../.github/workflows', name), 'utf8')
+    // Two shapes: the npm package install (`@deepseek-ai/dsh@<version>`) and the
+    // actions/checkout ref (`ref: dsh-v<version>`).
+    for (const match of text.matchAll(/@deepseek-ai\/dsh@(\d+\.\d+\.\d+[-\w.]*)/g)) {
+      pinned += 1
+      assert.equal(match[1], baseline,
+        `.github/workflows/${name} installs @deepseek-ai/dsh@${match[1]} but docs/COMPAT.md declares baseline ${baseline}`)
+    }
+    for (const match of text.matchAll(/ref:\s*dsh-v(\d+\.\d+\.\d+[-\w.]*)/g)) {
+      // The support floor is a legitimate second pin (it is the regression
+      // sentinel), so a ref may be the floor instead of the baseline.
+      const floor = versionAfter(compat, '支持下限')
+      if (floor !== null && match[1] === floor) continue
+      pinned += 1
+      assert.equal(match[1], baseline,
+        `.github/workflows/${name} checks out dsh-v${match[1]} but docs/COMPAT.md declares baseline ${baseline} (or the floor ${floor})`)
+    }
+  }
+  assert.ok(pinned > 0, 'at least one workflow should pin a dsh version — finding none means the scan broke')
 })
 
 /* ── 7. the documented RPC surface counts ─────────────────────────────────── */

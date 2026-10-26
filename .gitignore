@@ -11,6 +11,16 @@ out.txt
 .probe/
 *.tmp
 
+# Working papers, not product. `analysis/` holds the audit reports and the raw
+# gate/smoke logs from the review rounds, and `.screenshots/` is whatever the
+# last `npm run screenshots` run captured. Both are inputs to a decision that
+# already landed in CHANGELOG.md + docs/COMPAT.md, and the logs are large
+# process files. Keeping them out of the tree also keeps the doc gates honest:
+# they assert that paths NAMED in the docs exist, so a doc must not point at a
+# file that only exists on the machine that wrote it.
+analysis/
+.screenshots/
+
 # local dsh checkouts for the seam probe / version matrix (same paths CI checks
 # out — see .github/workflows/ci.yml)
 .dsh-checkout/

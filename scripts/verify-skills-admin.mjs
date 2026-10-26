@@ -14,7 +14,7 @@
  *  3b. A preset that no longer resolves is REPORTED, never silently downgraded;
  *     a preset-less deployment degrades to the cwd-only read as before.
  *  3c. The acquireScope lease is released after the read (and on a throwing
- *     read); a preset service with NEITHER route fails loud.
+ *     read); a preset service without acquireScope fails loud.
  *  4. A live session uses its Agent as the scope key AND its preset-scoped
  *     registry (`agentPresets.serviceFor(live, 'skills')`).
  *  5. Sessions sharing one (cwd, preset) collapse into a single registry read;
@@ -233,7 +233,7 @@ await checkAsync('3. session scopes resolve through observeSession + the preset 
     sessionQuery: { observeSession: async (id) => sessions[id] },
     agents: { get: (id) => (id === 'live-1' ? liveAgent : undefined) },
     agentPresets: {
-      standingKeyFor: async (preset) => ({ standing: preset }),
+      acquireScope: async (preset) => ({ key: { standing: preset }, [Symbol.asyncDispose]: async () => {} }),
       serviceFor: (agent, key) => (agent === liveAgent && key === 'skills' ? presetRegistry : undefined),
     },
   })
@@ -270,7 +270,7 @@ await checkAsync('3b. a preset that no longer resolves is REPORTED, never silent
     sessionQuery: { observeSession: async () => observationFor('/w/gone', 'deleted-preset') },
     agents: { get: () => undefined },
     agentPresets: {
-      standingKeyFor: async () => { throw new Error('agent-preset/not-found') },
+      acquireScope: async () => { throw new Error('agent-preset/not-found') },
     },
   })
   const view = await service.list(['s-gone'])
@@ -332,7 +332,7 @@ await checkAsync('3c. the acquireScope lease is released after the read; a host 
   })
   const routelessView = await routeless.service.list(['leased-1'])
   const failed = routelessView.scopes.find((s) => s.kind === 'session')
-  assert.ok(failed.error.includes('acquireScope') && failed.error.includes('standingKeyFor'), 'the missing routes are named')
+  assert.ok(failed.error.includes('acquireScope'), 'the missing route is named')
   assert.equal(routelessView.complete, false, 'a lost preset layer is never reported as complete')
 
   // No preset plane at all (CLI bundle): the cwd-only read stays the answer.
@@ -361,7 +361,7 @@ await checkAsync('4. a cold session scopes by the preset standing key against th
     skills: hostRegistry,
     sessionQuery: { observeSession: async () => observationFor('/w/cold', 'build') },
     agents: { get: () => undefined },
-    agentPresets: { standingKeyFor: async (preset) => ({ standing: preset }) },
+    agentPresets: { acquireScope: async (preset) => ({ key: { standing: preset }, [Symbol.asyncDispose]: async () => {} }) },
   })
   const view = await service.list(['cold-1'])
   assert.deepEqual(hostCalls, [{}, { cwd: '/w/cold', scope: { standing: 'build' } }], 'the scoped read carries cwd + the standing scope key')
@@ -382,7 +382,7 @@ await checkAsync('5. a throwing scope read is reported per scope and the roster 
     skills: registry,
     sessionQuery: { observeSession: async () => observationFor('/w/broken', 'build') },
     agents: { get: () => undefined },
-    agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
+    agentPresets: { acquireScope: async () => ({ key: { standing: 'build' }, [Symbol.asyncDispose]: async () => {} }) },
   })
   const view = await service.list(['s-broken'])
   assert.deepEqual(view.skills.map((s) => s.name), ['global-skill'], 'a failed scope does not sink the roster')
@@ -400,7 +400,7 @@ await checkAsync('6. complete:false propagates and the session cap warns', async
     skills: registry,
     sessionQuery: { observeSession: async () => observationFor('/w/all', 'build') },
     agents: { get: () => undefined },
-    agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
+    agentPresets: { acquireScope: async () => ({ key: { standing: 'build' }, [Symbol.asyncDispose]: async () => {} }) },
   })
   const many = Array.from({ length: 40 }, (_, index) => 'sess-' + String(index))
   const view = await service.list(many)
@@ -424,7 +424,7 @@ await checkAsync('7. one name seen from several scopes merges into ONE entry', a
     skills: registry,
     sessionQuery: { observeSession: async () => observationFor('/w/x', 'build') },
     agents: { get: () => undefined },
-    agentPresets: { standingKeyFor: async () => ({ standing: 'build' }) },
+    agentPresets: { acquireScope: async () => ({ key: { standing: 'build' }, [Symbol.asyncDispose]: async () => {} }) },
   })
   const view = await service.list(['s1'])
   assert.equal(view.skills.length, 1, 'the same name stays one card')
@@ -456,7 +456,7 @@ await checkAsync('8. every agent preset standing scope is read, default first, w
         { id: 'minimal', name: '极简模式' },
       ],
       selectionPolicy: () => ({ enabled: true, defaultId: 'cordis' }),
-      standingKeyFor: async (id) => ({ standing: id }),
+      acquireScope: async (id) => ({ key: { standing: id }, [Symbol.asyncDispose]: async () => {} }),
     },
   })
   const view = await service.list()
@@ -488,9 +488,9 @@ await checkAsync('8b. an unusable preset is REPORTED, the roster survives, and t
         { id: 'unreadable', broken: 'the composition file is missing' },
         { id: 'vanished' },
       ],
-      standingKeyFor: async (id) => {
+      acquireScope: async (id) => {
         if (id === 'vanished') throw new Error('agent-preset/not-found')
-        return { standing: id }
+        return { key: { standing: id }, [Symbol.asyncDispose]: async () => {} }
       },
     },
   })
@@ -512,7 +512,7 @@ await checkAsync('8b. an unusable preset is REPORTED, the roster survives, and t
   const manyPresets = Array.from({ length: 11 }, (_, index) => ({ id: 'p' + String(index), name: '预设' + String(index) }))
   const capped = mountHost({
     skills: registryStub(() => ({ complete: true, skills: [] })),
-    agentPresets: { list: async () => manyPresets, standingKeyFor: async (id) => ({ standing: id }) },
+    agentPresets: { list: async () => manyPresets, acquireScope: async (id) => ({ key: { standing: id }, [Symbol.asyncDispose]: async () => {} }) },
   })
   const cappedView = await capped.service.list()
   assert.equal(cappedView.scopes.filter((s) => s.kind === 'preset').length, 8, 'only the cap is read')

@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.2.0-rc.1
+          ref: dsh-v0.2.1-rc.2
           path: .dsh-release
           fetch-depth: 1
 
@@ -60,4 +60,9 @@ jobs:
           # An explicit list makes "nothing to probe" a failure, so a typo
           # here cannot pass as a green matrix (see scripts/check-matrix.mjs).
           DSH_CHECKOUTS: ${{ github.workspace }}/.dsh-release,${{ github.workspace }}/.dsh-main
+          # The whole point of this workflow is to REPORT master drift, so the
+          # master row must not fail the run — otherwise a daily red build trains
+          # everyone to ignore it, and the one real contract break hides in the
+          # noise. The pinned release row still fails normally.
+          DSH_EARLY_WARNING: .dsh-main
         run: npm run test:matrix

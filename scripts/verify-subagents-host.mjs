@@ -60,13 +60,13 @@ const BASE_PATCH = `# profile patch header comment
 
 const SPAWN = {
   name: 'spawn',
-  capabilities: { outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+  capabilities: { outputSchema: true, depthLimit: true, persona: true, toolFilter: true, agentPreset: true },
   prepareContinuable: async () => ({}),
   inheritsParentContext: false,
 }
 const FORK = {
   name: 'fork',
-  capabilities: { outputSchema: true, depthLimit: true, toolFilter: false, persona: false },
+  capabilities: { outputSchema: true, depthLimit: true, persona: false, toolFilter: false, agentPreset: false },
   inheritsParentContext: false,
 }
 const PROVIDERS = new Map([['spawn', SPAWN], ['fork', FORK]])
@@ -340,8 +340,8 @@ await check('apply(): mount, list, upsert, remove, history, backup, atomicity', 
     assert.ok(initial.meta.tools.some(tool => tool.name === 'read'), 'runtime tools in candidates')
     assert.ok(initial.meta.tools.some(tool => tool.name === 'todo_write'), 'seed tools in candidates')
     assert.deepEqual(initial.meta.providers.map(provider => provider.name), ['spawn', 'fork'])
-    assert.equal(initial.meta.providers[0].capabilities.persona, true)
-    assert.equal(initial.meta.providers[1].capabilities.persona, false)
+    assert.equal(initial.meta.providers[0].capabilities.agentPreset, true)
+    assert.equal(initial.meta.providers[1].capabilities.agentPreset, false)
     assert.equal(initial.meta.providers[0].continuable, true)
 
     const runtime = await service.runtimeList()
@@ -769,7 +769,7 @@ await check('createCliCommandProvider: {prompt} argv, completed/error/aborted ma
   })
   assert.equal(provider.name, 'cli-gemini')
   assert.equal(provider.inheritsParentContext, false)
-  assert.equal(provider.capabilities.persona, false)
+  assert.deepEqual(provider.capabilities, { agentOptions: false, agentPreset: false, outputSchema: false, depthLimit: false })
 
   const run = await provider.start({ prompt: [{ type: 'text', text: '研究一下' }], signal: new AbortController().signal })
   const result = await run.result

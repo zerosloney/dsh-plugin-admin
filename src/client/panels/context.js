@@ -33,8 +33,13 @@ export var dshT = function (s) { return s }
 /** @type {(s: string) => string} */
 export var i18nSource = function (s) { return s }
 
-/** @type {(lang: string) => void} */
-export var setAdminLang = function () {}
+/** @type {(lang: string) => boolean} */
+export var setAdminLang = function () { return false }
+
+/** Whether the shell exposes its own language switch (the panels never keep a
+ * private one). False on a mount whose locale service does not offer it.
+ * @type {() => boolean} */
+export var canSwitchLanguage = function () { return false }
 
 /** @type {() => string} */
 export var currentLanguage = function () { return 'zh' }
@@ -74,6 +79,16 @@ export var downloadTextFile = function () {}
 export var panelHidden = function () { return false }
 
 /**
+ * Tab-level twin of `panelHidden`, for a panel that stays registered while an
+ * official surface retires ONE of its tabs (自动化's cron tab once ui-schedule
+ * is mounted — Webhook and 工作流 have no official page, so the panel cannot
+ * yield wholesale). `true` = that tab must not render. Read at render time, so
+ * a late host answer re-renders; unconfigured mounts show every tab.
+ * @type {(panel: string, tab: string) => boolean}
+ */
+export var tabHidden = function () { return false }
+
+/**
  * Adopt the main bundle's helpers. Called once, before any panel renders.
  * @param {Record<string, any>} env - the shared helper bag.
  */
@@ -89,6 +104,7 @@ export function configure(env) {
   if (typeof env.dshT === 'function') dshT = env.dshT
   if (typeof env.i18nSource === 'function') i18nSource = env.i18nSource
   if (typeof env.setAdminLang === 'function') setAdminLang = env.setAdminLang
+  if (typeof env.canSwitchLanguage === 'function') canSwitchLanguage = env.canSwitchLanguage
   if (typeof env.currentLanguage === 'function') currentLanguage = env.currentLanguage
   if (typeof env.baseName === 'function') baseName = env.baseName
   if (typeof env.formatDate === 'function') formatDate = env.formatDate
@@ -99,4 +115,5 @@ export function configure(env) {
   if (typeof env.copyTextSilently === 'function') copyTextSilently = env.copyTextSilently
   if (typeof env.downloadTextFile === 'function') downloadTextFile = env.downloadTextFile
   if (typeof env.panelHidden === 'function') panelHidden = env.panelHidden
+  if (typeof env.tabHidden === 'function') tabHidden = env.tabHidden
 }

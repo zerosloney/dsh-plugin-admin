@@ -2,6 +2,11 @@
 # half provides both `pluginAdmin` and `sessionAdmin` remotes through the typert
 # registry; the browser half renders the modern tabbed management panel
 # (Plugins & Sessions) and calls the remotes over the /api RPC gateway.
+# The row id IS the package name: Loader row ids share ONE global namespace and
+# an id-targeted override (`- id: … / disabled: true`) hits whichever row
+# carries it, so a bare `plugin-admin` id can be captured by any other bundle
+# that chose the same short name (upstream: packages/boot/app-boot/src/index.ts
+# "One entry per row id"; plugin-manager patch.ts writes overrides by id).
 - insert:
-    - id: plugin-admin
+    - id: dsh-plugin-admin
       name: dsh-plugin-admin

@@ -194,7 +194,11 @@ await check('mounts workflowAdmin service with full method set', async () => {
   assert.deepEqual(paramsOf('resumeRun'), ['runId', 'spec'])
 })
 
-await check('degrades gracefully without subagents', async () => {
+await check('keeps its descriptors when subagents is not mounted yet', async () => {
+  // 本插件 inject 为空、挂载早于 subagents 的提供者时，`ctx.get('subagents')` 在
+  // 挂载瞬间就是 undefined。若此时提前返回，workflowAdmin 的描述符会从网关注册
+  // 表里消失——真宿主上每调必 404（smoke:real-host 的 "not found" 即此）。所以
+  // 契约是：**描述符照发**，只有执行路径（每次 run 自己重读 ctx.get）降级。
   const home = join(tmpBase, 'i')
   const logs = []
   const ctx = {
@@ -205,8 +209,20 @@ await check('degrades gracefully without subagents', async () => {
     logger: { warn: (m) => logs.push(m) },
   }
   const invocations = applyWorkflowAdmin(ctx, { enqueue, dshHome: home })
-  assert.deepEqual(invocations(), [], 'no descriptors when degraded')
-  assert.ok(logs.some((m) => /workflow engine disabled/.test(m)), 'warns about degradation')
+  const declared = invocations()
+  assert.ok(declared.length > 0, 'descriptors still declared without subagents')
+  assert.ok(
+    declared.some((d) => String(d.id).includes('listRuns')),
+    'listRuns reaches the gateway even with no subagents service',
+  )
+  assert.ok(
+    logs.some((m) => /ctx\.subagents not active yet/.test(m)),
+    'warns that runs stay unavailable',
+  )
+  assert.ok(
+    !logs.some((m) => /workflow engine disabled/.test(m)),
+    'does not claim the engine is disabled — it is only unavailable until the service mounts',
+  )
 })
 
 await check('startRun resolves parent from agents registry', async () => {

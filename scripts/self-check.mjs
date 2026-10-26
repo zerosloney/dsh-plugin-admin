@@ -162,8 +162,17 @@ const setHookState = (patch) => {
   ctx.hookList = { ...(ctx.hookList ?? mockHookPayload), ...patch }
   return ctx.hookList
 }
+/** Every line the plugin logs through ctx.logger, so the mount-time coverage
+ * report can be asserted instead of assumed (v1.30.1: `notes` was produced but
+ * never logged).
+ * @type {string[]} */
+const loggedLines = []
 const ctx = {
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  logger: {
+    info: (line) => { loggedLines.push(String(line)) },
+    warn: () => {},
+    error: () => {},
+  },
   inject: undefined, // webhook admin tolerates a missing inject face
   effect: (fn) => {
     // The real runtime registers the disposer; the mock runs it immediately
@@ -449,22 +458,23 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Twelve slot contributions: the SIX plugins-page tabs inside the shell-owned
+// Eleven slot contributions: the SIX plugins-page tabs inside the shell-owned
 // 插件 section (扩展插件 20, 技能 30, MCP服务器 40, 子智能体 50, 命令 60,
 // 钩子 70), the standalone Web 搜索 / 用量仪表盘 / 定时任务 / Webhook 触发 /
-// 工作流 settings sections, and the 待办清单 dock above the composer. Neither
+// 工作流 settings sections, the 待办清单 dock above the composer, and the
+// session-row delete item in the sidebar list slot. Neither
 // the Codex bridge (a banner inside the 钩子 tab) nor the Agent preset editor
 // (the shell's own ui-agent-preset section owns that roster) gets a section of
 // its own — and 历史会话 + Web 搜索 share ONE standalone nav entry, Web 与会话
 // (工作区 has no plugin surface anywhere any more: dsh covers it natively).
-assert.equal(injectedSections.length, 10, 'ten slot contributions injected')
+assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section'],
-  'injections wait on settings.section (×3), settings.plugins.tab (×6), and conversation.input.dock',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
+  'injections wait on settings.section (×3), settings.plugins.tab (×6), conversation.input.dock, and the session-row menu list',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 10, 'ten registrations: extensions + skills + MCP + subagents + commands + hooks + automation tabs + web search + usage dashboard + todo dock')
+assert.equal(registeredSections.length, 11, 'eleven registrations: extensions + skills + MCP + subagents + commands + hooks + automation tabs + web search + usage dashboard + todo dock + session-row delete item')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
 assert.ok(byId.extensions && byId.skills && byId['mcp-servers'] && byId['subagent-admin'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['web-sessions'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化, 历史会话 + Web 搜索 inside Web 与会话)')
@@ -992,237 +1002,86 @@ host.remove()
 const mcpRoot = await mountSection(mcpSection)
 assert.ok(document.body.textContent.includes('MCP 配置'), 'MCP section renders')
 
-// 10. Menu popup injection: when a div[role="menu"] with session items
-// appears in document.body, the MutationObserver injects "删除会话".
-// The mock data has a non-live, archived session 's1' titled '分析与重构插件系统架构'.
-// Build a fake session menu popup matching the Menu component's DOM structure.
-const sessionMenu = document.createElement('div')
-sessionMenu.setAttribute('role', 'menu')
-sessionMenu.style.position = 'fixed'
-sessionMenu.style.left = '100px'
-sessionMenu.style.top = '100px'
-const viewport = document.createElement('div')
-viewport.setAttribute('role', 'presentation')
-// Add existing session menu items (as the workspace bundle would render them)
-const renameBtn = document.createElement('button')
-renameBtn.setAttribute('role', 'menuitem')
-renameBtn.textContent = '重命名'
-viewport.appendChild(renameBtn)
-const forkBtn = document.createElement('button')
-forkBtn.setAttribute('role', 'menuitem')
-forkBtn.textContent = '分支'
-viewport.appendChild(forkBtn)
-const archiveBtn = document.createElement('button')
-archiveBtn.setAttribute('role', 'menuitem')
-archiveBtn.textContent = '归档会话'
-viewport.appendChild(archiveBtn)
-sessionMenu.appendChild(viewport)
-// Create a fake treeitem row for the session (needed by findSessionRow->matchSessionByRow)
-const sessionTree = document.createElement('div')
-sessionTree.setAttribute('role', 'tree')
-const sessionGroup = document.createElement('div')
-const fakeSessionRow = document.createElement('div')
-fakeSessionRow.setAttribute('role', 'treeitem')
-fakeSessionRow.setAttribute('aria-selected', 'true')
-const fakeSessionTitle = document.createElement('span')
-fakeSessionTitle.className = 'YDXeBa_title'
-fakeSessionTitle.textContent = '分析与重构插件系统架构'
-fakeSessionRow.appendChild(fakeSessionTitle)
-const anchorBtn = document.createElement('button')
-anchorBtn.setAttribute('aria-label', '会话"分析与重构插件系统架构"的操作')
-anchorBtn.setAttribute('type', 'button')
-fakeSessionRow.appendChild(anchorBtn)
-sessionGroup.appendChild(fakeSessionRow)
-sessionTree.appendChild(sessionGroup)
-document.body.appendChild(sessionTree)
+// 10. Session-row "..." menu: the delete row is a SLOT contribution
+// (`sidebar.workspaces.session.menu.item`, kind list, scope root), not a DOM
+// scraper. The slot owner hands the entry the row's `sessionId` and
+// `displayTitle` as props, so there is no geometry guessing, no title matching
+// and no ambiguity case to resolve — the exact id arrives as a prop, which is
+// why the old "two sessions with one title" test has no successor here.
+const menuEntry = byId['plugin-admin.delete-session']
+assert.ok(menuEntry !== undefined, 'the session-row delete item is registered on the shell slot')
+assert.equal(menuEntry.options.name, 'sidebar.workspaces.session.menu.item', 'delete item targets the session-row menu list')
+assert.equal(menuEntry.options.order, 460, 'delete item sorts after the shell 归档会话 row (order 400)')
+const menuFace = menuEntry.options.inject()
+assert.equal(typeof menuFace.call, 'function', 'menu item inject face carries the RPC call')
+assert.ok('refreshSessions' in menuFace, 'menu item inject face carries the sidebar refresh hook')
 
-// Give the observer a chance to process and the cache to populate
-await new Promise((resolve) => setTimeout(resolve, 60))
-
-// Now add the menu popup to trigger injection
-document.body.appendChild(sessionMenu)
-await new Promise((resolve) => setTimeout(resolve, 60))
-
-assert.ok(document.body.textContent.includes('删除会话'), 'menu popup injection: 删除会话 appears in the session menu')
-assert.ok(sessionMenu.querySelector('[data-dsh-admin-injected]'), 'injected item has the data-dsh-admin-injected marker')
-// Verify the separator was added
-assert.ok(sessionMenu.querySelector('[role="separator"][data-dsh-admin-injected]'), 'separator injected before the delete item')
-
-// Two-step confirm on the injected delete item: the first click arms it
-// (relabel), and only the second click fires the RPC — against the single
-// session whose title matches the clicked row exactly.
-const deleteItem = [...sessionMenu.querySelectorAll('button')]
-  .find((b) => b.textContent?.includes('删除会话'))
-assert.ok(deleteItem !== undefined, 'delete menu item present')
-deleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-assert.ok(deleteItem.textContent.includes('再点一次'), 'first click arms the delete item')
-assert.equal((ctx.deletes ?? []).length, 0, 'armed click fires no RPC')
-deleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-await new Promise((resolve) => setTimeout(resolve, 40))
-assert.deepEqual(ctx.deletes, ['s1'], 'second click deletes the exact-title session')
-assert.ok(document.body.textContent.includes('会话已删除'), 'delete success toast shown')
-
-// Cleanup
-document.body.removeChild(sessionMenu)
-
-document.body.removeChild(sessionTree)
-
-// 10b. Ambiguity refusal: two same-title sessions behind the RPC must
-// never pick a victim — both clicks stay RPC-free and the error toast
-// points at the management panel instead.
-ctx.deletes.length = 0
-ctx.sessionListOverride = [
-  { id: 'dup-a', cwd: 'E:\\Demo\\dup-a', createdAt: 1_000, archived: false, live: false, title: '重名会话', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-  { id: 'dup-b', cwd: 'E:\\Demo\\dup-b', createdAt: 2_000, archived: false, live: false, title: '重名会话', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-]
-const dupTree = document.createElement('div')
-dupTree.setAttribute('role', 'tree')
-const dupRow = document.createElement('div')
-dupRow.setAttribute('role', 'treeitem')
-const dupTitle = document.createElement('span')
-dupTitle.textContent = '重名会话'
-dupRow.appendChild(dupTitle)
-const dupAnchor = document.createElement('button')
-dupAnchor.setAttribute('aria-label', '会话"重名会话"的操作')
-dupAnchor.setAttribute('type', 'button')
-dupRow.appendChild(dupAnchor)
-dupTree.appendChild(dupRow)
-document.body.appendChild(dupTree)
-const dupMenu = document.createElement('div')
-dupMenu.setAttribute('role', 'menu')
-const dupViewport = document.createElement('div')
-dupViewport.setAttribute('role', 'presentation')
-const dupArchiveBtn = document.createElement('button')
-dupArchiveBtn.setAttribute('role', 'menuitem')
-dupArchiveBtn.textContent = '归档会话'
-dupViewport.appendChild(dupArchiveBtn)
-dupMenu.appendChild(dupViewport)
-await new Promise((resolve) => setTimeout(resolve, 40))
-document.body.appendChild(dupMenu)
-await new Promise((resolve) => setTimeout(resolve, 60))
-const dupDeleteItem = [...dupMenu.querySelectorAll('button')]
-  .find((b) => b.textContent?.includes('删除会话'))
-assert.ok(dupDeleteItem !== undefined, 'duplicate-title menu still gets the delete item')
-dupDeleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-dupDeleteItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-await new Promise((resolve) => setTimeout(resolve, 40))
-assert.equal(ctx.deletes.length, 0, 'ambiguous title never deletes')
-assert.ok(document.body.textContent.includes('同名会话'), 'ambiguity error toast shown')
-delete ctx.sessionListOverride
-document.body.removeChild(dupMenu)
-document.body.removeChild(dupTree)
-
-// 10c. 复制会话 ID: a newer session whose title is a SUPERSET of the clicked
-// row's title must not shadow the exact match. list() is newest-first, so the
-// old first-match loop hit "重构-v2" (listed earlier, contains "重构") and
-// copied ITS id for a right-click on "重构" — and every id consumer
-// (delete/export/health) is exact-match, so the wrong id silently acted on
-// the wrong session with no error anywhere.
-ctx.sessionListOverride = [
-  { id: 'newer-sub', cwd: 'E:\\Demo\\v2', createdAt: 2_000, archived: false, live: false, title: '重构方案 v2', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-  { id: 'exact-id', cwd: 'E:\\Demo\\v1', createdAt: 1_000, archived: false, live: false, title: '重构方案', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-]
-const fuzzyTree = document.createElement('div')
-fuzzyTree.setAttribute('role', 'tree')
-const fuzzyRow = document.createElement('div')
-fuzzyRow.setAttribute('role', 'treeitem')
-const fuzzyAnchor = document.createElement('button')
-fuzzyAnchor.setAttribute('aria-label', '会话"重构方案"的操作')
-fuzzyAnchor.setAttribute('type', 'button')
-fuzzyRow.appendChild(fuzzyAnchor)
-fuzzyTree.appendChild(fuzzyRow)
-document.body.appendChild(fuzzyTree)
-const fuzzyMenu = document.createElement('div')
-fuzzyMenu.setAttribute('role', 'menu')
-const fuzzyViewport = document.createElement('div')
-fuzzyViewport.setAttribute('role', 'presentation')
-const fuzzyArchiveBtn = document.createElement('button')
-fuzzyArchiveBtn.setAttribute('role', 'menuitem')
-fuzzyArchiveBtn.textContent = '归档会话'
-fuzzyViewport.appendChild(fuzzyArchiveBtn)
-fuzzyMenu.appendChild(fuzzyViewport)
-await new Promise((resolve) => setTimeout(resolve, 40))
-document.body.appendChild(fuzzyMenu)
-await new Promise((resolve) => setTimeout(resolve, 60))
-// Clipboard spy so the copied id is observable (jsdom ships no Clipboard API).
-const copiedIds = []
-const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
-Object.defineProperty(navigator, 'clipboard', {
-  value: { writeText: async (text) => { copiedIds.push(text) } },
-  configurable: true,
-})
-const copyItem = [...fuzzyMenu.querySelectorAll('button')]
-  .find((b) => b.textContent?.includes('复制会话 ID'))
-assert.ok(copyItem !== undefined, 'copy-id item injected')
-copyItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-await new Promise((resolve) => setTimeout(resolve, 60))
-assert.deepEqual(copiedIds, ['exact-id'],
-  'copy-id copies the EXACT-title session, not the newer substring-titled one')
-// Ambiguity in the tolerant layer also refuses: two sessions whose titles
-// merely both contain the needle produce no copy and a pointing toast.
-copiedIds.length = 0
-ctx.sessionListOverride = [
-  { id: 'amb-a', cwd: 'E:\\Demo\\amb-a', createdAt: 3_000, archived: false, live: false, title: '重构方案 alpha', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-  { id: 'amb-b', cwd: 'E:\\Demo\\amb-b', createdAt: 2_000, archived: false, live: false, title: '重构方案 beta', summary: '', summaryError: null, messageCount: 1, workspaceId: null, workspaceTitle: null },
-]
-copyItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-await new Promise((resolve) => setTimeout(resolve, 60))
-assert.deepEqual(copiedIds, [], 'an ambiguous tolerant match copies nothing')
-assert.ok(document.body.textContent.includes('匹配会话'), 'ambiguity toast points at the management panel')
-if (originalClipboardDescriptor === undefined) {
-  delete navigator.clipboard
-} else {
-  Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor)
+// The entry gets the owner share plus ui-workspace's bound hook, exactly as a
+// real render occurrence would pass them, and is clicked the way a user clicks.
+let menuDismissals = 0
+// Capture the RPC here rather than leaning on an earlier block's monkey-patch:
+// that patch is scoped to the panel test that installed it, and a capture that
+// silently misses would make this test pass on a menu item that does nothing.
+const menuCalls = []
+const menuCallBase = ctx.connection.rpc.call
+ctx.connection.rpc.call = async (route, method, payload) => {
+  menuCalls.push([method, payload && payload.args])
+  return { ok: true, value: { deleted: payload && payload.args && payload.args.sessionId } }
 }
-delete ctx.sessionListOverride
-document.body.removeChild(fuzzyMenu)
-document.body.removeChild(fuzzyTree)
-
-// 11. Workspace menu injection: a div[role="menu"] with workspace items
-// triggers "在资源管理器打开" injection.
-const wsMenu = document.createElement('div')
-wsMenu.setAttribute('role', 'menu')
-wsMenu.style.position = 'fixed'
-const wsViewport = document.createElement('div')
-wsViewport.setAttribute('role', 'presentation')
-const wsRenameBtn = document.createElement('button')
-wsRenameBtn.setAttribute('role', 'menuitem')
-wsRenameBtn.textContent = '重命名'
-wsViewport.appendChild(wsRenameBtn)
-const wsDeleteBtn = document.createElement('button')
-wsDeleteBtn.setAttribute('role', 'menuitem')
-wsDeleteBtn.textContent = '删除工作区'
-wsViewport.appendChild(wsDeleteBtn)
-wsMenu.appendChild(wsViewport)
-// Workspace treeitem row with anchor button inside
-const wsTree = document.createElement('div')
-wsTree.setAttribute('role', 'tree')
-const wsGroup = document.createElement('div')
-const fakeWsRow = document.createElement('div')
-fakeWsRow.setAttribute('role', 'treeitem')
-fakeWsRow.setAttribute('aria-expanded', 'true')
-const fakeWsTitle = document.createElement('span')
-fakeWsTitle.className = 'YDXeBa_title'
-fakeWsTitle.textContent = 'alpha-project'
-fakeWsRow.appendChild(fakeWsTitle)
-const wsAnchorBtn = document.createElement('button')
-wsAnchorBtn.setAttribute('aria-label', '工作区“alpha-project”的操作')
-wsAnchorBtn.setAttribute('type', 'button')
-fakeWsRow.appendChild(wsAnchorBtn)
-wsGroup.appendChild(fakeWsRow)
-wsTree.appendChild(wsGroup)
-document.body.appendChild(wsTree)
-
-await new Promise((resolve) => setTimeout(resolve, 40))
-document.body.appendChild(wsMenu)
+const menuProps = Object.assign({}, menuFace, {
+  sessionId: 's1',
+  displayTitle: '分析与重构插件系统架构',
+  useMenuOpenState: () => [true, () => { menuDismissals += 1 }],
+})
+// A row menu is not a panel: it mounts alongside whatever section is open, so
+// it gets its own host element instead of the single-panel \`host\` slot.
+const menuHost = document.body.appendChild(document.createElement('div'))
+let menuRoot
+await act(async () => {
+  menuRoot = createRoot(menuHost)
+  menuRoot.render(React.createElement(menuEntry.component, menuProps))
+})
 await new Promise((resolve) => setTimeout(resolve, 60))
 
-assert.ok(document.body.textContent.includes('在资源管理器打开'), 'workspace menu injection: 在资源管理器打开 appears')
+const deleteItem = [...menuHost.querySelectorAll('button[role="menuitem"]')]
+  .find((b) => b.textContent?.includes('删除会话'))
+assert.ok(deleteItem !== undefined, 'the delete row renders as a menuitem button')
+assert.equal(deleteItem.getAttribute('data-danger'), 'true', 'the delete row is rendered as destructive')
+// Re-query after every click: the locale-aware wrapper re-renders the row on
+// an arm, and a reference captured before the state change is detached (its
+// click would never reach the React root, so it would silently do nothing).
+const clickRow = async (label) => {
+  const node = [...menuHost.querySelectorAll('button[role="menuitem"]')]
+    .find((b) => b.textContent?.includes(label))
+  assert.ok(node !== undefined, `the delete row reads "${label}"`)
+  await act(async () => {
+    node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  })
+}
+await clickRow('删除会话')
+assert.deepEqual(menuCalls, [], 'armed click fires no RPC')
+await clickRow('再点一次')
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(menuCalls, [['sessionAdmin/closeSession', { sessionId: 's1' }]],
+  'second click closes exactly the session the owner named, and reads no list() to find it')
+assert.ok(document.body.textContent.includes('会话已删除'), 'delete success toast shown')
+assert.equal(menuDismissals, 1, 'the entry dismisses the menu through the injected hook')
 
-// Cleanup
-document.body.removeChild(wsMenu)
-document.body.removeChild(wsTree)
+await act(async () => { menuRoot.unmount() })
+menuHost.remove()
+ctx.connection.rpc.call = menuCallBase
 document.body.querySelector('[data-dsh-admin-context]')?.remove()
+
+// 10b. The DOM-scraping layer is gone, and stays gone: the shipped bundle must
+// not carry the literals it matched on (menu button labels, title lookups) and
+// must carry the slot name it now registers on.
+const shippedEntry = readFileSync(join(here, '..', 'lib', 'client.js'), 'utf8')
+assert.ok(shippedEntry.includes('sidebar.workspaces.session.menu.item'),
+  'the shipped entry registers on the session-row menu slot')
+for (const retired of ['归档会话', '复制会话 ID', '在资源管理器打开']) {
+  assert.ok(!shippedEntry.includes(retired),
+    `the shipped entry no longer greps the menu for "${retired}"`)
+}
 
 // 11.5 Settings-nav icon identity: the settings dialog's nav paints one
 // generic gear for every unknown section id, so the plugin repaints its four
@@ -1996,7 +1855,7 @@ exportsEn.apply({
   },
 })
 injectedEn.forEach((i) => i.callback())
-assert.equal(registeredEn.length, 10, 'en mode also registers ten sections')
+assert.equal(registeredEn.length, 11, 'en mode also registers eleven sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
 assert.equal(slotLabel(byIdEn.extensions), 'Extensions', 'en nav label for the extensions tab')
@@ -2008,8 +1867,15 @@ const enSearch = document.querySelector('.search-wrap input')
 assert.ok(enSearch && enSearch.placeholder === 'Search plugins (name/version/path)...', 'en search placeholder')
 assert.ok(document.body.textContent.includes('All (3)'), 'en filter pill with count')
 assert.ok([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Check updates')), 'en check-updates button')
-const langSelect = document.querySelector('select[title="Interface language"]')
-assert.ok(langSelect && langSelect.value === 'en', 'language switch rendered with en selected')
+// The language control is a shortcut into the SHELL's setting, so without a
+// locale service in this context it must render DISABLED and say who owns the
+// choice — the old control wrote its own localStorage key and reloaded the page.
+const langSelect = [...document.querySelectorAll('select')]
+  .find((s) => s.value === 'en' || s.value === 'zh')
+assert.ok(langSelect !== undefined, 'the toolbar renders the language control')
+assert.equal(langSelect.value, 'en', 'the control reflects the active language')
+assert.equal(langSelect.disabled, true, 'the control is disabled when the shell exposes no locale service')
+assert.ok(/host|宿主/i.test(langSelect.title), 'the disabled control says the shell owns the language setting')
 await act(async () => { enRoot.unmount() })
 host.remove()
 
@@ -2096,7 +1962,7 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 {
   const POLICY_CACHE = 'dsh-admin-panels-policy'
   const mountPanels = async (officialPanelIds, configPanels = {}, options = {}) => {
-    const { askFails = false, cache, force, officialDock = [] } = options
+    const { askFails = false, cache, force, officialDock = [], officialItems = [] } = options
     dom.window.localStorage.removeItem('dsh-admin-panels')
     dom.window.localStorage.removeItem(POLICY_CACHE)
     if (force) dom.window.localStorage.setItem('dsh-admin-panels', force)
@@ -2107,6 +1973,17 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
     const ex = regs[0].factory(makeClientRequire({ react: React, reactDom: { createRoot } }))
     const injected = []
     const registered = []
+    // Live slot table (v1.30.1): the coverage verdict is re-derived when a
+    // signal key's declaration changes, so the harness needs a MUTABLE list plus
+    // a subscribe() that can fire — that is what proves a late official panel is
+    // observed in the same session instead of after a reload.
+    const slotTable = {
+      'sidebar.panellist': officialPanelIds.slice(),
+      'conversation.input.dock': officialDock.slice(),
+      'plugins.item': (officialItems || []).slice(),
+      'settings.plugins.tab': [],
+    }
+    const slotSubscribers = new Map()
     ex.apply({
       logger: ctx.logger,
       effect: (fn) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
@@ -2121,11 +1998,26 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
       get: () => undefined,
       slots: {
         // Only the panel list carries the official entries the probes look for.
-        entries: (name) => (name === 'sidebar.panellist'
-          ? officialPanelIds.map((id) => ({ options: { id } }))
-          : name === 'conversation.input.dock'
-            ? officialDock.map((id) => ({ options: { id } }))
-            : []),
+        // `plugins.item` is where ui-settings-subagent / ui-settings-web-search
+        // register their cards — the two 'none'-scoped probes.
+        entries: (name) => (slotTable[name] || []).map((id) => ({ options: { id } })),
+        // Records every subscription so a declaration can notify it. Returning a
+        // disposer keeps the teardown path exercised too.
+        subscribe: (key, fn) => {
+          const list = slotSubscribers.get(key) || []
+          list.push(fn)
+          slotSubscribers.set(key, list)
+          return () => {
+            const at = list.indexOf(fn)
+            if (at !== -1) list.splice(at, 1)
+          }
+        },
+        /** Declare one more entry on a key and notify its subscribers. */
+        declare: (key, id) => {
+          if (!slotTable[key]) slotTable[key] = []
+          slotTable[key].push(id)
+          for (const fn of slotSubscribers.get(key) || []) fn()
+        },
         inject: (key, cb) => { injected.push({ key, cb }); return () => {} },
         register: (options, component) => {
           registered.push({ options, component })
@@ -2140,8 +2032,25 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
     drain()
     await new Promise((resolve) => setTimeout(resolve, 5))
     drain()
-    return registered.map((entry) => entry.options.id).sort()
+    const ids = () => registered.map((entry) => entry.options.id).sort()
+    // `mountPanelsDetailed` hands back the harness so a test can declare an
+    // official panel AFTER the mount and assert the verdict follows (v1.30.1).
+    const harness = {
+      ids,
+      /** Declare one official entry now, drain the resulting replans. */
+      declareLater: (key, id) => {
+        if (!slotTable[key]) slotTable[key] = []
+        slotTable[key].push(id)
+        for (const fn of slotSubscribers.get(key) || []) fn()
+        drain()
+      },
+      slots: slotTable,
+    }
+    lastHarness = harness
+    return ids()
   }
+  /** @type {any} */
+  let lastHarness = null
 
   const withNone = await mountPanels([])
   assert.ok(withNone.includes('extensions'), 'no official panel list → the extensions tab registers')
@@ -2152,6 +2061,76 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
   const forced = await mountPanels(['plugins'], {}, { force: 'extensions' })
   assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
+
+  /* Granularity (v1.30, N-1/N-2). A coverage hit is NOT a verdict on the whole
+   * panel unless the official surface is an equivalent management page. Three
+   * rows prove the distinction, and each one failed before this round:
+   *
+   *  - automation: ui-schedule covers the cron tab only. Yielding the panel took
+   *    Webhook and 工作流 with it — two surfaces upstream has no page for.
+   *  - subagents / webSearch: the official cards configure the official feature
+   *    (depth/capacity/model, official provider keys). They do not author
+   *    delegation instances or switch providers, which is the whole panel.
+   */
+  const automationOfficial = await mountPanels(['schedules'])
+  assert.ok(automationOfficial.includes('automation'),
+    'official schedule page covers ONE tab → the automation panel must still register (Webhook / 工作流 have no official page)')
+  assert.ok(automationOfficial.includes('extensions'),
+    'a schedules hit must not disturb unrelated panels')
+  const automationPlusPlugins = await mountPanels(['schedules', 'plugins'])
+  assert.ok(automationPlusPlugins.includes('automation') && !automationPlusPlugins.includes('extensions'),
+    'per-row scope: schedules keeps automation, plugins still retires extensions')
+
+  const subagentOfficial = await mountPanels([], {}, { officialItems: ['subagent'] })
+  assert.ok(subagentOfficial.includes('subagent-admin'),
+    'official 子智能体 配置卡 covers depth/capacity/model only → the authoring panel stays')
+  const webSearchOfficial = await mountPanels([], {}, { officialItems: ['web-search'] })
+  assert.ok(webSearchOfficial.includes('web-sessions'),
+    'official web-search provider card does not switch providers → the Web 搜索 tab stays inside its panel')
+  const bothItems = await mountPanels([], {}, { officialItems: ['subagent', 'web-search'] })
+  assert.equal(bothItems.length, withNone.length,
+    'plugins.item hits retire nothing at all — same registration count as no official surface')
+
+  /* Late declaration (v1.30.1, the bug the scope work exposed). The verdict used
+   * to be a snapshot taken at apply(): an official panel that declared AFTER us
+   * was invisible for the whole session. With scope 'panel' that cost one
+   * redundant panel; with scope 'tabs' it meant the cron tab NEVER yielded. Both
+   * directions are asserted here, on the same live mount:
+   *   - a panel-scoped row must retire the panel when the signal arrives late;
+   *   - a tabs-scoped row must hide its tab (and keep the panel) the same way.
+   */
+  await mountPanels([])
+  assert.ok(lastHarness.ids().includes('extensions'),
+    'late-declaration case starts with no official panel: extensions is registered')
+  lastHarness.declareLater('sidebar.panellist', 'plugins')
+  assert.ok(!lastHarness.ids().includes('extensions'),
+    'a panel-scoped signal that arrives AFTER the mount retires the panel in the same session')
+
+  await mountPanels([])
+  assert.ok(lastHarness.ids().includes('automation'),
+    'late-declaration case starts with no official schedule page: automation is registered')
+  lastHarness.declareLater('sidebar.panellist', 'schedules')
+  assert.ok(lastHarness.ids().includes('automation'),
+    'a tabs-scoped signal keeps the panel registered (Webhook / 工作流 still live)')
+
+  /* The kept-but-overlapping panels must be REPORTED, not just computed.
+   * `resolveNativeCoverage` has returned a `notes` list since v1.30 with a
+   * comment saying it was for the mount log, but nothing read it — an operator
+   * seeing both our 子智能体 page and the official card had no way to learn the
+   * duplication was deliberate. v1.30.1 logs it; this asserts the log line
+   * exists and names the panel. */
+  loggedLines.length = 0
+  await mountPanels([], {}, { officialItems: ['subagent'] })
+  assert.ok(loggedLines.some((line) => line.includes('相近界面但不等价') && line.includes('subagents')),
+    'a panel kept despite an overlapping official surface is reported in the mount log (notes)')
+  loggedLines.length = 0
+  await mountPanels(['schedules'])
+  assert.ok(loggedLines.some((line) => line.includes('部分页签') && line.includes('automation(cron)')),
+    'a tabs-scoped yield is reported with the exact tab it gave up')
+  loggedLines.length = 0
+  await mountPanels(['plugins'])
+  assert.ok(loggedLines.some((line) => line.includes('让位面板') && line.includes('extensions')),
+    'a panel-scoped yield is reported in the mount log')
 
   // The todo dock probes the conversation slot, not the settings tabs: the
   // official ui-conversation registers id 'todo' on 'conversation.input.dock'.
@@ -2260,4 +2239,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, sidebar context menus (copy-id resolves the exact-title session over a newer substring-titled one + ambiguity refusal), menu-delete two-step confirm + ambiguity refusal, Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, session-row menu slot (owner-supplied sessionId, two-step delete confirm, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

@@ -45,12 +45,16 @@ check('unrecognized labels answer null (the strip fallback is gone on purpose)',
   assert.equal(sessionTitleFromLabel(undefined), null)
 })
 
-check('the archived-row menu classifier knows Unarchive session (source pin)', () => {
-  // 归档行的官方菜单项是「取消归档 / Unarchive session」——不认它，归档会话
-  // 的行菜单一个注入项都拿不到。分类器住在 DOM 回调里，源级钉住记号。
+check('the row menu comes from the slot, not from label classification', () => {
+  // 旧实现靠菜单自身的 aria-label 认路、再靠菜单项文案（含「取消归档 / Unarchive
+  // session」）区分归档行。现在条目注册进官方 slot，owner props 直接带 sessionId，
+  // 因此不需要认识任何宿主文案——宿主改文案也不会让注入失效。
   const source = readFileSync(new URL('../src/client/impl.js', import.meta.url), 'utf8')
-  assert.ok(source.includes("'取消归档'"), 'the zh archived-row label is matched')
-  assert.ok(source.includes("'Unarchive session'"), 'the en archived-row label is matched')
+  assert.ok(source.includes('sidebar.workspaces.session.menu.item'),
+    'the row menu item is registered into the documented upstream slot')
+  assert.ok(source.includes('sessionId'), 'the item takes the session id from the slot owner')
+  assert.ok(!source.includes("'取消归档'") && !source.includes("'Unarchive session'"),
+    'no host menu label is matched any more')
 })
 
 if (failures > 0) {

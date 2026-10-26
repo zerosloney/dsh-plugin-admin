@@ -6,8 +6,14 @@
  * What must hold: a normal write leaves no lock behind, a lock whose owner is
  * proven dead (or a leftover naming this process) is taken over, an UNREADABLE
  * record is waited for and never deleted, a live foreign lock makes the writer
- * wait but never refuses the write (fail-open — the atomic rename still protects
- * the file), and the critical section's return value survives.
+ * wait and then REFUSE with an actionable error (fail-closed since C-9 — the
+ * atomic rename stops torn files, it does not stop a lost update), and the
+ * critical section's return value survives.
+ *
+ * Fail-closed is the DEFAULT. `{ onTimeout: 'proceed' }` is the explicit opt-in
+ * that restores the old fail-open for a best-effort section, and it must warn
+ * exactly once per lock path (PLUGIN_ADMIN_LOCK_FAIL_OPEN). Both directions are
+ * pinned below: "wait, then write anyway" was the silent lost update C-9 fixed.
  *
  * The lock is `<file>.lock` holding `<pid>\n`, the same shape as the host's
  * @deepseek-ai/dsh-atomic-write lock, so the two agree on who holds a file.
@@ -56,6 +62,32 @@ const lockPath = target + '.lock'
 /** Read the lock the way the writer does: `<pid>\n`, or null when not that shape. */
 const readOwner = (path) => {
   try { return /^\d+\n$/.test(readFileSync(path, 'utf8')) ? Number(readFileSync(path, 'utf8').trim()) : null } catch { return null }
+}
+
+/** The fail-closed refusal (patch-utils' lockWaitTimeout): names the lock, the holder and the file. */
+const LOCK_TIMEOUT = /gave up after \d+ms waiting for /
+
+/**
+ * Collect the process warnings emitted while `fn` runs. The fail-open opt-in
+ * reports through `process.emitWarning` (code PLUGIN_ADMIN_LOCK_FAIL_OPEN), and
+ * "exactly once per lock path" is part of its contract: a contention storm must
+ * not flood the host log.
+ * @param {() => Promise<void>} fn - the section emitting the warnings.
+ * @returns {Promise<Array<{ code: string, message: string }>>}
+ */
+const collectWarnings = async (fn) => {
+  /** @type {Array<{ code: string, message: string }>} */
+  const seen = []
+  const onWarning = (/** @type {any} */ warning) => { seen.push({ code: String(warning.code), message: String(warning.message) }) }
+  process.on('warning', onWarning)
+  try {
+    await fn()
+    // emitWarning dispatches on a later tick; let it land before the caller counts.
+    await new Promise((resolve) => setImmediate(resolve))
+  } finally {
+    process.off('warning', onWarning)
+  }
+  return seen
 }
 
 await check('a normal critical section runs, returns its value and drops the lock', async () => {
@@ -111,18 +143,34 @@ await check('a dead owner\'s lock is reclaimed, a live foreign one is not stolen
   assert.ok(!existsSync(lockPath), 'and it is cleaned up')
 })
 
-await check('an unreadable record is WAITED for, never deleted', async () => {
+await check('an unreadable record is WAITED for, never deleted, and the default REFUSES the write', async () => {
   // The host waits on any lock it cannot parse rather than taking it over, and
   // this module matches that: the old JSON record shape (`{"pid":…}`), a pid out
   // of a real process's range, and a half-written record between create and write
   // are all reasons a lock may be unreadable, and all of them must outlive a
   // writer that cannot prove the owner dead. Deleting would race a concurrent
   // creator and put two writers inside at once.
+  //
+  // C-9: once the budget is spent the write is REFUSED instead of running
+  // unlocked — an unreadable record cannot be proven stale, so proceeding would
+  // read-modify-write the file alongside whoever is creating that lock.
   writeFileSync(lockPath, '{"pid": 1234}\n', 'utf8')
+  const before = readFileSync(target, 'utf8')
+  let ran = false
   const started = Date.now()
-  const value = withFileLock(target, () => 'wrote-anyway')
+  assert.throws(
+    () => withFileLock(target, () => { ran = true; writeFileSync(target, '# clobbered\n', 'utf8') }),
+    (error) => {
+      assert.match(String(error.message), LOCK_TIMEOUT, 'the refusal is the lock diagnostic')
+      assert.ok(String(error.message).includes(lockPath), 'it names the lock file')
+      assert.ok(String(error.message).includes(target), 'and the file the section wanted to touch')
+      assert.match(String(error.message), /an unreadable lock record/, 'and says the record could not be read')
+      return true
+    },
+  )
   const waited = Date.now() - started
-  assert.equal(value, 'wrote-anyway', 'fail-open still writes after the budget')
+  assert.equal(ran, false, 'the refused section never ran (no unlocked write)')
+  assert.equal(readFileSync(target, 'utf8'), before, 'the target was not written without the lock')
   assert.ok(waited >= 2500, 'the unreadable lock was waited on, not deleted (waited ' + waited + 'ms)')
   assert.ok(existsSync(lockPath), 'the lock file survived: nobody may delete an unreadable record')
   rmSync(lockPath, { force: true })
@@ -144,7 +192,7 @@ await check('a live owner we may not signal (EPERM) is alive, not dead — its l
 
   // Behavioural half, when this host has a pid we cannot signal. The observable
   // difference is whether the foreign lock FILE survives the wait: a stolen lock
-  // gets unlinked, a respected one is still there after the fail-open write.
+  // gets unlinked, a respected one is still there after the refused write.
   const foreign = [1, 4, 900, 1092, 1100, 1172].find((pid) => {
     if (pid === process.pid) return false
     try { process.kill(pid, 0); return false } catch (error) { return /** @type {any} */ (error).code === 'EPERM' }
@@ -157,22 +205,58 @@ await check('a live owner we may not signal (EPERM) is alive, not dead — its l
     return
   }
   writeFileSync(lockPath, foreign + '\n', 'utf8')
-  const value = withFileLock(target, () => 'wrote-anyway')
-  assert.equal(value, 'wrote-anyway', 'EPERM is not a refusal: fail-open still writes')
+  assert.throws(() => withFileLock(target, () => 'wrote-anyway'), LOCK_TIMEOUT,
+    'EPERM is not proof of death, so the writer is REFUSED instead of running unlocked')
   assert.ok(existsSync(lockPath), "the live owner's lock file was NOT unlinked (pid " + foreign + ')')
   rmSync(lockPath, { force: true })
 })
 
-await check('a live foreign lock delays the write but never refuses it (fail-open)', async () => {
+await check('a live foreign lock REFUSES the write by default; the opt-in restores fail-open and warns once', async () => {
   // The parent process is definitively alive and is not us: a lock that must
   // be waited on (unlike a dead pid, which the previous check reclaims).
-  writeFileSync(lockPath, process.ppid + '\n', 'utf8')
+  //
+  // C-9's contract, both halves, on one live foreign lock:
+  //   1. DEFAULT → wait the budget, then REFUSE with an error naming the lock,
+  //      the holder and the file. The section must not run and the file must not
+  //      change: an unlocked read-modify-write here is the lost update.
+  //   2. `{ onTimeout: 'proceed' }` → the same section runs unlocked, the
+  //      holder's lock is still not touched, and EXACTLY ONE warning is emitted
+  //      per lock path (two opt-in runs, one warning) so a contention storm
+  //      cannot flood the host log.
+  const livePath = join(dir, 'live-refusal.patch.yml')
+  const liveLock = livePath + '.lock'
+  writeFileSync(livePath, '# untouched\n', 'utf8')
+  writeFileSync(liveLock, process.ppid + '\n', 'utf8')
+  let ran = false
   const started = Date.now()
-  const value = withFileLock(target, () => 'wrote-anyway')
+  assert.throws(
+    () => withFileLock(livePath, () => { ran = true; writeFileSync(livePath, '# clobbered\n', 'utf8') }),
+    (error) => {
+      assert.match(String(error.message), LOCK_TIMEOUT, 'the refusal reports the budget it spent')
+      assert.ok(String(error.message).includes(liveLock), 'and the lock file')
+      assert.ok(String(error.message).includes('pid ' + process.ppid), 'and the live holder pid')
+      assert.match(String(error.message), /Retry once that instance finishes/, 'and what to do about it')
+      return true
+    },
+  )
   const waited = Date.now() - started
-  assert.equal(value, 'wrote-anyway', 'the write happens even while a lock is held')
+  assert.equal(ran, false, 'the refused section never ran')
   assert.ok(waited >= 2500, 'it waited for the lock window first (waited ' + waited + 'ms)')
-  rmSync(lockPath, { force: true })
+  assert.equal(readFileSync(livePath, 'utf8'), '# untouched\n', 'the target was not written without the lock')
+  assert.equal(readFileSync(liveLock, 'utf8'), process.ppid + '\n', "the live holder's lock was not touched")
+
+  const warnings = await collectWarnings(async () => {
+    assert.equal(withFileLock(livePath, () => 'wrote-anyway', { waitMs: 300, onTimeout: 'proceed' }), 'wrote-anyway',
+      'the explicit opt-in runs the section unlocked after its budget')
+    assert.equal(withFileLock(livePath, () => 'wrote-again', { waitMs: 300, onTimeout: 'proceed' }), 'wrote-again',
+      'and a second opt-in section on the same lock still runs')
+  })
+  const failOpen = warnings.filter((warning) => warning.code === 'PLUGIN_ADMIN_LOCK_FAIL_OPEN')
+  assert.equal(failOpen.length, 1, 'exactly ONE warning for two opt-in runs on the same lock path')
+  assert.match(failOpen[0].message, /proceeding WITHOUT the cross-process lock /, 'the warning says what happened')
+  assert.match(failOpen[0].message, /may be lost/, 'and what it risks')
+  assert.equal(readFileSync(liveLock, 'utf8'), process.ppid + '\n', "the opt-in did not steal or delete the holder's lock")
+  rmSync(liveLock, { force: true })
 })
 
 await check('the lock is REENTRANT: a nested call neither stalls nor releases early', () => {
@@ -458,7 +542,8 @@ await check('a failed atomicRename reaps its own temp (no orphan residue)', () =
 // ─── withFileLockAsync：spawn 型临界区的异步孪生 ────────────────────────────
 // runPnpm 的临界区必须跨 await 持锁（spawn 不能跑在同步变体的 Atomics.wait
 // 段里；把 async fn 交给同步变体等于拿锁返回 promise 的瞬间就放锁）。文件协议
-// 与同步变体同形：`<file>.lock` + `<pid>\n`、fail-open、验证式释放。
+// 与同步变体同形：`<file>.lock` + `<pid>\n`、默认失败关闭（`{onTimeout:
+// 'proceed'}` 才失败开放）、验证式释放。
 
 await check('withFileLockAsync: same-path sections serialize in-process, and the lock spans the await', async () => {
   const at = join(dir, 'async-lock.json')
@@ -489,7 +574,7 @@ await check('withFileLockAsync: a throwing body releases the lock and the chain 
     'the next section acquires immediately (the per-path queue survived the rejection)')
 })
 
-await check('withFileLockAsync: a foreign LIVE lock is waited for, then fails open without stealing', async () => {
+await check('withFileLockAsync: a foreign LIVE lock is waited for, then REFUSED unless the caller opts in', async () => {
   const at = join(dir, 'async-lock-live.json')
   const holder = spawn(process.execPath, ['-e', `
     const { openSync, writeSync } = require('node:fs')
@@ -500,23 +585,33 @@ await check('withFileLockAsync: a foreign LIVE lock is waited for, then fails op
   try {
     await new Promise((resolve) => setTimeout(resolve, 150))
     const started = Date.now()
-    assert.equal(await withFileLockAsync(at, async () => 'ran', { waitMs: 300 }), 'ran',
-      'fail-open: the write proceeds after the budget (same trade as the sync variant)')
+    await assert.rejects(() => withFileLockAsync(at, async () => 'ran', { waitMs: 300 }), LOCK_TIMEOUT,
+      'the async default refuses after the budget instead of running unlocked')
     assert.ok(Date.now() - started >= 250, 'it waited the budget first')
     assert.equal(readOwner(at + '.lock'), holder.pid, 'the live foreign lock was NOT stolen or deleted')
+
+    // Same opt-in as the sync variant, and the same once-per-path warning.
+    const warnings = await collectWarnings(async () => {
+      assert.equal(await withFileLockAsync(at, async () => 'ran-unlocked', { waitMs: 300, onTimeout: 'proceed' }), 'ran-unlocked',
+        'the opt-in runs the awaited section after the budget (old fail-open, now explicit)')
+    })
+    assert.equal(warnings.filter((warning) => warning.code === 'PLUGIN_ADMIN_LOCK_FAIL_OPEN').length, 1,
+      'the async opt-in warns exactly once')
+    assert.equal(readOwner(at + '.lock'), holder.pid, 'the opt-in did not steal the holder lock either')
   } finally {
     holder.kill()
     try { unlinkSync(at + '.lock') } catch { /* holder may have been killed mid-write */ }
   }
 })
 
-await check('withFileLock: a short waitMs gives up on a live foreign lock inside that budget, not the default 3s', async () => {
+await check('withFileLock: a short waitMs refuses (or opts in) inside that budget, not the default 3s', async () => {
   // The options knob exists for the chained claim (workflow-runs' claimRunExclusive):
   // it hands each lock in a derivation chain its remaining share of ONE shared
   // deadline, because Atomics.wait blocks the host thread synchronously and N
-  // locks x 3s was the old ceiling. This pins the knob itself: a live foreign
-  // lock is failed open inside the SHORT budget — never waited out to the
-  // default 3000ms, and never stolen (same protocol, smaller window).
+  // locks x 3s was the old ceiling. This pins the knob itself, in both directions:
+  // a live foreign lock must be REFUSED inside the SHORT budget (never waited out
+  // to the default 3000ms, never stolen), and an explicit opt-in must run inside
+  // that same short budget — so the chain's shared deadline stays a deadline.
   const at = join(dir, 'sync-lock-budget.json')
   const holder = spawn(process.execPath, ['-e', `
     const { openSync, writeSync } = require('node:fs')
@@ -527,12 +622,16 @@ await check('withFileLock: a short waitMs gives up on a live foreign lock inside
   try {
     await new Promise((resolve) => setTimeout(resolve, 150))
     const started = Date.now()
-    const value = withFileLock(at, () => 'ran', { waitMs: 300 })
+    assert.throws(() => withFileLock(at, () => 'ran', { waitMs: 300 }), LOCK_TIMEOUT,
+      'the default refuses inside the short budget')
     const waited = Date.now() - started
-    assert.equal(value, 'ran', 'fail-open: the section still runs after the short budget')
     assert.ok(waited >= 250, 'it waited the short budget first (waited ' + waited + 'ms)')
     assert.ok(waited < 2000, 'it did NOT wait out the default 3000ms budget (waited ' + waited + 'ms)')
     assert.equal(readOwner(at + '.lock'), holder.pid, 'the live foreign lock was NOT stolen or deleted')
+    // The opt-in keeps the old behaviour available inside the SAME short budget.
+    assert.equal(withFileLock(at, () => 'ran-anyway', { waitMs: 300, onTimeout: 'proceed' }), 'ran-anyway',
+      'the explicit opt-in still runs after the short budget')
+    assert.equal(readOwner(at + '.lock'), holder.pid, 'the opt-in did not steal the holder lock')
   } finally {
     holder.kill()
     try { unlinkSync(at + '.lock') } catch { /* holder may have been killed mid-write */ }
@@ -582,4 +681,4 @@ await check('pluginAdmin.install restores the manifest snapshot when pnpm fails 
 
 rmSync(dir, { recursive: true, force: true })
 console.log(results.join('\n'))
-console.log('verify-file-lock OK: ' + results.length + ' checks (release, leftover takeover, dead owner, unreadable record, fail-open, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply, async lock, pnpm rollback)')
+console.log('verify-file-lock OK: ' + results.length + ' checks (release, leftover takeover, dead owner, unreadable record refused, live lock refused + opt-in warn-once, EPERM owner probe, reentrancy, cross-process, temp hygiene, rename, hot-apply, async lock refusal, pnpm rollback)')

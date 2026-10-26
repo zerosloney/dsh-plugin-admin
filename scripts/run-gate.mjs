@@ -66,7 +66,7 @@ const STEPS = [
   { name: 'verify-web-search-admin', desc: 'web-search provider switch + settings.mutate path (keys never echoed)', cmd: [node, 'scripts/verify-web-search-admin.mjs'] },
   { name: 'verify-i18n', desc: 'dshT call sites ↔ dictionaries, both ways; en values hold no CJK', cmd: [node, 'scripts/verify-i18n.mjs'] },
   { name: 'verify-audit-log', desc: 'audit log: key-name + shape redaction, cap compaction, method pins', cmd: [node, 'scripts/verify-audit-log.mjs'] },
-  { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-open, 0600, Windows EPERM races + owner probe, reentrancy', cmd: [node, 'scripts/verify-file-lock.mjs'] },
+  { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-closed default + opt-in proceed, 0600, Windows EPERM races + owner probe, reentrancy', cmd: [node, 'scripts/verify-file-lock.mjs'] },
   { name: 'verify-rpc-schema', desc: 'wire schemas vs manifest: strict-mode coverage, optional wires', cmd: [node, 'scripts/verify-rpc-schema.mjs'] },
   { name: 'verify-service-injects', desc: 'every ctx.<service> read in lib/** is declared in inject', cmd: [node, 'scripts/verify-service-injects.mjs'] },
   { name: 'verify-store-version', desc: 'store files: version read contract, migration chain, refuse-newer', cmd: [node, 'scripts/verify-store-version.mjs'] },

@@ -65,6 +65,23 @@ function stubPrimitives(React) {
         }
       }
       else if (name === 'Switch') component = atom('input')
+      else if (name === 'MenuItemButton') {
+        // Mirrors the real atom (ui-primitives/src/Menu.tsx): a `menuitem`
+        // BUTTON that fires `onSelect`, wrapped with an optional separator.
+        // The generic atom recipe would render a <div> and drop the click, so
+        // a row-menu entry could never be exercised.
+        component = function MenuItemButton({ children, icon, danger, disabled = false, separatorBefore = false, onSelect }) {
+          return h('div', null,
+            separatorBefore ? h('div', { role: 'separator' }) : null,
+            h('button', {
+              type: 'button',
+              role: 'menuitem',
+              disabled,
+              'data-danger': danger === true ? 'true' : undefined,
+              onClick: onSelect,
+            }, icon != null ? h('span', null, icon) : null, h('span', null, children)))
+        }
+      }
       else if (name === 'Input') {
         component = function Input({ icon, className, ...rest }) {
           return h('span', { className }, icon != null ? h('span', null, icon) : null, h('input', rest))
