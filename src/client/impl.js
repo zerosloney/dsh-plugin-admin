@@ -227,6 +227,171 @@ function copyTextSilently(text) {
   }
 }
 
+/* ========================================================================== */
+/*                    Destructive-action confirm dialog                       */
+/* ========================================================================== */
+
+/**
+ * A modal confirmation for physically destructive actions.
+ *
+ * Why a DOM dialog instead of an in-menu second click: the shell may close the
+ * row menu on select, which remounts the entry and wipes its React state — an
+ * "armed" flag or a timeout armed in the menu therefore cannot survive the
+ * click that set it, and the second click only re-arms (reads as "删除点了没
+ * 反应"). A dialog living on document.body is outside that lifecycle, needs no
+ * arm window, and can show WHICH session is about to go.
+ *
+ * The shell's own Modal atom is deliberately not used here: this plugin does
+ * not depend on its prop contract (it is an external seed-table module with no
+ * local declaration), and the panel stylesheet is only installed once a panel
+ * mounts — a right-click delete can be the first interaction in a fresh
+ * session, so the dialog brings its own styles.
+ */
+var CONFIRM_STYLE_ID = 'dsh-admin-confirm-style'
+var CONFIRM_OVERLAY_CLASS = 'dsh-admin-confirm-overlay'
+var CONFIRM_PANEL_CLASS = 'dsh-admin-confirm'
+
+/** Insert the dialog stylesheet once. Idempotent and headless-safe. */
+function ensureConfirmStyles() {
+  if (typeof document === 'undefined' || document.getElementById(CONFIRM_STYLE_ID) !== null) return
+  var style = document.createElement('style')
+  style.id = CONFIRM_STYLE_ID
+  style.textContent = [
+    '.' + CONFIRM_OVERLAY_CLASS + '{position:fixed;inset:0;z-index:100001;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.38);animation:dsh-confirm-in .12s ease-out}',
+    '.' + CONFIRM_PANEL_CLASS + '{width:min(430px,calc(100vw - 32px));box-sizing:border-box;background:var(--dsw-alias-bg-layer-default,#fff);color:var(--dsw-alias-label-primary,#222);border-radius:12px;box-shadow:0 18px 48px rgba(0,0,0,.22),0 4px 12px rgba(0,0,0,.10);padding:18px 18px 14px;font-size:13px;line-height:1.55}',
+    '.' + CONFIRM_PANEL_CLASS + ' h3{margin:0 0 8px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}',
+    '.' + CONFIRM_PANEL_CLASS + ' p{margin:0;color:var(--dsw-alias-label-secondary,#555);white-space:pre-wrap;word-break:break-word}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions button{font:inherit;font-size:12px;padding:6px 14px;border-radius:7px;cursor:pointer;border:1px solid transparent;transition:background .12s}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions button.cancel{background:transparent;border-color:var(--dsw-alias-border-l2,rgba(150,150,160,.45));color:inherit}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions button.cancel:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(120,120,130,.10))}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions button.danger{background:var(--dsw-alias-state-error-primary,#ef4444);color:#fff}',
+    '.' + CONFIRM_PANEL_CLASS + '-actions button.danger:hover{filter:brightness(1.06)}',
+    '@keyframes dsh-confirm-in{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}',
+  ].join('\n')
+  document.head.appendChild(style)
+}
+
+/** The one open dialog. A second request replaces the first (single instance,
+ * same posture as the toast singleton). */
+/** @type {{ close: () => void }|null} */
+var activeConfirm = null
+
+/**
+ * Show a modal confirm dialog.
+ * Backdrop click, Escape, the cancel button, or a second request all close it;
+ * Enter confirms. Focus defaults to cancel, so a stray Enter never destroys.
+ * @param {{ title: string, message: string, confirmLabel: string, cancelLabel?: string, danger?: boolean, onConfirm: () => void }} opts
+ * @returns {() => void} idempotent closer.
+ */
+function showConfirmDialog(opts) {
+  // Headless mount: no document means no UI at all; do not fabricate a confirm.
+  if (typeof document === 'undefined') return function () {}
+  if (activeConfirm !== null) activeConfirm.close()
+  ensureConfirmStyles()
+
+  var previouslyFocused = document.activeElement
+  var prevOverflow = document.body.style.overflow
+  var closed = false
+
+  var overlay = document.createElement('div')
+  overlay.className = CONFIRM_OVERLAY_CLASS
+  var panel = document.createElement('div')
+  panel.className = CONFIRM_PANEL_CLASS
+  panel.setAttribute('role', 'dialog')
+  panel.setAttribute('aria-modal', 'true')
+
+  var heading = document.createElement('h3')
+  heading.textContent = opts.title
+  var body = document.createElement('p')
+  body.textContent = opts.message
+
+  var actions = document.createElement('div')
+  actions.className = CONFIRM_PANEL_CLASS + '-actions'
+  var cancelBtn = document.createElement('button')
+  cancelBtn.type = 'button'
+  cancelBtn.className = 'cancel'
+  cancelBtn.textContent = opts.cancelLabel || dshT('取消')
+  var confirmBtn = document.createElement('button')
+  confirmBtn.type = 'button'
+  confirmBtn.className = opts.danger === false ? '' : 'danger'
+  confirmBtn.textContent = opts.confirmLabel
+
+  /** @param {boolean} confirmed - whether the confirm path was taken. */
+  function close(confirmed) {
+    if (closed) return
+    closed = true
+    document.removeEventListener('keydown', onKeyDown, true)
+    if (overlay.parentNode !== null) overlay.parentNode.removeChild(overlay)
+    document.body.style.overflow = prevOverflow
+    if (activeConfirm === handle) activeConfirm = null
+    // Return focus to whatever opened the dialog, so keyboard users are not
+    // dropped at the top of the document.
+    try {
+      if (previouslyFocused && typeof (/** @type {any} */ (previouslyFocused)).focus === 'function') {
+        (/** @type {any} */ (previouslyFocused)).focus()
+      }
+    } catch (e) { /* focus restoration is best-effort */ }
+    if (confirmed) {
+      try { opts.onConfirm() } catch (err) { showToast('error', messageOf(err)) }
+    }
+  }
+
+  /** @param {KeyboardEvent} event */
+  function onKeyDown(event) {
+    if (event.key === 'Escape') { event.preventDefault(); close(false); return }
+    if (event.key === 'Enter') {
+      // A focused cancel button handles its own Enter (native click = cancel).
+      if (event.target === cancelBtn) return
+      event.preventDefault()
+      close(true)
+    }
+  }
+
+  cancelBtn.addEventListener('click', function () { close(false) })
+  confirmBtn.addEventListener('click', function () { close(true) })
+  // mousedown (not click) so a drag that starts inside and ends on the backdrop
+  // does not cancel.
+  overlay.addEventListener('mousedown', function (event) {
+    if (event.target === overlay) close(false)
+  })
+
+  actions.appendChild(cancelBtn)
+  actions.appendChild(confirmBtn)
+  panel.appendChild(heading)
+  panel.appendChild(body)
+  panel.appendChild(actions)
+  overlay.appendChild(panel)
+  document.body.appendChild(overlay)
+  document.body.style.overflow = 'hidden'
+  document.addEventListener('keydown', onKeyDown, true)
+  try { cancelBtn.focus() } catch (e) { /* older engines */ }
+
+  var handle = { close: function () { close(false) } }
+  activeConfirm = handle
+  return handle.close
+}
+
+/**
+ * Resolve the row's `displayTitle` prop to a plain string.
+ * The shell hands it over as a string or as a title descriptor depending on
+ * version, so every unknown shape degrades to '' rather than rendering
+ * "[object Object]" into a confirmation.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function displayTitleText(value) {
+  if (typeof value === 'string') return value.trim()
+  if (value === null || typeof value !== 'object') return ''
+  var rec = /** @type {Record<string, any>} */ (value)
+  var keys = ['text', 'title', 'label', 'name']
+  for (var i = 0; i < keys.length; i += 1) {
+    var candidate = rec[keys[i]]
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim()
+  }
+  return ''
+}
+
 /** Trigger a browser download for in-memory text (the session export path). */
 /** @param {string} filename
  * @param {string} text */
@@ -470,42 +635,61 @@ function deleteSessionFromMenu(call, sessionId, refreshSessions) {
       if (refreshSessions) refreshSessions()
       return
     }
-    showToast('error', dshT('❌ 删除会话失败：') + messageOf(result && result.error))
+    var failure = messageOf(result && result.error)
+    showToast('error', dshT('❌ 删除会话失败：') + failure + deleteFailureHint(failure))
   }, function (err) {
-    showToast('error', dshT('❌ 删除会话失败：') + messageOf(err))
+    var failure = messageOf(err)
+    showToast('error', dshT('❌ 删除会话失败：') + failure + deleteFailureHint(failure))
   })
 }
 
-/** "Delete session" row-menu item: the first select arms, a second one within
- * 4s acts. Deletion is physical, so one misclick must never be enough. The
- * armed label states what the next click does, which IS the confirmation.
+/**
+ * Actionable hint for a delete the operator can retry successfully.
+ * The host refuses while another process holds the session's write lease
+ * (typically another dsh instance sharing DSH_HOME); naming that condition is
+ * more useful than echoing the raw lease error.
+ * @param {string} failure - the already-stringified host error.
+ * @returns {string} a hint suffix, or '' when the failure speaks for itself.
+ */
+function deleteFailureHint(failure) {
+  if (/write lease|session\.lock|already owned|another process|is live/i.test(failure)) {
+    return '\n' + dshT('该会话正被另一个 dsh 实例占用：请先在那边关闭它，或关掉那个实例后再删。')
+  }
+  return ''
+}
+
+/** "Delete session" row-menu item: one select opens a modal confirmation that
+ * names the session about to go.
+ *
+ * This replaced a two-click arming flow. That flow had two traps: (1) the
+ * armed flag lived in this component, so a shell that closes the row menu on
+ * select remounted the entry and reset it — the "second" click only re-armed,
+ * which read as "点了没反应"; (2) the 4s window silently disarmed while the
+ * user read the warning, so a careful user's confirming click was treated as
+ * a fresh arm. The dialog lives on document.body, survives the menu closing,
+ * and has no timer.
  * @param {any} props - owner props, the bound hook prop, and this entry's inject face. */
 function DeleteSessionMenuItem(props) {
-  var armedState = useState(false)
-  var armed = armedState[0]
-  var setArmed = armedState[1]
-  var disarmTimer = useRef(null)
-  useEffect(function () {
-    return function () {
-      if (disarmTimer.current !== null) clearTimeout(disarmTimer.current)
-    }
-  }, [])
   var dismiss = useMenuDismiss(props.useMenuOpenState)
   return createElement(MenuItemButton, {
     danger: true,
     onSelect: function () {
-      if (!armed) {
-        setArmed(true)
-        if (disarmTimer.current !== null) clearTimeout(disarmTimer.current)
-        disarmTimer.current = setTimeout(function () { setArmed(false) }, 4000)
-        return
-      }
-      if (disarmTimer.current !== null) clearTimeout(disarmTimer.current)
-      setArmed(false)
       dismiss()
-      deleteSessionFromMenu(props.call, props.sessionId, props.refreshSessions)
+      var title = displayTitleText(props.displayTitle)
+      var message = title !== ''
+        ? dshT('将永久删除「') + title + dshT('」及其日志记录，此操作不可撤销。')
+        : dshT('将永久删除该会话及其日志记录，此操作不可撤销。')
+      message += '\n' + dshT('在线会话会先关停其 agent，再删除记录。')
+      showConfirmDialog({
+        title: dshT('删除会话'),
+        message: message,
+        confirmLabel: dshT('确认删除'),
+        cancelLabel: dshT('取消'),
+        danger: true,
+        onConfirm: function () { deleteSessionFromMenu(props.call, props.sessionId, props.refreshSessions) },
+      })
     },
-  }, armed ? dshT('⚠️ 再点一次确认删除（在线会话将先关停）') : dshT('删除会话'))
+  }, dshT('删除会话'))
 }
 
 /**

@@ -1047,9 +1047,9 @@ const deleteItem = [...menuHost.querySelectorAll('button[role="menuitem"]')]
   .find((b) => b.textContent?.includes('删除会话'))
 assert.ok(deleteItem !== undefined, 'the delete row renders as a menuitem button')
 assert.equal(deleteItem.getAttribute('data-danger'), 'true', 'the delete row is rendered as destructive')
-// Re-query after every click: the locale-aware wrapper re-renders the row on
-// an arm, and a reference captured before the state change is detached (its
-// click would never reach the React root, so it would silently do nothing).
+// Re-query after every click: the locale-aware wrapper re-renders the row, and
+// a reference captured before a render is detached (its click would never
+// reach the React root, so it would silently do nothing).
 const clickRow = async (label) => {
   const node = [...menuHost.querySelectorAll('button[role="menuitem"]')]
     .find((b) => b.textContent?.includes(label))
@@ -1058,14 +1058,42 @@ const clickRow = async (label) => {
     node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   })
 }
+// One select opens a modal confirmation on document.body (not an in-menu arm
+// window): it survives the menu closing, it names the session the owner passed
+// as a prop, and only its confirm button fires the RPC.
 await clickRow('删除会话')
-assert.deepEqual(menuCalls, [], 'armed click fires no RPC')
-await clickRow('再点一次')
+assert.equal(menuDismissals, 1, 'the entry dismisses the menu through the injected hook')
+assert.deepEqual(menuCalls, [], 'opening the confirmation fires no RPC')
+const confirmPanel = document.body.querySelector('.dsh-admin-confirm')
+assert.ok(confirmPanel !== null, 'the confirmation dialog mounts on document.body')
+assert.ok(
+  confirmPanel.textContent.includes('分析与重构插件系统架构'),
+  'the confirmation names the session it will delete',
+)
+const confirmButton = [...confirmPanel.querySelectorAll('button')]
+  .find((b) => b.textContent?.includes('确认删除'))
+assert.ok(confirmButton !== undefined, 'the dialog offers a confirm button')
+await act(async () => {
+  confirmButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
 await new Promise((resolve) => setTimeout(resolve, 60))
 assert.deepEqual(menuCalls, [['sessionAdmin/closeSession', { sessionId: 's1' }]],
-  'second click closes exactly the session the owner named, and reads no list() to find it')
+  'confirm closes exactly the session the owner named, and reads no list() to find it')
 assert.ok(document.body.textContent.includes('会话已删除'), 'delete success toast shown')
-assert.equal(menuDismissals, 1, 'the entry dismisses the menu through the injected hook')
+assert.equal(document.body.querySelector('.dsh-admin-confirm'), null, 'the dialog closes after confirming')
+// Cancel is a real close: dialog gone, no RPC, no toast for a fresh action.
+await clickRow('删除会话')
+const cancelPanel = document.body.querySelector('.dsh-admin-confirm')
+assert.ok(cancelPanel !== null, 'the dialog opens again for the cancel check')
+const cancelButton = [...cancelPanel.querySelectorAll('button')]
+  .find((b) => b.textContent?.includes('取消'))
+assert.ok(cancelButton !== undefined, 'the dialog offers a cancel button')
+await act(async () => {
+  cancelButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.equal(document.body.querySelector('.dsh-admin-confirm'), null, 'cancel removes the dialog')
+assert.deepEqual(menuCalls, [['sessionAdmin/closeSession', { sessionId: 's1' }]],
+  'cancel never fires a second RPC')
 
 await act(async () => { menuRoot.unmount() })
 menuHost.remove()
@@ -2239,4 +2267,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, session-row menu slot (owner-supplied sessionId, two-step delete confirm, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

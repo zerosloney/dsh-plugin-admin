@@ -1,5 +1,5 @@
 /** sessions — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, panelHidden, sectionState, showToast, useEffect, useRef, useState } from './context.js'
+import { UiButton, UiCheckbox, UiInput, UiPill, baseName, createElement, downloadTextFile, dshT, formatDate, messageOf, panelHidden, sectionState, showToast, useEffect, useRef, useState } from './context.js'
 import { tabKeyDown } from './shared.js'
 import { WebSearchSection } from './web-search.js'
 
@@ -95,6 +95,7 @@ export function SessionsSection(props) {
     bulk: null,
     bulkBusy: false,
     bulkDone: 0,
+    selectedIds: [],   // 当前已勾选的会话 id 集合（用于精确批量删除）
   })
   var sView = kit.state
   var setSView = kit.set
@@ -191,6 +192,8 @@ export function SessionsSection(props) {
       if (!alive.current) return
       if (done >= plan.length) {
         patchSession({ bulkBusy: false, bulk: null, bulkDone: 0 })
+        // Bulk deletion is terminal: clear the selection so no ghost ids linger.
+        clearSelection()
         if (failures > 0) {
           patchSession({ error: dshT('批量删除完成，') + String(failures) + dshT(' 个会话删除失败（详见宿主日志）') })
         }
@@ -220,6 +223,58 @@ export function SessionsSection(props) {
   function cancelBulkDelete() {
     if (sView.bulkBusy) return
     patchSession({ bulk: null, bulkDone: 0 })
+  }
+
+  /**
+   * Toggle one session id in the bulk-selection set.
+   * @param {string} id - the session id to star/unstar.
+   */
+  function toggleSelection(id) {
+    setSView(function (/** @type {Record<string, any>} */ cur) {
+      var next = Object.assign({}, cur)
+      var sel = cur.selectedIds || []
+      var idx = sel.indexOf(id)
+      next.selectedIds = idx !== -1 ? sel.filter(function (/** @type {string} */ x) { return x !== id }) : sel.concat([id])
+      return next
+    })
+  }
+
+  /**
+   * Select or clear all currently visible session ids.
+   * @param {Array<string>} ids - all visible session ids.
+   * @param {boolean} checked - true to select all, false to clear.
+   */
+  function selectAllVisible(ids, checked) {
+    setSView(function (/** @type {Record<string, any>} */ cur) {
+      var next = Object.assign({}, cur)
+      next.selectedIds = checked ? ids.slice() : []
+      return next
+    })
+  }
+
+  /** Clear every bulk-selection tick. */
+  function clearSelection() {
+    setSView(function (/** @type {Record<string, any>} */ cur) {
+      var next = Object.assign({}, cur)
+      next.selectedIds = []
+      return next
+    })
+  }
+
+  /**
+   * Build the deletion plan from the current selection: live sessions go
+   * through closeSession first, ended/archived ones delete directly.
+   * @returns {{ label: string, plan: Array<{ id: string, live: boolean }> }}.
+   */
+  function _bulkSelectedTargets() {
+    var sessions = sView.sessions
+    var plan = []
+    for (var i = 0; i < sessions.length; i++) {
+      var s = sessions[i]
+      if ((sView.selectedIds || []).indexOf(s.id) === -1) continue
+      plan.push({ id: s.id, live: s.live === true })
+    }
+    return { label: dshT('已选会话'), plan: plan }
   }
 
   // Usage dashboard (VibeUsage posture): lazily fetched aggregates over all
@@ -303,6 +358,14 @@ export function SessionsSection(props) {
     callRemote('sessionAdmin/' + method, { sessionId: sessionId }).then(function (result) {
       if (!alive.current) return
       if (result.ok) {
+        // 清理该会话的健康报告缓存，避免删除后残留旧条目
+        setSView(function (/** @type {Record<string, any>} */ cur) {
+          var next = Object.assign({}, cur)
+          var hb = Object.assign({}, cur.healthBySession)
+          delete hb[sessionId]
+          next.healthBySession = hb
+          return next
+        })
         // Refresh this panel's own list, and nudge the sidebar (via the
         // sessions service) so a deleted session disappears immediately
         // instead of lingering until reload.
@@ -453,6 +516,9 @@ export function SessionsSection(props) {
     requestBulk: requestBulkDelete,
     confirmBulk: runBulkDelete,
     cancelBulk: cancelBulkDelete,
+    toggleSelection: toggleSelection,
+    selectAllVisible: selectAllVisible,
+    clearSelection: clearSelection,
   }
 
   return createElement('div', { 'data-dsh-admin-section': '' },
@@ -876,7 +942,7 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
     }, dshT('已置顶(') + String(pinnedIds.length) + ')'),
     // Tail actions (a single flex item so the wrap never splits them): fold
     // every directory at once, and one-click delete of the current projection.
-    (groupKeys.length > 0 || filtered.length > 0) ? createElement('div', { className: 'filter-actions', key: 'actions' },
+    (groupKeys.length > 0 || filtered.length > 0 || (view.selectedIds || []).length > 0) ? createElement('div', { className: 'filter-actions', key: 'actions' },
       groupKeys.length > 0 ? createElement(UiButton, {
         variant: 'outline',
         size: 'sm',
@@ -890,7 +956,25 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
         title: dshT('删除当前筛选下的全部 ') + String(filtered.length) + dshT(' 个会话（在线会话会先关停）'),
         disabled: view.bulkBusy,
         onClick: function () { groupUi.requestBulk('all', null) },
-      }, dshT('🗑 删除当前 (') + String(filtered.length) + ')') : null
+      }, dshT('🗑 删除当前 (') + String(filtered.length) + ')') : null,
+      (view.selectedIds || []).length > 0 ? createElement(UiButton, {
+        variant: 'outline',
+        size: 'sm',
+        className: 'danger',
+        disabled: view.bulkBusy,
+        title: dshT('仅删除已勾选的 ') + String((view.selectedIds || []).length) + dshT(' 个会话（在线会话会先关停）'),
+        onClick: function () {
+          var target = groupUi._bulkSelectedTargets()
+          if (target.plan.length === 0) return
+          patch({ bulk: { scope: 'selected', label: target.label, plan: target.plan }, bulkDone: 0, error: '' })
+        },
+      }, dshT('🗑 删除已选 (') + String((view.selectedIds || []).length) + ')') : null,
+      (view.selectedIds || []).length > 0 ? createElement(UiButton, {
+        variant: 'outline',
+        size: 'sm',
+        disabled: view.bulkBusy,
+        onClick: function () { groupUi.clearSelection() },
+      }, dshT('取消全选')) : null
     ) : null
   ))
 
@@ -951,6 +1035,32 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
   }
 
   var rows = []
+  // Selection control bar: full-select / clear when there are visible sessions.
+  if (filtered.length > 0) {
+    var selectedCount = (view.selectedIds || []).length
+    var allSelected = selectedCount > 0 && selectedCount === filtered.length
+    rows.push(createElement('div', { className: 'selection-bar', key: 'selection' },
+      createElement('span', { className: 'selection-text', key: 't' },
+        selectedCount > 0
+          ? dshT('已选 ') + String(selectedCount) + dshT(' 个 / ') + String(filtered.length)
+          : dshT('共 ') + String(filtered.length) + dshT(' 个会话')
+      ),
+      createElement('div', { className: 'selection-actions', key: 'a' },
+        createElement(UiButton, {
+          variant: 'outline',
+          size: 'sm',
+          disabled: view.bulkBusy || allSelected,
+          onClick: function () { groupUi.selectAllVisible(filtered.map(function (s) { return s.id }), true) },
+        }, allSelected ? dshT('全部已选') : dshT('全选')),
+        createElement(UiButton, {
+          variant: 'outline',
+          size: 'sm',
+          disabled: view.bulkBusy || selectedCount === 0,
+          onClick: function () { groupUi.clearSelection() },
+        }, dshT('取消全选'))
+      )
+    ))
+  }
   var renderBudget = SESSION_RENDER_CAP
   var renderedCards = 0
   for (var gi = 0; gi < groups.length; gi++) {
@@ -963,7 +1073,7 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
       if (renderBudget <= 0) break
       renderBudget -= 1
       renderedCards += 1
-      rows.push(renderSessionCard(g.sessions[si], view, act, patch, onExport, pinnedIds, togglePinned, loadHealth))
+      rows.push(renderSessionCard(g.sessions[si], view, act, patch, onExport, pinnedIds, togglePinned, loadHealth, groupUi.toggleSelection))
     }
     if (renderBudget <= 0) break
   }
@@ -1057,10 +1167,11 @@ export function renderHealthReportCard(sessionId, health) {
  * @param {(session: Record<string, any>) => void} onExport - download one session's transcript.
  * @param {Array<string>} pinnedIds - the pinned id whitelist.
  * @param {(id: string) => void} togglePinned - star/unstar one session.
- * @param {(sessionId: string) => void} loadHealth - fetch one session's health report.
+ * @param {(id: string) => void} loadHealth - fetch one session's health report.
+ * @param {(id: string) => void} toggleSelection - star/unstar one session in the bulk set.
  * @returns the session card element.
  */
-export function renderSessionCard(session, view, act, patch, onExport, pinnedIds, togglePinned, loadHealth) {
+export function renderSessionCard(session, view, act, patch, onExport, pinnedIds, togglePinned, loadHealth, toggleSelection) {
   var health = (view.healthBySession && view.healthBySession[session.id]) || null
   var isConfirming = view.confirming === session.id
   var dotClass = 'dot' + (session.live ? ' live' : session.archived ? ' archived' : '')
@@ -1068,6 +1179,17 @@ export function renderSessionCard(session, view, act, patch, onExport, pinnedIds
 
   var isPinned = pinnedIds ? pinnedIds.indexOf(session.id) !== -1 : false
   var actions = []
+  // Bulk-selection checkbox: renders even while confirming so the user can
+  // keep ticking other cards mid-flow; the confirm bar itself is per-card.
+  var isSelected = (view.selectedIds || []).indexOf(session.id) !== -1
+  actions.push(createElement(UiCheckbox, {
+    type: 'checkbox',
+    key: 'cb-select',
+    checked: isSelected,
+    onChange: function () { toggleSelection(session.id) },
+    label: dshT('选择会话'),
+    className: 'card-select',
+  }))
   if (!isConfirming) {
     actions.push(createElement(UiButton, {
       type: 'button',
