@@ -4,7 +4,7 @@ dsh（DeepSeek Harness）Web UI 管理插件：在官方设置界面内补齐 ds
 
 面板文案内置简体/English 双语，唯一的真相源是 dsh 自己的语言服务（`ctx.locale`）：插件不另存语言状态，工具栏 🌐 写入宿主语言设置本身，面板即时重绘、无需刷新。
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.33.4 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（验证基线 **0.2.1-rc.4**；声明上界 **< 0.3.0**，见 [docs/COMPAT.md](docs/COMPAT.md)）
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.33.5 · MIT · 支持 dsh **≥ 0.1.7-rc.2**（验证基线 **0.2.1-rc.4**；声明上界 **< 0.3.0**，见 [docs/COMPAT.md](docs/COMPAT.md)）
 **🇬🇧 English documentation:** [README.en.md](./README.en.md)
 
 ## 十一个管理面板

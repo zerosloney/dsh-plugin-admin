@@ -4,6 +4,26 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.33.5] - 2026-10-29
+
+`v1.33.4` 的 tag 指向只含第一半修复的提交，其 Release 红在 `host-smoke`；本轮把第二半（真正让设置入口
+点得开的那一步）作为新版本发出。旧 tag 不移动（已推送的 tag 不可改写）。
+
+### Fixed
+
+- **账号菜单触发器被 rc.4 新增的侧边栏 `More` 抢走**（v1.33.4 的 Release 就红在这里）：
+  `更多`/`More` 原先是账号菜单的「登出态兜底」标签，rc.4 给侧边栏加了同名 `More` 按钮，兜底便命中了它，
+  点开的是侧边栏菜单（`New session | Collapse sidebar | Plugins | …`），其中没有「设置」行，
+  于是报「account menu click=true, no 设置/Settings row appeared」。账号菜单触发器在各版本都带
+  aria-label，因此删掉这个模糊兜底，只认 `账号菜单`/`Account menu`。
+- **首启声明在账号菜单点击之前没关**：`继续`/`Continue` 覆盖窗口并吃掉点击。原先只在重试循环里关，
+  rc.4 上声明还盖着时点击就被它吃掉；现提到账号菜单点击**之前**。
+
+**验证**：CI 全绿（`ubuntu` / `windows` / `seam-matrix` / **`host-smoke`** 四 job 全 success，
+后者在真实 dsh 0.2.1-rc.4 上打开了设置对话框并渲染出本插件的 `用量仪表盘` / `自动化` 面板）；
+`verify-menu-injection` 5 → 7 checks（新增「设置行按包含匹配 + 多容器」「账号菜单只认精确 aria-label」两条钉住）；
+`npm test` 全 45 步通过（`DSH_CHECKOUT` 指向 `dsh-v0.2.1-rc.4`）。
+
 ## [1.33.4] - 2026-10-29
 
 验证基线 dsh **0.2.1-rc.4** 上的真实宿主冒烟修复（1.33.3 只改了 pin 与文档，这一步才暴露真问题）。
