@@ -22,6 +22,11 @@ v1.33.0 的发版收口轮。v1.33.0 的 tag 已推送，但 **Release 与 CI �
 - **`host-check` 断言全过后不退出**：usage-ledger sweep 等探针留下的定时器/handle 让进程一直等，
   gate 该步挂到 runner 超时，读起来像「host-check 跑不完」。断言阶段结束后显式 `process.exit(0)`，
   本机 15.3s 正常结束。
+- **`seam-matrix` 的支持下限行必红**：该 job 除基线外还探 `dsh-v0.1.7-rc.2`（docs/COMPAT.md 声明的下限，
+  是硬门而非预警），而三组探针只认 0.2.x 形态——下限里 `persona`/`toolFilter` 仍是合法字段、
+  `engines.dsh` 分支尚未引入、`tool-session-query` 还住在 `packages/session-query/`。改为按「该版本正确的形态」
+  判定：两组合约各自接受新/旧两种拼写，包路径走 `files` 多候选。基线 153 条与下限 153 条同时通过；
+  用篡改签名的副本验证探针仍会立刻报错（未被放空）。
 - **历史会话勾选条无样式**：`selection-bar` / `selection-text` / `selection-actions` / `card-select`
   四个类名没有 CSS，新加的「已选 N / 总数 + 全选」条裸奔；按 `.bulk-bar` 同族配方补齐（选中时文字转为
   主色），并给卡片复选框加 `flex: none` 对齐。

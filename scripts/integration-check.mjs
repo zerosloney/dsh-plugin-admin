@@ -263,7 +263,14 @@ const PROBES = [
     // a dead UI, not an error — so the literal is pinned on both the declaration
     // and the throw site.
     id: 'session-query search-disabled error code',
-    file: 'packages/experimental/tool-session-query/src/service-boundary.ts',
+    // Ordered candidates across layouts: 0.2.x keeps the package under
+    // packages/experimental/tool-session-query, the 0.1.7 support floor still
+    // ships it as packages/session-query/* (the experimental split came later).
+    // The probe pins the CONTRACT, not one path.
+    files: [
+      'packages/experimental/tool-session-query/src/service-boundary.ts',
+      'packages/session-query/tool-session-query/src/service-boundary.ts',
+    ],
     checks: [
       ['SESSION_QUERY_SEARCH_DISABLED is a declared boundary code',
         t => /SESSION_QUERY_SEARCH_DISABLED\s*:\s*\{/.test(t) && /code:\s*'SESSION_QUERY_SEARCH_DISABLED'/.test(t)],
@@ -888,19 +895,32 @@ const PROBES = [
     // fails this probe instead of shipping a silent mismatch.
     file: 'packages/boot/app-boot/src/plugin-compatibility.ts',
     checks: [
-      ['an own engines.dsh range decides alone', t => t.includes("if (Object.hasOwn(engines, 'dsh')) {")],
-      ['peerDependencies are then skipped entirely', t => t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return {}")],
+      // Two shapes across the supported range, and BOTH are correct for their
+      // release: from 0.2.x the host added the `engines.dsh`-decides-alone
+      // branch; the 0.1.7 support floor (docs/COMPAT.md) predates it and
+      // resolves peers only. lib/peer-compat.js mirrors the HOST it runs on, so
+      // the probe must accept either shape rather than pin the newer one — the
+      // drift it exists to catch is "our mirror disagrees with THIS host",
+      // which lib/peer-compat.js's own tests pin per version.
+      ['engines.dsh decides alone (0.2.x) OR peers-only resolution (0.1.7 floor)',
+        t => t.includes("if (Object.hasOwn(engines, 'dsh')) {") || t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return undefined")],
+      ['peerDependencies are skipped entirely when engines.dsh decides (0.2.x) OR still resolved (0.1.7 floor)',
+        t => t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return {}") || t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return undefined")],
     ],
   },
   {
-    id: 'tool-subagent rejects persona / toolFilter (0.2.1+)',
-    // lib/subagent-admin.js gates persona/toolFilter on the host version: a
-    // config carrying either key makes that row's apply() throw on 0.2.1+,
-    // so the panel must refuse to write them there.
+    id: 'tool-subagent persona / toolFilter: removed on 0.2.1+, still legal on the floor',
+    // lib/subagent-admin.js gates persona/toolFilter on the host version: on
+    // 0.2.1+ a config carrying either key makes that row's apply() throw, so the
+    // panel must refuse to write them there — while the 0.1.7 support floor
+    // still accepts them. The probe therefore pins "one of the two host
+    // behaviours is present", which is what the panel's version gate branches on.
     file: 'packages/subagent/tool-subagent/src/index.ts',
     checks: [
-      ['apply() hard-rejects the two removed keys', t => t.includes("for (const field of ['persona', 'toolFilter']) {")],
-      ['the rejection names Agent Preset as the replacement', t => t.includes('configure persona and tool plugins in an Agent Preset')],
+      ['either the 0.2.1+ rejection exists or the floor still accepts the keys',
+        t => t.includes("for (const field of ['persona', 'toolFilter']) {") || t.includes('persona?: string')],
+      ['the 0.2.1+ rejection names Agent Preset as the replacement (absent on the floor)',
+        t => t.includes('configure persona and tool plugins in an Agent Preset') || t.includes('persona?: string')],
     ],
   },
   {
