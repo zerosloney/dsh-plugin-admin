@@ -320,7 +320,11 @@ const PROBES = [
         // When a second parameter exists it must remain the projection-key
         // filter: a re-added event-count cut would silently change what
         // `cachedSnapshot(header)` means even though the call still compiles.
-        return rest.length === 0 || /ProjectionKey/.test(rest[0])
+        // The filter is spelled two ways across releases — the named alias
+        // (`ProjectionKeySelection`) or, on the 0.2.1 baseline, an inline
+        // `readonly Extract<keyof SessionProjectionMap, string>[]` — so match
+        // the SEMANTIC (a projection-key selection), not one spelling of it.
+        return rest.length === 0 || /ProjectionKey|keyof\s+SessionProjectionMap/.test(rest[0])
       }],
       ['identityOf only rejects non-zero cut on unseeded headers', t => /!header\.isSeeded && cut !== 0/.test(t)],
     ],
@@ -743,7 +747,13 @@ const PROBES = [
       // `WebRoute | WebResourceRoute` and added readResource — neither reaches
       // the plugin — so pin the registration surface and the longest-prefix
       // dispatch it rides, not the Map's literal generic.
-      ['register(prefix route) returns the disposer and longest-prefix wins', t => t.includes('register(route: WebRoute | WebResourceRoute): () => void {')
+      //
+      // The parameter type is spelled both ways across releases: the 0.2.1
+      // baseline takes a bare `WebRoute` (the plugin only ever passes one), and
+      // later hosts widen it to `WebRoute | WebResourceRoute`. Both accept the
+      // plugin's call, so accept either spelling — the load-bearing parts are
+      // the returned disposer and the longest-prefix dispatch below.
+      ['register(prefix route) returns the disposer and longest-prefix wins', t => /register\(route:\s*WebRoute(\s*\|\s*WebResourceRoute)?\):\s*\(\)\s*=>\s*void\s*\{/.test(t)
         && t.includes("route.kind === 'exact' ? this.exact : this.prefixes")
         && t.includes('prefix.length > best.path.length')],
     ],

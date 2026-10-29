@@ -991,6 +991,39 @@ await act(async () => {
 })
 assert.equal(document.querySelectorAll('.bulk-bar').length, 0, 'cancel dismisses the bulk bar')
 ctx.connection.rpc.call = originalCall
+
+// 8g. Selection is pruned to what the current filter/search SHOWS: a tick left
+// on a row that the next filter hides must not stay armed, or 「删除已选」 would
+// delete a session the operator can no longer see.
+const tickAll = async () => {
+  const button = [...document.querySelectorAll('.selection-bar button')]
+    .find((b) => b.textContent?.includes('全选'))
+  assert.ok(button !== undefined, 'the selection strip offers 全选')
+  await act(async () => {
+    button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  })
+}
+await tickAll()
+assert.ok(document.body.textContent.includes('已选 3 个 / 3'), '全选 ticks every visible session')
+const liveFilter = [...document.querySelectorAll('[data-dsh-admin-section] button')]
+  .find((b) => b.textContent?.includes('在线('))
+assert.ok(liveFilter !== undefined, 'the 在线 filter pill is present')
+await act(async () => {
+  liveFilter.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+assert.ok(
+  !document.body.textContent.includes('已选 3 个 / 3'),
+  'switching to 在线 drops the ticks the new projection does not show',
+)
+assert.equal(
+  [...document.querySelectorAll('.selection-bar button')].some((b) => b.textContent?.includes('删除已选')),
+  false,
+  'with nothing left selected the delete-selected action disappears',
+)
+await act(async () => {
+  [...document.querySelectorAll('[data-dsh-admin-section] button')]
+    .find((b) => b.textContent?.includes('全部(')).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
 // Leave the delete spies empty for the sidebar-menu tests below (they assert
 // the exact RPC count of an armed/second click).
 ctx.deletes = []
@@ -2267,4 +2300,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, selection strip (select-all + pruning to the visible projection), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

@@ -303,10 +303,29 @@ export function SessionsSection(props) {
 
   /**
    * Merge a partial state patch into the section state.
+   *
+   * The selection set is pruned here, at the ONE funnel every state change
+   * passes through: a tick on a row that the next filter/search/reload no
+   * longer shows would otherwise stay armed and be deleted by 「删除已选」
+   * while the operator cannot see it. Pruning on every patch (not only on
+   * filter pills) covers the search box and the post-reload list too.
    * @param {Record<string, any>} partial - the keys to overwrite.
    */
   function patchSession(partial) {
-    kit.patch(partial)
+    var next = partial
+    var sel = sView.selectedIds || []
+    if (sel.length > 0) {
+      var sessions = 'sessions' in partial ? partial.sessions : sView.sessions
+      var needle = ('needle' in partial ? partial.needle : sView.needle) || ''
+      var filter = 'filter' in partial ? partial.filter : sView.filter
+      var visible = filterSessions(sessions || [], filter, needle.trim().toLowerCase(), pinnedIds)
+      /** @type {string[]} */
+      var visibleIds = []
+      for (var vi = 0; vi < visible.length; vi++) visibleIds.push(visible[vi].id)
+      var kept = sel.filter(function (/** @type {string} */ id) { return visibleIds.indexOf(id) !== -1 })
+      if (kept.length !== sel.length) next = Object.assign({}, partial, { selectedIds: kept })
+    }
+    kit.patch(next)
   }
 
   // Same gateway seam the other sections use; a local alias keeps the
@@ -984,12 +1003,18 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
     var bulk = view.bulk
     var bulkScope = bulk.scope === 'group'
       ? dshT('目录「') + (bulk.label || dshT('未命名')) + '」'
+      // The checked rows, NOT the current filter: saying 「当前筛选」 here
+      // would describe a different (larger) set than the plan about to run.
       : dshT('当前筛选')
     elements.push(createElement('div', { className: 'bulk-bar', key: 'bulk-bar' },
       createElement('span', { className: 'bulk-text', key: 't' },
         view.bulkBusy
           ? dshT('删除中 ') + String(view.bulkDone) + ' / ' + String(bulk.plan.length) + '…'
-          : dshT('确认删除 ') + bulkScope + dshT('的 ') + String(bulk.plan.length) + dshT(' 个会话？此操作不可撤销')
+          : bulk.scope === 'selected'
+            // 「已勾选」 already carries the count's meaning, so this branch
+            // reads "确认删除已勾选的 N 个会话？" instead of the generic form.
+            ? dshT('确认删除已勾选的 ') + String(bulk.plan.length) + dshT(' 个会话？此操作不可撤销')
+            : dshT('确认删除 ') + bulkScope + dshT('的 ') + String(bulk.plan.length) + dshT(' 个会话？此操作不可撤销')
       ),
       createElement('div', { className: 'bulk-actions', key: 'a' },
         createElement(UiButton, {
@@ -1040,7 +1065,7 @@ export function renderSessionsView(view, patch, reload, act, onExport, pinnedIds
     var selectedCount = (view.selectedIds || []).length
     var allSelected = selectedCount > 0 && selectedCount === filtered.length
     rows.push(createElement('div', { className: 'selection-bar', key: 'selection' },
-      createElement('span', { className: 'selection-text', key: 't' },
+      createElement('span', { className: 'selection-text' + (selectedCount > 0 ? ' has-selection' : ''), key: 't' },
         selectedCount > 0
           ? dshT('已选 ') + String(selectedCount) + dshT(' 个 / ') + String(filtered.length)
           : dshT('共 ') + String(filtered.length) + dshT(' 个会话')

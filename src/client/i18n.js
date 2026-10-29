@@ -387,6 +387,7 @@ var I18N_EN = {
   "仅删除已勾选的 ": "Delete only the checked ",
   "已选会话": "Selected sessions",
   "🗑 删除已选 (": "🗑 Delete selected (",
+  "确认删除已勾选的 ": "Delete the ",
   "关停该在线会话（停止其 agent 运行）并永久删除日志记录": "Close this live session (stops its agent) and permanently delete its logs",
   "关停并删除": "Close & delete",
   "会话在线": "Session live",

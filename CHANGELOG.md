@@ -4,6 +4,37 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.33.1] - 2026-10-29
+
+v1.33.0 的发版收口轮。v1.33.0 的 tag 已推送，但 **Release 与 CI 都红了**（`publish` 在
+`Run self-check + host-check` 失败、`Publish to npm` 被跳过），npm 上并没有 v1.33.0。
+本轮修掉阻塞发版的原因，并补上 v1.33.0 引入的三处缺陷。旧 tag 不移动（已推送的 tag 不可改写），
+发新版本号重新走一遍发布。
+
+### Fixed
+
+- **`integration-check` 两条探针写死了比基线更新的上游拼写**，导致 CI 与 Release 自 v1.32.0 起持续红：
+  `cachedSnapshot` 的投影键过滤器在 `dsh-v0.2.1-rc.2`（CI 基线）里是内联
+  `readonly Extract<keyof SessionProjectionMap, string>[]`，探针只认别名 `ProjectionKeySelection`；
+  `webServer.register` 在基线上收 `WebRoute`，探针只认更新版才有的 `WebRoute | WebResourceRoute`。
+  两处**功能上都兼容**（`keys` 仍可选、插件只传 `WebRoute`），改为按语义匹配而非字面串匹配；
+  对更新版 checkout 仍能报出真实漂移（探针未被放空）。
+- **`host-check` 断言全过后不退出**：usage-ledger sweep 等探针留下的定时器/handle 让进程一直等，
+  gate 该步挂到 runner 超时，读起来像「host-check 跑不完」。断言阶段结束后显式 `process.exit(0)`，
+  本机 15.3s 正常结束。
+- **历史会话勾选条无样式**：`selection-bar` / `selection-text` / `selection-actions` / `card-select`
+  四个类名没有 CSS，新加的「已选 N / 总数 + 全选」条裸奔；按 `.bulk-bar` 同族配方补齐（选中时文字转为
+  主色），并给卡片复选框加 `flex: none` 对齐。
+- **勾选状态不随筛选收缩（误删风险）**：切到「在线」等筛选后，看不见的会话仍留在选中集，点「删除已选」
+  会删掉当前不可见的会话。改在 `patchSession` 这个唯一状态漏斗里按「当前投影」裁剪选中集，
+  筛选/搜索/刷新任一路径都会自动丢弃不可见项。
+- **「删除已选」确认条说的是「当前筛选」**：`scope: 'selected'` 复用了通用分支，文案描述的集合比实际
+  计划更大。改为独立文案「确认删除已勾选的 N 个会话？此操作不可撤销」。
+
+**验证**：`npm test` 全 45 步通过（3m44s，`DSH_CHECKOUT` 指向 pinned 基线 `dsh-v0.2.1-rc.2`）；
+`self-check` 断言 430 → 435 checks（新增「全选 → 切筛选 → 勾选自动收缩 → 删除已选消失」用例及配套断言）；
+`verify-i18n` 908 调用点 / 908 词条。
+
 ## [1.33.0] - 2026-10-28
 
 会话管理两处收口：历史会话获得精确批量删除，会话标题右键的「删除会话」换成不会骗人的确认层。
@@ -34,7 +65,8 @@
 **验证**：静态门（types / lint / 构建漂移 / 文档声明 / 行锚点）与 `verify-i18n`、`verify-menu-injection`、
 `verify-client-hygiene`、`verify-overlays`、`self-check` 全过——`self-check` 的会话行菜单用例重写为断言
 「弹层挂载、带出会话标题、确认后才发 RPC、取消不发 RPC」；`verify-i18n` 907 调用点 / 907 词条持平
-（删掉旧武装文案的孤儿键、补齐新键）。`host-check` 需要活宿主，本轮未跑。
+（删掉旧武装文案的孤儿键、补齐新键）。`host-check` 与 `integration-check` 本轮未跑（前者当时会挂到超时、
+后者对基线报漂移），这两步的修复见 [1.33.1]。
 
 ## [1.32.0] - 2026-10-26
 

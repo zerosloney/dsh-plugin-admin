@@ -3725,3 +3725,12 @@ const pkg = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'))
 assert.equal(pkg.name, 'dsh-plugin-admin')
 
 console.log('host-check OK: targeted detach on delete; derived-layout log removal; standard-layout fail-loud; unmaterialized no-op; archived-set cleanup; JSON-safe workspace mapping; operand allowlist; localSpecPath classification; layout encoder vectors; archive existence validation; list() summary-cache reuse + delete eviction; persistence read-failure visibility; registry + persistence mount probes; config row fail-loud; read() wrapper shape + drift visibility; became-live guard; mcpAdmin list/upsert/remove round-trip; concurrent upsert serialization; closeSession handle-capture dispose; no-handle fail-closed; non-live close = delete; usage-ledger retention (deleted session keeps its tokens) + background sweep (records without a dashboard read) + live event observer (short sessions, no read needed) + official tokenUsage projection outranks the log fold (and an all-zero projection does not); pluginAdmin.checkUpdates registry stub + skip rules + registry resolution; commandHookAdmin unified descriptor (11 invocations) + service provided; semver prerelease ordering; yamlScalar inline-comment strip; frontmatter exact closing delimiter; probe env proxy overlay trigger; reconcileBundles keeps bundles whose exports omit ./package.json (prune loop does not excise them, join loop still adds them')
+
+// Exit explicitly once every assertion has passed. A probe above can leave a
+// timer or watcher handle alive (the usage-ledger sweep, a fake registry's
+// retry clock); none of them can affect a verdict already printed, but Node
+// would otherwise wait on them and the gate step would hang until the runner's
+// timeout — reading as "host-check never finishes" instead of a green step.
+// The assertion phase is complete at this point, so a hard exit cannot mask a
+// failure: a thrown assertion would have exited before reaching here.
+process.exit(0)

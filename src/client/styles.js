@@ -111,6 +111,16 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(239,68,68,0.25); background: var(--dsw-alias-interactive-bg-hover-danger, rgba(239,68,68,0.06)); font-size: 12px; }',
   '[data-dsh-admin-section] .bulk-bar .bulk-text { color: var(--dsw-alias-state-error-primary, #ef4444); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
   '[data-dsh-admin-section] .bulk-bar .bulk-actions { display: flex; gap: 5px; flex: none; }',
+  // Per-session selection (the checkbox + the count/all-select strip above the
+  // list). Deliberately NOT the danger recipe: selection is reversible, so it
+  // reads as a neutral tool strip until a delete is actually requested.
+  '[data-dsh-admin-section] .selection-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2, #fff); font-size: 12px; }',
+  '[data-dsh-admin-section] .selection-bar .selection-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #61666b); font-weight: 500; }',
+  '[data-dsh-admin-section] .selection-bar .selection-text.has-selection { color: var(--dsw-alias-label-primary, #222); }',
+  '[data-dsh-admin-section] .selection-bar .selection-actions { display: flex; gap: 5px; flex: none; }',
+  // The per-card tick sits in the action row; keep it from stretching the row
+  // and give it a hit area that does not depend on the label wrapping.
+  '[data-dsh-admin-section] .card-select, [data-dsh-sa-section] .card-select { flex: none; align-self: center; }',
   '[data-dsh-admin-section] .card, [data-dsh-sa-section] .card { display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2, #fff); box-shadow: 0 1px 2px rgba(0,0,0,0.02) /* no token */; transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
   // MCP editor: the section root is height-bounded, but the editor form must
   // not scroll the WHOLE panel — a tall form (e.g. with reconnect fields
