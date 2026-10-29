@@ -73,6 +73,24 @@ check('the real-host smoke finds the settings row by CONTAINS, not by prefix', (
     'the row is looked up across menuitem/button/role=button containers')
 })
 
+check('the account-menu trigger is matched by its exact aria-label only', () => {
+  // v1.33.4's host-smoke still failed AFTER the contains fix, and the annotation
+  // named why: the click opened the SIDEBAR menu (New session | Collapse sidebar
+  // | Plugins | …) instead of the account menu, because `更多`/`More` was a
+  // trigger fallback and rc.4 added a sidebar `More` button. The account trigger
+  // carries aria-label on every release, so the ambiguous text fallback must not
+  // come back — that is the difference between "opened settings" and "opened
+  // some menu that happens to be nearby".
+  const source = readFileSync(new URL('./smoke-real-host.mjs', import.meta.url), 'utf8')
+  const trigger = source.match(/const accountLabels = \[([^\]]*)\]/)
+  assert.ok(trigger !== null, 'the account-menu trigger list is a literal')
+  const labels = trigger[1]
+  assert.ok(labels.includes('账号菜单') && labels.includes('Account menu'),
+    'the exact account-menu labels are present')
+  assert.ok(!labels.includes('更多') && !labels.includes('More'),
+    'the ambiguous 更多/More fallback is gone (it clicked the sidebar menu on rc.4)')
+})
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

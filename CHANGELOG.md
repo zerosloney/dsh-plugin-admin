@@ -17,9 +17,15 @@
   失败时把当前可见的前 24 行文本打进 CI annotation，让上游再改菜单样式时能从日志直接定位，
   不必再开本地浏览器复现。另加一条源级守护钉住这个形态（`verify-menu-injection` 5 → 6 checks），
   防止后续把匹配改回前缀式。
+- **同一处第二个原因：点错了菜单**（v1.33.4 首版仍红）：上面的诊断输出证明点击打开的是**侧边栏菜单**
+  （`New session | Collapse sidebar | Plugins | …`）而不是账号菜单——`更多`/`More` 曾是账号菜单的
+  「登出态兜底」标签，而 rc.4 给侧边栏加了同名 `More` 按钮，于是兜底命中了它，那个菜单里自然没有「设置」行。
+  账号菜单触发器在各版本都带 aria-label，因此**删掉 `更多`/`More` 这个模糊兜底**，只认
+  `账号菜单`/`Account menu`；并把首启声明（`继续`/`Continue`）的关闭提到账号菜单点击**之前**
+  （原先只在重试循环里关，rc.4 上声明还盖着窗口时点击就被它吃掉）。这条也加了源级守护（6 → 7 checks）。
 
 **验证**：`npm test` 全 45 步通过（`DSH_CHECKOUT` 指向新基线 `dsh-v0.2.1-rc.4`）；
-`verify-menu-injection` 5 → 6 checks（新增「设置行按包含匹配 + 多容器」源级钉住）；
+`verify-menu-injection` 5 → 7 checks（新增「设置行按包含匹配 + 多容器」「账号菜单只认精确 aria-label」两条钉住）；
 `verify-doc-claims` 45 steps / 5 static gates 全过（含「CI 的 dsh pin 与 COMPAT 基线一致」）；
 `integration-check` 在新基线与支持下限 `dsh-v0.1.7-rc.2` 上各 **153 contracts** 通过；
 `verify-client-hygiene` 11 source pins 不变。`smoke:real-host` 需全局 dsh CLI（本机无该命令），

@@ -558,12 +558,17 @@ try {
       // INSIDE the account menu, whose trigger is an icon button labelled
       // `账号菜单`/`Account menu` (ui-settings-account AccountMenu.tsx:65
       // aria-label={t('menu')}, zh label at locales.ts:53; the 'settings' row is
-      // the menu entry at :75). A first cut waited for a button labelled 设置 and
-      // could never see one, because that label only exists after the menu opens
-      // — so the trigger here is the ACCOUNT MENU, and opening settings is a
-      // second click on its `设置` row.
+      // the menu entry at :75).
+      //
+      // Only the EXACT account-menu labels are triggers. `更多`/`More` used to be
+      // in this list as a signed-out fallback, and dsh 0.2.1-rc.4 added a
+      // sidebar `More` button of its own — the fallback then clicked THAT and
+      // opened the sidebar menu (rows: New session | Collapse sidebar | Plugins
+      // | …), which contains no 设置 row, so the smoke reported "account menu
+      // click=true, no 设置/Settings row appeared". The account trigger carries
+      // aria-label on every release, so the ambiguous text fallback is dropped.
       const settingsLabels = ['设置', 'Settings']
-      const accountLabels = ['账号菜单', 'Account menu', '更多', 'More']
+      const accountLabels = ['账号菜单', 'Account menu']
       const labelHelper = "const label = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim()"
       const wantedJson = JSON.stringify(accountLabels)
       const settingsJson = JSON.stringify(settingsLabels)
@@ -579,6 +584,20 @@ try {
       }
       if (triggerPresent) ok('the shell painted its settings trigger', `${accountLabels.join('/')} is present and clickable`)
       else fail('the shell painted its settings trigger', String(await evaluate('document.body.innerText')).slice(0, 160).replace(/\n/g, ' '))
+
+      // The first-run announcement ("内测声明 … 继续") covers the window and EATS
+      // clicks, so dismiss it BEFORE the account-menu click rather than only in
+      // the retry loop below: on 0.2.1-rc.4 the notice was still up when the
+      // trigger was clicked, and the click landed on it.
+      await evaluate(`(() => {
+        const dismiss = ['继续', 'Continue', '知道了', 'Got it']
+        const label = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim()
+        const hit = Array.from(document.querySelectorAll('button,[role=button]'))
+          .find((el) => dismiss.includes(label(el)))
+        if (hit !== undefined) hit.click()
+        return true
+      })()`)
+      await new Promise((resolve) => setTimeout(resolve, 300))
 
       // Reach OUR OWN panel. The sidebar's 插件/会话 entries belong to the SHELL's
       // plugin manager and session list — clicking those would prove nothing about
