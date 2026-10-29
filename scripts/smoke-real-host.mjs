@@ -609,8 +609,18 @@ try {
         while (Date.now() < settingsDeadline && !opened) {
           opened = (await evaluate(`(() => {
             const wanted = ${settingsJson}
-            const rows = Array.from(document.querySelectorAll('[role="menuitem"]'))
-            const hit = rows.find((el) => wanted.some((w) => (el.textContent || '').trim().startsWith(w)))
+            // The row used to be matched as a role=menuitem button whose text
+            // STARTS WITH 设置. dsh 0.2.1-rc.4 gave menu rows a leading icon and
+            // an optional shortcut chip (MenuItemButton now renders
+            // icon + label + ShortcutKeys), so the visible text is no longer
+            // guaranteed to begin with the label — match on CONTAINS instead,
+            // and accept the row wherever it is rendered (the menu may portal
+            // outside the sidebar subtree).
+            const rows = Array.from(document.querySelectorAll('[role="menuitem"], button, [role="button"]'))
+            const hit = rows.find((el) => {
+              const text = (el.textContent || '').trim()
+              return wanted.some((w) => text === w || text.startsWith(w) || text.includes(w))
+            })
             if (hit === undefined) return false
             hit.click()
             return true
@@ -619,7 +629,17 @@ try {
         }
       }
       if (opened === true) ok('opened the shell settings dialog', 'account menu → 设置/Settings row')
-      else fail('opened the shell settings dialog', `account menu click=${String(openedMenu)}, no 设置/Settings row appeared`)
+      else {
+        // Diagnostic on failure: name what the open menu actually rendered, so
+        // an upstream menu restyle is diagnosable from the CI annotation alone
+        // instead of needing a local browser session.
+        const seen = await evaluate(`(() => {
+          const rows = Array.from(document.querySelectorAll('[role="menuitem"], button, [role="button"]'))
+          return rows.slice(0, 24).map((el) => ((el.textContent || '').trim().slice(0, 24))
+            || el.getAttribute('aria-label') || el.getAttribute('title') || '?').join(' | ')
+        })()`)
+        fail('opened the shell settings dialog', `account menu click=${String(openedMenu)}, no 设置/Settings row appeared; rows seen: ${String(seen)}`)
+      }
 
       const ourLabels = ['用量仪表盘', 'Usage Dashboard', '自动化', 'Automation']
       let panelText = ''
@@ -649,8 +669,14 @@ try {
           await new Promise((resolve) => setTimeout(resolve, 400))
           await evaluate(`(() => {
             const wanted = ${settingsJson}
-            const rows = Array.from(document.querySelectorAll('[role="menuitem"]'))
-            const hit = rows.find((el) => wanted.some((w) => (el.textContent || '').trim().startsWith(w)))
+            // Same relaxation as the first attempt above: dsh 0.2.1-rc.4 renders
+            // menu rows as icon + label + shortcut, so match on CONTAINS and
+            // accept any clickable row container.
+            const rows = Array.from(document.querySelectorAll('[role="menuitem"], button, [role="button"]'))
+            const hit = rows.find((el) => {
+              const text = (el.textContent || '').trim()
+              return wanted.some((w) => text === w || text.startsWith(w) || text.includes(w))
+            })
             if (hit !== undefined) hit.click()
             return true
           })()`)

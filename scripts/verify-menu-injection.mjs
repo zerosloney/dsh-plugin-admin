@@ -57,6 +57,22 @@ check('the row menu comes from the slot, not from label classification', () => {
     'no host menu label is matched any more')
 })
 
+check('the real-host smoke finds the settings row by CONTAINS, not by prefix', () => {
+  // dsh 0.2.1-rc.4 gave menu rows a leading icon plus a shortcut chip, so a row's
+  // visible text stopped reliably BEGINNING with its label (v1.33.3's host-smoke
+  // failed exactly there: "account menu click=true, no 设置/Settings row
+  // appeared"). The smoke must keep the relaxed matching, otherwise the next
+  // menu restyle breaks the only check that exercises a REAL host.
+  const source = readFileSync(new URL('./smoke-real-host.mjs', import.meta.url), 'utf8')
+  assert.ok(!/wanted\.some\(\(w\) => \(el\.textContent \|\| ''\)\.trim\(\)\.startsWith\(w\)\)/.test(source),
+    'the settings row is no longer matched by prefix only')
+  const relaxed = source.match(/text\.includes\(w\)/g) ?? []
+  assert.ok(relaxed.length >= 2,
+    `both the first attempt and the retry match on CONTAINS (found ${relaxed.length})`)
+  assert.ok(/\[role="menuitem"\], button, \[role="button"\]/.test(source),
+    'the row is looked up across menuitem/button/role=button containers')
+})
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) FAILED`)
   process.exit(1)

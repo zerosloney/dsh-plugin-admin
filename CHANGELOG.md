@@ -4,6 +4,27 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.33.4] - 2026-10-29
+
+验证基线 dsh **0.2.1-rc.4** 上的真实宿主冒烟修复（1.33.3 只改了 pin 与文档，这一步才暴露真问题）。
+
+### Fixed
+
+- **`smoke:real-host` 在 rc.4 上打不开设置对话框**（CI `host-smoke` 唯一失败项）：脚本原先按
+  「`role="menuitem"` 且 textContent **以** 设置/Settings **开头**」定位那一行。dsh 0.2.1-rc.4 给菜单行加了
+  前置图标与快捷键徽标（`MenuItemButton` 现在渲染 icon + label + `ShortcutKeys`），行内文本不再保证以标签开头；
+  同时菜单可能 portal 到侧边栏子树之外。改为**包含匹配**并接受 `menuitem`/`button`/`role=button` 三种容器；
+  失败时把当前可见的前 24 行文本打进 CI annotation，让上游再改菜单样式时能从日志直接定位，
+  不必再开本地浏览器复现。另加一条源级守护钉住这个形态（`verify-menu-injection` 5 → 6 checks），
+  防止后续把匹配改回前缀式。
+
+**验证**：`npm test` 全 45 步通过（`DSH_CHECKOUT` 指向新基线 `dsh-v0.2.1-rc.4`）；
+`verify-menu-injection` 5 → 6 checks（新增「设置行按包含匹配 + 多容器」源级钉住）；
+`verify-doc-claims` 45 steps / 5 static gates 全过（含「CI 的 dsh pin 与 COMPAT 基线一致」）；
+`integration-check` 在新基线与支持下限 `dsh-v0.1.7-rc.2` 上各 **153 contracts** 通过；
+`verify-client-hygiene` 11 source pins 不变。`smoke:real-host` 需全局 dsh CLI（本机无该命令），
+本轮的菜单选择器修复由 CI 的 `host-smoke` 验证。
+
 ## [1.33.3] - 2026-10-29
 
 验证基线由 dsh **0.2.1-rc.2** 上调为 **0.2.1-rc.4**。这一轮是**零代码适配**——探针与插件都不需要改，
@@ -27,10 +48,7 @@ rc.2 → rc.4 共 15 个提交，主要是 UI 提示框、ACP/MCP stdout 诊断�
   rc 档之间的小版本滑动不再制造假红——这也正是那次修复的收益。
 
 **验证**：`npm test` 全 45 步通过（3m56s，`DSH_CHECKOUT` 指向新基线 `dsh-v0.2.1-rc.4`）；
-`verify-doc-claims` 45 steps / 5 static gates 全过（含「CI 的 dsh pin 与 COMPAT 基线一致」）；
-`integration-check` 在新基线与支持下限 `dsh-v0.1.7-rc.2` 上各 **153 contracts** 通过；
-`verify-client-hygiene` 11 source pins 不变。`smoke:real-host` 需全局 dsh CLI，本机无该命令，
-由 CI 的 `host-smoke` 与 Release 的 `smoke-published` 覆盖（`SMOKE_REQUIRE_DSH=1`）。
+`verify-doc-claims` 与 `integration-check`（新基线 + 支持下限各 153 契约）全过。
 
 ## [1.33.2] - 2026-10-29
 
