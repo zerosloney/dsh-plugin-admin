@@ -4,6 +4,34 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.33.3] - 2026-10-29
+
+验证基线由 dsh **0.2.1-rc.2** 上调为 **0.2.1-rc.4**。这一轮是**零代码适配**——探针与插件都不需要改，
+只把 pin、文档与 CI 的安装目标对齐到新基线。
+
+### Changed
+
+- **验证基线 dsh 0.2.1-rc.2 → 0.2.1-rc.4**：`docs/COMPAT.md` 头部、两份 README 的徽章、
+  `ci.yml` / `release.yml` / `seam-early-warning.yml` 里的 checkout pin 与 `npm install -g @deepseek-ai/dsh@…`
+  一并提到 rc.4（`verify-doc-claims` 第 14 项把 workflow pin 与 COMPAT 基线绑定，四处漏一处就红）。
+  选 rc.4 而非更新的 `0.2.1-rc.5` / `0.2.2-alpha.2`：rc.5 在 npm 上只是 `next` 且**没有 git tag**，
+  alpha 不宜作基线；`latest` 仍指向 rc.2，rc.4 是「有正式 tag + 已发布」的最新一档。
+
+### 为什么这一轮不需要改代码
+
+rc.2 → rc.4 共 15 个提交，主要是 UI 提示框、ACP/MCP stdout 诊断与侧边栏导航定制，**没有触碰插件依赖的接缝**：
+
+- 会话行菜单 slot（`sidebar.workspaces.session.menu.item`）与 `menuOpenState` hook 契约未变
+  （`ui-workspace/src/client/contract/slots.ts` 逐字比对一致），导航改动只落在 `navigation.ts`；
+- 153 条接缝契约在 rc.4 上**全绿**，说明前两轮把探针改成「按语义匹配」而非字面拼写之后，
+  rc 档之间的小版本滑动不再制造假红——这也正是那次修复的收益。
+
+**验证**：`npm test` 全 45 步通过（3m56s，`DSH_CHECKOUT` 指向新基线 `dsh-v0.2.1-rc.4`）；
+`verify-doc-claims` 45 steps / 5 static gates 全过（含「CI 的 dsh pin 与 COMPAT 基线一致」）；
+`integration-check` 在新基线与支持下限 `dsh-v0.1.7-rc.2` 上各 **153 contracts** 通过；
+`verify-client-hygiene` 11 source pins 不变。`smoke:real-host` 需全局 dsh CLI，本机无该命令，
+由 CI 的 `host-smoke` 与 Release 的 `smoke-published` 覆盖（`SMOKE_REQUIRE_DSH=1`）。
+
 ## [1.33.2] - 2026-10-29
 
 发版管线的两处「红点其实是假红」收口，外加一条能提前抓住 v1.33.0 那类缺陷的守护。

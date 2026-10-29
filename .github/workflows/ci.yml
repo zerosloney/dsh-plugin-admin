@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.2.1-rc.2
+          ref: dsh-v0.2.1-rc.4
           path: .dsh-checkout
           fetch-depth: 1
 
@@ -87,7 +87,7 @@ jobs:
 
       # Pinned to the release this plugin is verified against (docs/COMPAT.md).
       - name: Install the pinned dsh CLI
-        run: npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+        run: npm install --global @deepseek-ai/dsh@0.2.1-rc.4
 
       # `dsh plugin … add` materialises the profile with pnpm, which the runner
       # does not ship: without it the install step dies with exit 127.
@@ -145,7 +145,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: dsh-v0.2.1-rc.2
+          ref: dsh-v0.2.1-rc.4
           path: .dsh-release
           fetch-depth: 1
 
