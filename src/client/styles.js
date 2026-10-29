@@ -121,6 +121,13 @@ var CSS_TEXT = [
   // The per-card tick sits in the action row; keep it from stretching the row
   // and give it a hit area that does not depend on the label wrapping.
   '[data-dsh-admin-section] .card-select, [data-dsh-sa-section] .card-select { flex: none; align-self: center; }',
+  // The lazy-panel placeholder's 重试 button (impl.js, before any panel CSS is
+  // installed). It sits OUTSIDE a mounted section — the whole point of the
+  // placeholder is that the panel did not mount — so the rule is unscoped like
+  // .dsh-admin-toast, and carries its own chrome instead of relying on a
+  // section ancestor that is not there yet.
+  '.btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.4; border-radius: 6px; cursor: pointer; border: 1px solid var(--dsw-alias-border-l2, rgba(150,150,160,0.45)); background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #222); }',
+  '.btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(120,120,130,0.10)); }',
   '[data-dsh-admin-section] .card, [data-dsh-sa-section] .card { display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2, #fff); box-shadow: 0 1px 2px rgba(0,0,0,0.02) /* no token */; transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }',
   // MCP editor: the section root is height-bounded, but the editor form must
   // not scroll the WHOLE panel — a tall form (e.g. with reconnect fields

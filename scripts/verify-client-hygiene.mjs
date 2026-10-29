@@ -31,7 +31,7 @@
  * Run: node scripts/verify-client-hygiene.mjs
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 
 const read = (/** @type {string} */ rel) => readFileSync(new URL(`../src/client/${rel}`, import.meta.url), 'utf8')
 const sessions = read('panels/sessions.js')
@@ -43,6 +43,12 @@ const todo = read('panels/todo.js')
 const usage = read('panels/usage.js')
 const workflow = read('panels/workflow.js')
 const plugins = read('panels/plugins.js')
+const styles = read('styles.js')
+/** Every browser-half module, so the class check cannot miss a new file. */
+const clientSources = readdirSync(new URL('../src/client', import.meta.url), { recursive: true })
+  .map((/** @type {string} */ f) => String(f).split(/[\\/]/).join('/'))
+  .filter((/** @type {string} */ f) => f.endsWith('.js'))
+  .map((/** @type {string} */ f) => read(f))
 
 const checks = []
 const check = (/** @type {string} */ name, /** @type {() => void} */ fn) => {
@@ -122,6 +128,44 @@ check('10. a forced update check requested mid-flight is replayed', () => {
   assert.ok(/pendingForceRef\.current = true/.test(plugins), 'the request is remembered instead of dropped')
   assert.ok((plugins.match(/if \(pendingForceRef\.current\) \{/g) || []).length >= 2,
     'replayed on both the success and failure paths')
+})
+
+check('11. every className literal a panel renders has a rule in the stylesheet', () => {
+  // v1.33.0 shipped a selection strip whose four class names existed ONLY in
+  // the render code: the strip painted unstyled and nothing caught it, because
+  // every gate checked behaviour and none checked that a name it emits is
+  // actually styled. This pin closes that hole: a new className must land with
+  // its CSS rule in the same change.
+  //
+  // Deliberately narrow, to stay honest rather than noisy:
+   //  - only single-quoted whole-string classNames (`className: 'x'` and the
+  //    `'x'` half of a `className: 'x' + (...)` concatenation);
+   //  - names that are purely presentational must appear as `.name` in
+   //    styles.js, either bare (global chrome like .dsh-admin-toast) or inside
+   //    the `[data-dsh-admin-section]` / `[data-dsh-sa-section]` /
+   //    `[data-cha-section]` / `[data-dsh-todo]` scoped recipes;
+   //  - a name is exempt when it is a KNOWN host primitive hook (the shell's
+  //    own atoms carry their own styling), listed explicitly so the exemption
+  //    is a decision rather than an accident.
+  const HOST_OWNED = new Set([
+    // Shell primitive internals: the atom renders these itself.
+    'input', 'check', 'checkbox-row', 'danger-solid', 'pin-active',
+    // Structural hooks whose look comes from a parent rule.
+    'active', 'collapsed',
+  ])
+  const emitted = new Set()
+  for (const source of clientSources) {
+    for (const match of source.matchAll(/className:\s*'([a-z][a-z0-9-]*)'/g)) emitted.add(match[1])
+  }
+  const unstyled = []
+  for (const name of emitted) {
+    if (HOST_OWNED.has(name)) continue
+    // `.name {` / `.name:hover` / `.name.other` / `.parent .name` all count.
+    const rule = new RegExp(`\\.${name.replace(/[-]/g, '\\-')}(?![a-z0-9-])`)
+    if (!rule.test(styles)) unstyled.push(name)
+  }
+  assert.deepEqual(unstyled, [],
+    `these classNames are emitted but have no CSS rule in src/client/styles.js: ${unstyled.join(', ')}`)
 })
 
 console.log(checks.join('\n'))

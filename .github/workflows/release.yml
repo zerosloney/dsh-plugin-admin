@@ -96,20 +96,32 @@ jobs:
       - name: Install pnpm (dsh's profile installer)
         run: npm install --global pnpm@11
 
-      # The registry serves the new version a few seconds after publish;
-      # poll instead of a blind sleep, with a hard 5-minute ceiling so a
-      # genuinely missing publish fails loud rather than hanging.
+      # The registry serves a new version a few seconds after publish, but
+      # propagation is NOT bounded: npm's CDN replicas lag differently per
+      # region, and v1.33.1 timed out at the old 5-minute ceiling while the
+      # package was already installable (`npm view` answered on a second
+      # machine). A ceiling that turns "slow CDN" into a red release is the
+      # wrong failure mode, so: poll with a longer budget, treat only a
+      # genuinely absent publish as fatal, and on timeout say which check
+      # failed and that the publish itself already succeeded.
       - name: Wait for the registry to serve the published version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          for i in $(seq 1 30); do
+          # 15 minutes (90 x 10s). npm's own docs allow up to ~10 min for a
+          # global CDN refresh; the extra headroom covers a cold runner cache.
+          for i in $(seq 1 90); do
             if npm view "dsh-plugin-admin@${VERSION}" version >/dev/null 2>&1; then
-              echo "registry serves dsh-plugin-admin@${VERSION}"
+              echo "registry serves dsh-plugin-admin@${VERSION} (attempt ${i})"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::registry never served dsh-plugin-admin@${VERSION} within 5 minutes"
+          # The publish job already succeeded, so a missing view here is a
+          # registry propagation problem, not a broken artifact. Fail loud but
+          # say exactly that, and point at the two things worth retrying.
+          echo "::error::registry did not answer for dsh-plugin-admin@${VERSION} within 15 minutes."
+          echo "::error::The publish step itself succeeded — this is CDN propagation, not a bad package."
+          echo "::error::Re-run this job; if it still fails, check https://www.npmjs.com/package/dsh-plugin-admin?activeTab=versions"
           exit 1
 
       - name: Smoke the published package (registry install)

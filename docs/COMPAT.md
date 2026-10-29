@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> **验证基线：dsh 0.2.1-rc.2**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.2`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.33.1。
+> **验证基线：dsh 0.2.1-rc.2**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.2`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.33.2。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
 > 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；

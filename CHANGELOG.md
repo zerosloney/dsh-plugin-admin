@@ -4,6 +4,33 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.33.2] - 2026-10-29
+
+发版管线的两处「红点其实是假红」收口，外加一条能提前抓住 v1.33.0 那类缺陷的守护。
+
+### Added
+
+- **类名必须有样式的守护**（`scripts/verify-client-hygiene.mjs` 第 11 条）：扫出所有
+  `className: 'x'` 字面量，要求每个名字在 `src/client/styles.js` 里真有 `.x` 规则（宿主原子自带的
+  `input` / `check` 等按显式白名单豁免）。v1.33.0 的勾选条四个类名只存在于渲染代码、样式表里没有，
+  而当时**没有任何一道门检查这件事**——这条守护就是补那个洞。加上它当场就抓到一个漏网类名 `btn`
+  （懒加载占位符的「重试」按钮，见下）。
+
+### Fixed
+
+- **懒加载占位符的「重试」按钮没有任何样式**：`impl.js` 的 `className: 'btn'` 在样式表里查无此规则，
+  按钮只有内联 `marginLeft`，裸渲染成默认按钮。它位于**面板挂载失败之后**，此时 `[data-dsh-admin-section]`
+  祖先根本不存在，所以规则不能带作用域前缀——与 `.dsh-admin-toast` 同理改为全局规则，自带边框/内边距/悬停态。
+- **Release 的 registry 等待会因 CDN 传播慢而假红**：v1.33.1 的 `smoke-published` 卡在
+  「Wait for the registry to serve the published version」，而包本身**已经发布成功**
+  （`npm view dsh-plugin-admin version` → `1.33.1`）。原实现是 5 分钟硬上限（30×10s），
+  把「CDN 慢」判成了「发版失败」。改为 15 分钟预算（90×10s），并在超时时明确写出
+  「publish 这一步已成功，这是 CDN 传播问题而非坏包」+ 可重跑指引。
+
+**验证**：`npm test` 全 45 步通过（4m15s，`DSH_CHECKOUT` 指向 pinned 基线 `dsh-v0.2.1-rc.2`）；
+`verify-client-hygiene` 10 → 11 source pins（新增类名覆盖检查，并修掉它抓出的 `btn`）；
+`verify-i18n` 908 调用点 / 908 词条；构建产物已重建、`build-client --check` 一致。
+
 ## [1.33.1] - 2026-10-29
 
 v1.33.0 的发版收口轮。v1.33.0 的 tag 已推送，但 **Release 与 CI 都红了**（`publish` 在
