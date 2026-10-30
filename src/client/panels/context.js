@@ -9,9 +9,9 @@ import React from 'react'
 // packages/client/AGENTS.md: the baseline must NOT be repeated in
 // dsh.client.external): the shell shares one instance of these controls.
 import { Button as UiButton, Checkbox as UiCheckbox, Input as UiInput, Pill as UiPill } from '@deepseek-ai/dsh-client-ui-primitives'
-import { injectStyles, injectSaStyles, injectChStyles, injectTodoStyles } from '../styles.js'
+import { injectStyles, injectChStyles, injectTodoStyles } from '../styles.js'
 
-export { React, UiButton, UiCheckbox, UiInput, UiPill, injectStyles, injectSaStyles, injectChStyles, injectTodoStyles }
+export { React, UiButton, UiCheckbox, UiInput, UiPill, injectStyles, injectChStyles, injectTodoStyles }
 
 export var createElement = React.createElement
 
@@ -98,7 +98,6 @@ export function configure(env) {
   // path (a page that never opens an admin surface never needs them). Each
   // injector is idempotent — it checks for its own <style data-plugin-css> tag.
   injectStyles()
-  injectSaStyles()
   injectChStyles()
   injectTodoStyles()
   if (typeof env.dshT === 'function') dshT = env.dshT

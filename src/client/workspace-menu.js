@@ -19,11 +19,22 @@
  *     a Session row nested in the group can never arm it;
  *   - `<id>` IS the Workspace id (`groupByWorkspace` passes `workspace.workspaceId`
  *     as the group key), so the row identifies the workspace exactly;
- *   - the menu is whatever `[role="menu"]` portal appears within the next
- *     second — no label is read or matched, and a menu that was already open
- *     when the click landed is ignored;
+ *   - the menu is the portal THIS click opens: the watch starts at the capture
+ *     phase of the click and ends with that click's own task, so a menu opened
+ *     by a later gesture can never be claimed. No label is read or matched, and
+ *     a menu that was already open when the click landed is ignored;
  *   - the path is resolved host-side from that id (`workspaceAdmin/list`), so
  *     the client never guesses a directory; `fsAdmin/reveal` re-gates it.
+ *
+ * WHY THE WATCH IS TASK-SCOPED. Only one click in the row opens a menu: the
+ * `...` anchor. The row body (toggle) and the `＋` new-session button arm the
+ * hook too — they are inside the same row — but open nothing. A wall-clock
+ * window is therefore a leak, not a safety margin: it survives into the next
+ * gesture, and the next `[role="menu"]` to appear is often NOT this row's. The
+ * composer's model picker (`ui-model-selection/ModelSelect.tsx`) is one of
+ * those: it is a `[role="menu"]` whose first `button[role="menuitem"]` is a
+ * drill cell, so the clone landed in 选模型. Ending the watch with the arming
+ * click's own task keeps the structural rule and drops the neighbour.
  *
  * The row is a clone of a native menuitem, so it inherits the host's own
  * styling (and its hover/focus behaviour); the click handler is ours, because a
@@ -173,9 +184,19 @@ export function installWorkspaceMenuOpenDir(options) {
       clearTimeout(timer)
       timer = null
     }
+    doc.removeEventListener('pointerdown', onNewGesture, true)
+    doc.removeEventListener('keydown', onNewGesture, true)
   }
 
-  /** Watch for the menu this click is about to open. @param {string} id */
+  /**
+   * A newer gesture owns every menu it opens, so it ends this click's watch
+   * before its own click can be mistaken for the armed one.
+   */
+  function onNewGesture() {
+    disarm()
+  }
+
+  /** Watch for the menu THIS click opens. @param {string} id */
   function arm(id, /** @type {Element|null} */ glyph) {
     disarm()
     armed = id
@@ -192,9 +213,14 @@ export function installWorkspaceMenuOpenDir(options) {
       }
     })
     observer.observe(doc.body, { childList: true, subtree: true })
-    // The + / chevron buttons in the same row open no menu: that click is then
-    // a no-op and the watch must not leak into the next, unrelated menu.
-    timer = setTimeout(disarm, 1500)
+    // React flushes a discrete click synchronously, so the portal this click
+    // opens exists before its task ends and the observer microtask sees it.
+    // Ending the watch there (`setTimeout 0`) and on the next gesture is what
+    // keeps a + / row-body click — which opens no menu — from donating this
+    // workspace id to an unrelated menu opened later.
+    timer = setTimeout(disarm, 0)
+    doc.addEventListener('pointerdown', onNewGesture, true)
+    doc.addEventListener('keydown', onNewGesture, true)
   }
 
   /** @param {Event} event */

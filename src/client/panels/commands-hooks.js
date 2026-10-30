@@ -1,6 +1,6 @@
 /** commands-hooks — split from the old single-file panels.js (mechanical, behaviour unchanged). */
 import { UiButton, UiCheckbox, UiInput, createElement, downloadTextFile, dshT, messageOf, useEffect, useRef, useState } from './context.js'
-import { unwrap } from './subagents.js'
+import { unwrap } from './shared.js'
 
 /* ========================================================================== */
 /*          Command & Hook Admin (merged from dsh-command-hook-admin)         */

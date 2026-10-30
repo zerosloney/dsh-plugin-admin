@@ -308,9 +308,6 @@ try {
     ['sessionAdmin', 'list', {}],
     ['sessionAdmin', 'usageReport', {}],
     ['mcpAdmin', 'list', {}],
-    ['subagentAdmin', 'list', {}],
-    ['subagentAdmin', 'runtimeList', {}],
-    ['subagentAdmin', 'cliList', {}],
     ['commandHookAdmin', 'listCommands', {}],
     ['commandHookAdmin', 'listHooks', {}],
     ['projectAdmin', 'list', { cwd: profileDir }, { expect: 'refusal', refusalText: '工作区' }],
@@ -318,7 +315,7 @@ try {
     ['cronAdmin', 'list', {}],
     ['overlayAdmin', 'status', {}],
     ['workspaceAdmin', 'list', {}],
-    ['skillsAdmin', 'list', { sessionIds: [] }],
+
     ['webSearchAdmin', 'list', {}],
     ['webSearchAdmin', 'active', {}],
     ['workflowAdmin', 'listRuns', {}],
@@ -347,13 +344,13 @@ try {
   }
   if (injectGuards === 0) ok('no endpoint hit a Cordis inject guard', `${SWEEP.length} calls`)
   else fail('no endpoint hit a Cordis inject guard', `${injectGuards} call(s) read an undeclared service`)
-  // 14 is the manifest's namespace count (host-check asserts the manifest itself);
+  // 12 is the manifest's namespace count (host-check asserts the manifest itself);
   // this checks that the SWEEP did not quietly lose a namespace.
   const sweepNamespaces = new Set(SWEEP.map(([ns]) => ns))
-  if (sweepNamespaces.size + SKIPPED_NAMESPACES.length === 14) {
+  if (sweepNamespaces.size + SKIPPED_NAMESPACES.length === 12) {
     ok('the sweep covers every admin namespace', `${sweepNamespaces.size} called + ${SKIPPED_NAMESPACES.length} skipped (${SKIPPED_NAMESPACES.join(', ')})`)
   } else {
-    fail('the sweep covers every admin namespace', `${sweepNamespaces.size} called + ${SKIPPED_NAMESPACES.length} skipped, expected 14`)
+    fail('the sweep covers every admin namespace', `${sweepNamespaces.size} called + ${SKIPPED_NAMESPACES.length} skipped, expected 12`)
   }
   if (answered === SWEEP.length) ok('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} calls over ${reached.size} namespaces`)
   else fail('every read-only endpoint answered ok:true', `${answered}/${SWEEP.length} answered; reached ${[...reached].sort().join(', ')}`)

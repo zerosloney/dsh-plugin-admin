@@ -31,8 +31,8 @@ const EXPECTED_OPTIONAL = Object.freeze({
   'workspaceAdmin/insertBefore': Object.freeze(['beforeWorkspaceId']),
   'webSearchAdmin/saveConfig': Object.freeze(['expectedRevision']),
 })
-/** Wires the gateway must reject when omitted: 87 declared − 6 optional. */
-const EXPECTED_REQUIRED = 81
+/** Wires the gateway must reject when omitted: 77 declared − 6 optional. */
+const EXPECTED_REQUIRED = 71
 /** The optional wire count is the contract too (6). */
 const EXPECTED_OPTIONAL_COUNT = 6
 
@@ -52,7 +52,6 @@ const check = (name, fn) => {
 const WRONG = {
   text: [1, true, null, {}, ['a']],
   scalar: [{}, ['a']],
-  number: ['1', true, null, Number.NaN, Number.POSITIVE_INFINITY],
   boolean: ['true', 1, null],
   textList: ['a', [1], [null], {}],
   entry: ['a', 1, null, ['a']],
@@ -135,7 +134,7 @@ check('every manifest wire resolves to a schema and rides a strict codec', () =>
       }
     }
   }
-  assert.ok(wires > 80, 'the surface really is this wide (' + wires + ' wires)')
+  assert.ok(wires > 65, 'the surface really is this wide (' + wires + ' wires)')
   assert.deepEqual([...used].sort(), [...RPC_SCHEMA_NAMES].sort(), 'every schema in the table is actually used')
 })
 

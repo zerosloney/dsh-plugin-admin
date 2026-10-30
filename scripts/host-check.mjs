@@ -178,10 +178,8 @@ const typertRegister = (descriptor) => {
   typertRegistrations.push(descriptor)
   return () => {}
 }
-// Minimal `subagents` service face for the workflow mount's gate. Only the
-// ctx.get() route is stubbed: subagent-admin reads the `ctx.subagents` PROPERTY
-// face, which stays absent on purpose so its existing "no live subagents"
-// degrade path in this harness is untouched.
+// Minimal `subagents` service face for the workflow mount's gate: that mount
+// reads it through ctx.get() and degrades when it is missing.
 const subagentsStub = { list: () => [] }
 const fakeCtx = {
   baseUrl: pathToFileURL(join(here, '..')).href,
@@ -241,7 +239,6 @@ assert.ok(fakeCtx.provided?.sessionAdmin, 'sessionAdmin service provided')
 assert.ok(fakeCtx.provided?.pluginAdmin, 'pluginAdmin service provided')
 assert.ok(fakeCtx.provided?.fsAdmin, 'fsAdmin service provided')
 assert.ok(fakeCtx.provided?.mcpAdmin, 'mcpAdmin service provided')
-assert.ok(fakeCtx.provided?.subagentAdmin, 'subagentAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.commandHookAdmin, 'commandHookAdmin service provided (merged)')
 assert.ok(fakeCtx.provided?.workflowAdmin, 'workflowAdmin service provided (merged)')
 /* ---------- every audited method exists on the mounted service ----------
@@ -271,8 +268,8 @@ assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'skillsAdmin', 'subagentAdmin', 'webSearchAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all fourteen namespaces',
+  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'webSearchAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all twelve namespaces',
 )
 /* ------------ one RPC table, both halves checked against it -------------
  * lib/rpc-manifest.js owns the wire surface. The host side is the mounted
@@ -465,7 +462,7 @@ if (typeof process.env.DSH_ADMIN_DUMP_RPC === 'string' && process.env.DSH_ADMIN_
 // guards here is that the mount REACHES the descriptor at all: the workflow
 // mount reads `ctx.get('subagents')` and early-returns when it is missing, so
 // before the fake context resolved that key the plugin silently shipped
-// thirteen namespaces in this harness (and all twelve workflow endpoints went
+// twelve namespaces in this harness (and all twelve workflow endpoints went
 // unchecked). The engine/journal/tool wiring has its own verifiers
 // (verify-workflow-*.mjs) — this block only pins the wire surface.
 const wfIds = typertRegistrations[0].invocations.map((i) => i.id)
@@ -3677,7 +3674,7 @@ try {
 {
   const { resolvePluginConfig } = await import(new URL('../lib/index.js', import.meta.url).href)
   const { PANEL_IDS, PANEL_STATES } = await import(new URL('../lib/panel-ids.js', import.meta.url).href)
-  assert.equal(PANEL_IDS.length, 11, 'eleven switchable panels')
+  assert.equal(PANEL_IDS.length, 9, 'nine switchable panels')
   assert.deepEqual([...PANEL_STATES], ['auto', 'on', 'off'], 'three states, auto first')
   assert.deepEqual(resolvePluginConfig({}).panels, {}, 'absent means every panel is auto')
   assert.deepEqual(

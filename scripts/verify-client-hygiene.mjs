@@ -37,7 +37,6 @@ const read = (/** @type {string} */ rel) => readFileSync(new URL(`../src/client/
 const sessions = read('panels/sessions.js')
 const mcp = read('panels/mcp.js')
 const impl = read('impl.js')
-const subagents = read('panels/subagents.js')
 const automation = read('panels/automation.js')
 const todo = read('panels/todo.js')
 const usage = read('panels/usage.js')
@@ -56,13 +55,20 @@ const check = (/** @type {string} */ name, /** @type {() => void} */ fn) => {
   checks.push(`✅ ${name}`)
 }
 
-check('1. deleted sessions are pruned from the pin whitelist, but never against an empty list', () => {
-  assert.ok(sessions.includes('setPinnedIds(function (/** @type {string[]} */ cur) {'),
-    'the list refresh prunes pins')
-  assert.ok(sessions.includes('listed.length > 0'),
-    'pruning is skipped for an empty listing, so a transient empty answer cannot wipe every pin')
-  assert.ok(/kept\.length === cur\.length \? cur : kept/.test(sessions),
-    'an unchanged result keeps the identity (no needless re-render / write)')
+check('1. 历史会话 is an archived-only list: no pin/filter/bulk state survives, delete stays two-step', () => {
+  // The panel answers one question — what did I archive, and how do I remove
+  // it. These pins keep the removed surfaces from creeping back as "just one
+  // more filter": the list takes archived rows only, a still-live row is torn
+  // down through closeSession, and the sidebar projection is corrected BEFORE
+  // the page re-reads (otherwise a deleted row survives as a ghost).
+  assert.ok(/row\.archived === true/.test(sessions), 'only archived rows are listed')
+  assert.ok(/row\.live === true \? 'sessionAdmin\/closeSession' : 'sessionAdmin\/deleteSession'/.test(sessions),
+    'a still-live archived row is closed, not deleted blindly')
+  assert.ok(/props\.forgetSession\) props\.forgetSession\(row\.id\)/.test(sessions),
+    'the sidebar projection forgets the row before this page re-reads')
+  for (const gone of ['setPinnedIds', 'bulkTargets', 'selectedIds', 'buildSessionGroups', 'filterSessions', 'renderHealthReportCard']) {
+    assert.ok(!sessions.includes(gone), `${gone} is gone (the panel is not a second sidebar)`)
+  }
 })
 
 check('2. localStorage map readers reject arrays and __proto__, and walks use own keys', () => {
@@ -89,32 +95,29 @@ check('3. the session row menu uses the official slot, not a DOM classifier', ()
     'no aria-label selector hunts the menu down')
 })
 
-check('4. maxTokens rejects 0 before the host does', () => {
-  assert.ok(/Number\(draft\.maxTokens\) < 1/.test(subagents),
-    'the client precheck mirrors the host\'s positive-integer rule')
-})
-
-check('5. a past next-fire renders an explanation, not a negative countdown', () => {
+check('4. a past next-fire renders an explanation, not a negative countdown', () => {
   assert.ok(/var fireDue = nextIn !== null && nextIn < 0/.test(automation), 'past-due is detected')
   assert.ok(/fireDue\s*\?/.test(automation), 'and rendered as its own state')
 })
 
-check('6. bulk-delete failures point at the host log', () => {
-  assert.ok(!/个会话删除失败（详见交付历史/.test(sessions), 'the webhook delivery history is no longer named')
-  assert.ok(/个会话删除失败（详见宿主日志）/.test(sessions), 'the host log is')
+check('5. a failed delete reports the host reason instead of a silent no-op', () => {
+  assert.ok(/showToast\('error', dshT\('删除失败：'\) \+ messageOf\(error\)\)/.test(sessions),
+    'the row-level delete surfaces the host message')
+  assert.ok(/error: dshT\('读取会话失败：'\) \+ messageOf\(error\)/.test(sessions),
+    'a list read failure is rendered inline with its reason')
 })
 
-check('7. todo file stats compare the per-file rows', () => {
+check('6. todo file stats compare the per-file rows', () => {
   assert.ok(/sameChangedRows\(prev\.changed, changed\)/.test(todo), 'the bail-out includes the row list')
   assert.ok(/x\.path !== y\.path/.test(todo), 'and compares the fields the section renders')
 })
 
-check('8. an out-of-range project filter explains itself', () => {
+check('7. an out-of-range project filter explains itself', () => {
   assert.ok(/projectNames\.indexOf\(project\) === -1/.test(usage), 'the selected-but-absent project is detected')
   assert.ok(/disabled: true/.test(usage), 'and shown as a disabled explanation option')
 })
 
-check('9. opening another run clears the detail card and cancels its in-flight fetch', () => {
+check('8. opening another run clears the detail card and cancels its in-flight fetch', () => {
   const opens = workflow.match(/openRunId: r\.id[^\n]*/g) || []
   assert.equal(opens.length, 4, 'four open-a-new-run sites (start / amend / resume / runSaved)')
   for (const line of opens) {
@@ -124,13 +127,13 @@ check('9. opening another run clears the detail card and cancels its in-flight f
     'each also invalidates a detail request that is still in flight')
 })
 
-check('10. a forced update check requested mid-flight is replayed', () => {
+check('9. a forced update check requested mid-flight is replayed', () => {
   assert.ok(/pendingForceRef\.current = true/.test(plugins), 'the request is remembered instead of dropped')
   assert.ok((plugins.match(/if \(pendingForceRef\.current\) \{/g) || []).length >= 2,
     'replayed on both the success and failure paths')
 })
 
-check('11. every className literal a panel renders has a rule in the stylesheet', () => {
+check('10. every className literal a panel renders has a rule in the stylesheet', () => {
   // v1.33.0 shipped a selection strip whose four class names existed ONLY in
   // the render code: the strip painted unstyled and nothing caught it, because
   // every gate checked behaviour and none checked that a name it emits is
@@ -168,7 +171,7 @@ check('11. every className literal a panel renders has a rule in the stylesheet'
     `these classNames are emitted but have no CSS rule in src/client/styles.js: ${unstyled.join(', ')}`)
 })
 
-check('12. the workspace-row menu hook keys on structure, not on menu copy', () => {
+check('11. the workspace-row menu hook keys on structure, not on menu copy', () => {
   // The one DOM hook (src/client/workspace-menu.js) exists because ui-workspace
   // hardcodes the workspace row menu and declares no slot for it. What keeps it
   // from regressing into the old scraper is the identification chain, so that

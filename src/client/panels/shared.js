@@ -1,6 +1,19 @@
 /** shared — split from the old single-file panels.js (mechanical, behaviour unchanged). */
-import { UiButton, UiInput, createElement, dshT, useEffect, useRef, useState } from './context.js'
-import { TOOL_REF_RE } from './subagents.js'
+import { UiButton, createElement, dshT, useEffect, useRef, useState } from './context.js'
+
+/** A tool name as it appears in a `tool_*` reference list. */
+export var TOOL_REF_RE = /^[a-z][a-z0-9_]*$/
+
+/** The gateway wraps every remote result in an { ok, value | error } envelope. */
+/** @param {any} result - the RPC envelope (duck-typed). */
+export function unwrap(result) {
+  if (result && typeof result === 'object' && 'ok' in result) {
+    if (result.ok) return result.value
+    var detail = result.error && result.error.message ? result.error.message : String(result.error)
+    throw new Error(detail)
+  }
+  return result
+}
 
 /**
  * Props / event duck types for this module's small components.
@@ -10,8 +23,6 @@ import { TOOL_REF_RE } from './subagents.js'
  * not what a host primitive might advertise. Each lists only the members the
  * code actually touches.
  * @typedef {{ label: string, confirmLabel?: string, disabled?: boolean, onConfirm: () => void }} ConfirmButtonProps
- * @typedef {{ value: string, label?: string }} PickerOption
- * @typedef {{ multi?: boolean, disabled?: boolean, values?: Array<string>, options?: Array<PickerOption>, allowCustom?: boolean, onChange: (next: Array<string>) => void, kind?: string, placeholder?: string, ariaLabel?: string }} PickerProps
  * @typedef {{ target: { value: string } }} InputChangeEvent
  * @typedef {{ key: string, preventDefault: () => void, target?: { value?: unknown } }} KeyEventLike
  * @typedef {{ preventDefault: () => void }} MouseEventLike
@@ -107,181 +118,6 @@ export function tabKeyDown(event, tabs, selectedId, select) {
  return true
 }
 
-/* ========================================================================== */
-/* Searchable picker (single/multi) */
-/* ========================================================================== */
-
-/** Per-instance id source for the combobox wiring (aria-controls /
- * aria-activedescendant must point at stable DOM ids). useState's
- * initializer runs once per instance, so the id is stable across renders
- * even though two pickers on one panel must not collide. */
-var pickerIdSeq = 0
-
-/**
- * Filterable picker used for the model/provider selects (single) and the
- * tool-constraint chips (multi). Renders a text input plus a scrollable,
- * filtered dropdown; click or Enter selects. Single mode also commits the
- * typed text (so arbitrary values still work); multi mode appends chips and
- * hides already-picked options from the list.
- * @param {PickerProps} props - mode flags, the current values / option list, and the change callback.
- */
-export function Picker(props) {
- var multi = props.multi === true
- var disabled = props.disabled === true
- var values = props.values || []
- var options = props.options || []
- var allowCustom = props.allowCustom !== false
- // Phase B3e-follow-up: no ref. The official Input does not forward one, and the
- var textState = useState('')
- var text = textState[0]
- var setText = textState[1]
- var openState = useState(false)
- var open = openState[0]
- var setOpen = openState[1]
- var highlightState = useState(0)
- var highlight = highlightState[0]
- var setHighlight = highlightState[1]
- var idState = useState(function () { return 'sa-picker-' + (++pickerIdSeq) })
- var listId = idState[0] + '-list'
-
- var selected = /** @type {Record<string, boolean>} */ ({})
- for (var si = 0; si < values.length; si++) selected[values[si]] = true
-
- var filtered = options.filter(function (o) {
- if (multi && selected[o.value]) return false
- var q = text.trim().toLowerCase()
- if (q === '') return true
- var label = (o.label || o.value).toLowerCase()
- return label.indexOf(q) !== -1 || o.value.toLowerCase().indexOf(q) !== -1
- })
-
- // The highlighted option's DOM id, for aria-activedescendant — present only
- // while the listbox is open and has options to point at. (Computed AFTER
- // `filtered`: the expression reads it.)
- var activeDescendant = open && !disabled && filtered.length > 0 && highlight >= 0 && highlight < filtered.length
- ? listId + '-opt-' + highlight
- : undefined
-
- /**
- * Hand the next value list to the caller (suppressed while disabled).
- * @param {Array<string>} next - the complete next values (single mode: a one-element list).
- */
- function emit(next) { if (!disabled) props.onChange(next) }
-
- /**
- * Commit one option: append in multi mode, replace in single mode. Multi
- * mode additionally requires the value to look like a tool reference.
- * @param {PickerOption} opt - the picked option.
- */
- function pick(opt) {
- if (multi) {
- if (selected[opt.value] || !TOOL_REF_RE.test(opt.value)) return
- emit(values.concat([opt.value]))
- setText(''); setHighlight(0); setOpen(true)
- } else {
- emit([opt.value]); setText(''); setOpen(false)
- }
- }
-
- /**
- * Commit free text (single mode replaces, multi mode appends), under the
- * same TOOL_REF_RE rule as `pick`.
- * @param {string} v - the raw typed text.
- */
- function addTyped(v) {
- var val = (v || '').trim()
- if (val === '') return
- if (multi && (selected[val] || !TOOL_REF_RE.test(val))) return
- emit(multi ? values.concat([val]) : [val])
- setText(''); setHighlight(0)
- }
-
- /**
- * @param {InputChangeEvent} e - the official Input's change event.
- */
- function onInputChange(e) {
- if (disabled) return
- var v = e.target.value
- setText(v); setOpen(true); setHighlight(0)
- if (!multi) emit([v])
- }
-
- /**
- * @param {KeyEventLike} e - keydown event; `target` is optional because the
- * official Input may not forward one (see the `live` fallback below).
- */
- function onKeyDown(e) {
- if (disabled) return
- // The live value comes from the event's own target, not a ref: the official
- // Input does not forward one. During a keydown the DOM value is authoritative
- // (a caller may have set it without React seeing a change event), and the
- // draft state is the fallback when the event carries no target.
- var live = (e && e.target && typeof e.target.value === 'string' ? e.target.value : text).trim()
- if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(function (/** @type {number} */ h) { return Math.min(h + 1, filtered.length - 1) }); return }
- if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(function (/** @type {number} */ h) { return Math.max(h - 1, 0) }); return }
- if (e.key === 'Enter') {
- e.preventDefault()
- if (filtered.length > 0 && highlight >= 0 && highlight < filtered.length) {
- var hl = filtered[highlight]
- if (live === '' || live === hl.value || live === (hl.label || hl.value)) { pick(hl); return }
- }
- if (allowCustom && live !== '') addTyped(live)
- return
- }
- if (e.key === 'Escape') setOpen(false)
- }
-
- var tokens = multi ? values.map(function (v) {
- return createElement('span', { className: 'tag-chip ' + (props.kind || 'allow'), key: 'tok-' + v },
- v,
- createElement('button', {
- type: 'button', 'aria-label': dshT('移除 ') + v,
- disabled: disabled,
- onClick: function (/** @type {ClickEventLike} */ ev) { ev.stopPropagation(); emit(values.filter(function (x) { return x !== v })) },
- }, '✕'))
- }) : null
-
- var list = open && !disabled
- ? createElement('div', { className: 'sa-picker-list', role: 'listbox', id: listId, 'aria-label': props.ariaLabel || props.placeholder || '' },
- filtered.length === 0
- ? createElement('div', { className: 'sa-picker-empty' }, allowCustom && text.trim() !== '' ? dshT('回车添加：') + text.trim() : dshT('无匹配'))
- : filtered.map(function (o, idx) {
- return createElement('div', {
- key: o.value,
- role: 'option',
- id: listId + '-opt-' + idx,
- 'aria-selected': multi ? selected[o.value] === true : values[0] === o.value,
- className: 'sa-picker-opt' + (idx === highlight ? ' active' : ''),
- onMouseDown: function (/** @type {MouseEventLike} */ ev) { if (!disabled) { ev.preventDefault(); pick(o) } },
- onMouseEnter: function () { setHighlight(idx) },
- }, o.label || o.value)
- }))
- : null
-
- return createElement('div', { className: 'sa-picker' + (multi ? ' tag-input' : '') },
- tokens,
- // The official Input (the composite no longer needs a ref: see `live` above).
- // Combobox wiring: the input owns the expanded/collapsed state and points at
- // the highlighted option (aria-activedescendant → the listbox's option ids),
- // so a screen reader announces the highlight the arrow keys move.
- createElement(UiInput, {
- value: multi ? text : (values[0] || ''),
- placeholder: props.placeholder || '',
- 'aria-label': props.ariaLabel || props.placeholder || '',
- role: 'combobox',
- 'aria-expanded': open && !disabled ? 'true' : 'false',
- 'aria-controls': open && !disabled ? listId : undefined,
- 'aria-autocomplete': 'list',
- 'aria-activedescendant': activeDescendant,
- disabled: disabled,
- onChange: onInputChange,
- onKeyDown: onKeyDown,
- onFocus: function () { if (!disabled) setOpen(true) },
- onBlur: function () { setOpen(false) },
- }),
- list,
- )
-}
 
 /**
  * @param {string} color - the pill background color.

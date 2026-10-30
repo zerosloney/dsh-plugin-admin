@@ -46,10 +46,7 @@ const STEPS = [
   { name: 'verify-run-command', desc: 'lib/run-command.js: dual-stream drain + process-tree kill budgets', cmd: [node, 'scripts/verify-run-command.mjs'] },
   { name: 'verify-mcp-cache', desc: 'MCP connectivity-test cache in the panel (localStorage seed/restore/invalidate)', cmd: [node, 'scripts/verify-mcp-cache.mjs'] },
   { name: 'verify-update-reminders', desc: 'update-reminder badge survives settings re-open (stubbed registry)', cmd: [node, 'scripts/verify-update-reminders.mjs'] },
-  { name: 'verify-subagents-host', desc: 'subagent-admin host half: rows, mounts, tool constraints, tool seed', cmd: [node, 'scripts/verify-subagents-host.mjs'] },
-  { name: 'verify-subagent-host-version', desc: 'persona/toolFilter are refused only on hosts that reject them (0.2.1+)', cmd: [node, 'scripts/verify-subagent-host-version.mjs'] },
   { name: 'verify-client-hygiene', desc: 'client source pins: pin pruning, localStorage shapes, menu heuristic, prechecks', cmd: [node, 'scripts/verify-client-hygiene.mjs'] },
-  { name: 'verify-subagents-client', desc: 'subagents section in jsdom via real React 18', cmd: [node, 'scripts/verify-subagents-client.mjs'] },
   { name: 'verify-command-hooks', desc: 'commands/hooks remote contract end-to-end (temp DSH_HOME)', cmd: [node, 'scripts/verify-command-hooks.mjs'] },
   { name: 'verify-project-commands', desc: 'project .agents commands: frontmatter parse + registration', cmd: [node, 'scripts/verify-project-commands.mjs'] },
   { name: 'verify-project-hooks', desc: 'project .agents hooks interception + sandbox-policy fencing', cmd: [node, 'scripts/verify-project-hooks.mjs'] },
@@ -61,7 +58,6 @@ const STEPS = [
   { name: 'verify-mcp-admin', desc: 'mcpAdmin remove/list: boot-critical patch shape on removal (empty-sequence normalization, siblings, audit)', cmd: [node, 'scripts/verify-mcp-admin.mjs'] },
   { name: 'verify-peer-compat', desc: 'install peer-compatibility preflight: semver parse + dsh range', cmd: [node, 'scripts/verify-peer-compat.mjs'] },
   { name: 'verify-workspace-admin', desc: 'workspaceAdmin RPC: no-registry hint + CRUD round-trips', cmd: [node, 'scripts/verify-workspace-admin.mjs'] },
-  { name: 'verify-skills-admin', desc: 'skills listing: three-scope merge, strict read-only', cmd: [node, 'scripts/verify-skills-admin.mjs'] },
   { name: 'verify-usage-ledger', desc: 'usage ledger: live observer, snapshot sweep, delete-before-snapshot', cmd: [node, 'scripts/verify-usage-ledger.mjs'] },
   { name: 'verify-web-search-admin', desc: 'web-search provider switch + settings.mutate path (keys never echoed)', cmd: [node, 'scripts/verify-web-search-admin.mjs'] },
   { name: 'verify-i18n', desc: 'dshT call sites ↔ dictionaries, both ways; en values hold no CJK', cmd: [node, 'scripts/verify-i18n.mjs'] },
@@ -80,6 +76,7 @@ const STEPS = [
   { name: 'verify-workflow-client', desc: 'workflow panel in jsdom: create, stop, saved library, polling', cmd: [node, 'scripts/verify-workflow-client.mjs'] },
   { name: 'verify-automation-client', desc: 'automation tab in jsdom: cron/webhook editor layout contract (header, field-group labels, schedule inset, action modes)', cmd: [node, 'scripts/verify-automation-client.mjs'] },
   { name: 'verify-menu-injection', desc: 'sidebar menu injection: host-locale title shapes (zh quoted / en quoted / en unquoted) + archived-row classifier', cmd: [node, 'scripts/verify-menu-injection.mjs'] },
+  { name: 'verify-workspace-menu', desc: '「打开工作目录」 lands only in the menu its own click opens (jsdom: the 选模型 menu is never claimed)', cmd: [node, 'scripts/verify-workspace-menu.mjs'] },
   { name: 'integration-check', desc: 'seam probes against a real dsh checkout (DSH_CHECKOUT / sibling; SKIP without one locally)', cmd: [node, 'scripts/integration-check.mjs'] },
 ]
 

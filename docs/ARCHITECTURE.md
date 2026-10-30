@@ -6,14 +6,14 @@
 
 插件分两半，**宿主半零 dsh 导入**是一切的前提：`lib/**` 不 `import` 任何 `@deepseek-ai/dsh-*` 包，全部骑运行时的 Cordis Context（按服务键取服务 + 纯数据 typert 注册）；浏览器半只复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的原子组件（经 `external` 用宿主那份实例，不打包副本），其余同样只走 Context。这样插件才能跨 dsh 版本可活。降级是**逐面板**的：`inject` 为空，六个宿主服务（`typert` / `sessionPersistence` / `tools` / `subagents` / `commands` / `shell`）与其余可选服务（`workspaceRegistry` / `webServer` / `jobs` / `webhookRuntime` / `sandboxPolicy` / agents 捕获等）一律经 `ctx.get` 在用的时候探测：缺哪个就只让用到它的面板/操作不可用并告警一次（`requireSeam` 给具名错误，而不是 Cordis 那句 `cannot get property "x" without inject`），**绝不整插件不加载**。这也是插件能在 `dsh-sdk-minimal` 这类没有 `typert`/`subagents`/`commands`/`shell` 的骨骼里挂载的前提。
 
-- **宿主半** `lib/*.js`：直接入库、无构建步骤。14 个管理 RPC 命名空间在 `lib/index.js` 底部的单次 `ctx.typert.register()` 发布，描述符由 `lib/rpc-manifest.js` 单一真相表生成（见 §6）。
+- **宿主半** `lib/*.js`：直接入库、无构建步骤。12 个管理 RPC 命名空间在 `lib/index.js` 底部的单次 `ctx.typert.register()` 发布，描述符由 `lib/rpc-manifest.js` 单一真相表生成（见 §6）。
 - **浏览器半** `src/client/` → 构建产物 `lib/client.js`（Phase B1 起）+ 懒加载面板 chunk `lib/client.panels.js`（Phase B2 起）：
 
 | 文件 | 职责 |
 |---|---|
 | `src/client/index.js` | 入口：导出 `apply` 与 `inject`（dsh 模块加载器只读这两个键；`loadPanels` 随行导出供测试挂载面板 chunk） |
 | `src/client/impl.js` | slot 装配（即时注册 + 首次渲染时拉取面板 chunk 的包装器）、locale 运行时绑定与共享辅助函数（经 `configure()` 递给面板 chunk） |
-| `src/client/panels/` | 十一个面板的实现，自成 chunk：主 bundle 只注册 slot，面板代码在设置页首次打开时按需加载（首屏 −80%）。**入口包的 150 KB 上限是构建期断言**（`scripts/build-client.mjs` 的 `ENTRY_BUDGET_BYTES`，v1.30 起），不再是 CHANGELOG 里的一句目标——超限即构建失败，所以「达成 ≤150 KB」可以被机器复核而不是靠人记 |
+| `src/client/panels/` | 九个面板的实现，自成 chunk：主 bundle 只注册 slot，面板代码在设置页首次打开时按需加载（首屏 −80%）。**入口包的 150 KB 上限是构建期断言**（`scripts/build-client.mjs` 的 `ENTRY_BUDGET_BYTES`，v1.30 起），不再是 CHANGELOG 里的一句目标——超限即构建失败，所以「达成 ≤150 KB」可以被机器复核而不是靠人记 |
 | `src/client/native-coverage.js` | 官方覆盖探测表 + 自动让位策略（Phase E）：官方 UI 补齐的能力自动隐藏对应面板，localStorage `dsh-admin-panels` 可强制开关 |
 | `src/client/i18n.js` | 中英文案表与 `dshT()` |
 | `src/client/styles.js` | 四组注入样式与各自的一次性安装函数 |
@@ -27,7 +27,7 @@ npm run build:client -- --check # 校验产物与源码一致（npm test 会跑�
 
 ## 2. 写回、并发与降级
 
-所有写回（插件启停 / MCP / 子智能体 / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（默认失败关闭 / 过期回收；只有显式传 `{onTimeout:'proceed'}` 的调用点才失败开放），临界区在预算内完成的常态下双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒，随后**默认拒绝**这次写入——抛 `lockWaitTimeout`，报错点名锁文件、持锁 pid 与重试/清锁办法；只有多实例并发写同一 profile 时才会走到这条路径，单实例部署无争用。失败关闭是这条声明的边界而非例外条款：持锁方的临界区若被巨大 patch 文件 + AV 扫描/慢盘拖过 3 秒预算，本次操作以可读的等待超时失败、由用户或上层重试，而不是以 last-writer-wins 静默丢一次更新（temp+rename 仍保证文件不撕）；显式 opt-in 的失败开放只保留给「主错误已在传播、拒绝会掩盖诊断」的收尾路径（安装失败后的补丁回滚），且每个锁路径只 `emitWarning` 一次。该锁在**本进程内可重入**：同文件嵌套调用直接执行，既不烧这 3 秒预算、也不提前释放外层仍需持有的锁——与「跨进程争用」是两条互不重叠的路径（前者是"我们已经持有"，后者是"别人持有"）。过期回收只认 ESRCH 这一种**确凿**的死亡证据：Windows 上 `process.kill(pid, 0)` 探 `System` / `csrss` / `wininit` / `services` 一律抛 EPERM（进程活着、只是无权发信号），把它读成死亡等于偷掉活锁。
+所有写回（插件启停 / MCP / 钩子桥 / Web 搜索 / Webhook 运行时 / overlay）收敛到 `lib/patch-utils.js` 的 `writePatch()`——原子写（temp + rename）+ 改写前把上一版留为 `cordis.patch.yml.dsh-admin.bak`（滚动一版），写坏用 `.bak` 覆盖重启；全部走共享串行操作队列，读-改-写不交错；`withFileLock` 把备份 + rename 包进跨进程文件锁（默认失败关闭 / 过期回收；只有显式传 `{onTimeout:'proceed'}` 的调用点才失败开放），临界区在预算内完成的常态下双进程并发写同一 profile 无丢失更新。注意该锁刻意是同步实现（`Atomics.wait`）：争用时最多阻塞宿主事件循环约 3 秒，随后**默认拒绝**这次写入——抛 `lockWaitTimeout`，报错点名锁文件、持锁 pid 与重试/清锁办法；只有多实例并发写同一 profile 时才会走到这条路径，单实例部署无争用。失败关闭是这条声明的边界而非例外条款：持锁方的临界区若被巨大 patch 文件 + AV 扫描/慢盘拖过 3 秒预算，本次操作以可读的等待超时失败、由用户或上层重试，而不是以 last-writer-wins 静默丢一次更新（temp+rename 仍保证文件不撕）；显式 opt-in 的失败开放只保留给「主错误已在传播、拒绝会掩盖诊断」的收尾路径（安装失败后的补丁回滚），且每个锁路径只 `emitWarning` 一次。该锁在**本进程内可重入**：同文件嵌套调用直接执行，既不烧这 3 秒预算、也不提前释放外层仍需持有的锁——与「跨进程争用」是两条互不重叠的路径（前者是"我们已经持有"，后者是"别人持有"）。过期回收只认 ESRCH 这一种**确凿**的死亡证据：Windows 上 `process.kill(pid, 0)` 探 `System` / `csrss` / `wininit` / `services` 一律抛 EPERM（进程活着、只是无权发信号），把它读成死亡等于偷掉活锁。
 
 一个刻意的例外：**会话删除/关停不在这条队列上，而是走一把模块内互斥锁**（`lib/session-admin.js` 的 `makeOperationMutex`）。它们**不能**入共享队列——删除序列里的用量台账写入（`usageLedger.upsert`）本身就入该队列，从队列槽位内部再入队会永久等待（已实测：嵌套 `serial()` 按构造即死锁）。互斥锁提供真正需要的那条性质（同一 id 的并发删除、删除与关停之间串行，活跃/包含性校验紧邻 `rm`），台账写入仍留在共享队列上。
 
@@ -35,22 +35,18 @@ npm run build:client -- --check # 校验产物与源码一致（npm test 会跑�
 
 ## 3. 面板机制细节
 
+**视觉语言（v1.35 起）：编辑器 / CLI 风格，不再是「卡片 + 胶囊」。** 面板的观感由 `src/client/styles.js` 里**一份共享配方**决定，每个面板只写结构类名（`toolbar` / `card` / `list` / `tag` / `tabs` / `footer` …），不写颜色与圆角：工具栏是一条带发丝分隔的扁平命令条；列表行贴合成树状（间距 3px）、悬停只换边框与淡底、不位移不投影；圆角统一收到 2–4px；页签是编辑器式页签（发丝底线 + 活动页签 2px 底部强调线），不再是浮起的分段胶囊；id / 计数 / 路径 / 状态行一律 `var(--dsw-font-mono)` + `tabular-nums`，让数字列对齐。`verify-client-hygiene` 的「每个渲染出的 className 都有样式规则」与 `self-check` 的「同一组件只在一个样式表里定义」两道闸门守着这套配方不被面板各自复制走样。
+
 ### 🔌 扩展插件
 pnpm 编排安装 / 卸载 / 更新 + bundles 清单同步。安装/更新完成后自动做 **dsh peer 兼容预检**：比对新装包的 `@deepseek-ai/dsh*` peerDependencies 与运行中的 dsh 版本（dsh 0.1.7 起宿主启动时会跳过不兼容 bundle）——不兼容时给出警示与 `dsh plugin allow-version` 豁免指引；宿主的显式豁免（`<profile>/compatibility.json`，精确 `name@version` 键 → runtime 版本列表，与 `dsh plugin allow-version` 同一份数据）按宿主同款规则读取，被豁免的包不再标警（文件缺失/损坏读作无豁免，方向保守）；解析不到运行版本时静默跳过。已停用插件跳过更新检测。
 
 ### 🕘 历史会话（Web 与会话 · 第一页签）
-挂在设置 → Web 与会话的第一个页签，与 Web 搜索共用侧边栏入口、页内双页签，所有 dsh 版本下行为一致。原「工作区」面板已退役（各版本 dsh 均原生覆盖工作区管理）；宿主侧 `workspaceAdmin` 命名空间仍随插件注册（历史兼容 RPC 面，不是面板入口）。
+挂在设置 → Web 与会话的第一个页签，与 Web 搜索共用侧边栏入口、页内双页签。**这一页只回答一个问题：我归档了哪些会话，怎么把它们清掉**——列表只取 `archived` 为真的行，按工作区分组（注册表顺序在前、无归属的落进「未分组」），每行一个两段式删除（删除 → 确认删除 / 取消）。没有筛选胶囊、没有批量选择、没有导出 / 体检 / 全文搜索：这些能力曾把这一页撑成第二个侧边栏，而侧边栏本来就管着在线与最近的会话。
 
-批量删除的语义：在线会话自动先关停（closeSession）再删日志，其余直接删除（deleteSession）；单个失败不阻塞其余，结束汇总失败数。删除路径在物理删除前做 `lstat` 与 realpath 包含性校验（见 §5）。置顶是纯本地 id 白名单，列表刷新时对**非空**结果剪枝（已删除会话的 id 不再累积，「已置顶(N)」不会虚高）；空结果不剪，避免一次瞬时空答复抹掉全部置顶。
-
-### 📚 技能
-只读全量清单，三层作用域合并——**全局层**、**每个 Agent 预设的 standing 作用域**、**每个已知会话的 (cwd, 预设) 作用域**。Web 部署（`dsh-web-app`）会把宿主层 `skill-filesystem` 行禁用、改由预设挂载本地发现，所以那里全局层为 0 属正常，用户目录（`~/.agents/skills`、`~/.dsh/skills`）由预设作用域列出。读取预设作用域会经 `agentPresets.acquireScope`（租约式，读毕即释放）确保该预设的 standing 挂载（代码里还防御性探测 `standingKeyFor`，但没有任何已发布宿主暴露该成员——缺 `acquireScope` 的宿主按作用域读取失败如实上报 `complete:false`，不会静默丢层）（只组合插件，不启动 agent / 会话 / 轮次），这是宿主侧读取预设层的唯一入口。严格只读：只调 `snapshot()` / `list()` 摘要，正文 loader `get()` 从不调用，不写任何东西；覆盖面 / 失败 / `complete` 旗标随行返回，残缺清单永远不会读成完整清单。
+删除语义保留两条硬约束：仍在线的那条走 `closeSession`（先关停 agent/session 再删日志），其余直接 `deleteSession`；删除成功后先让侧边栏的投影忘掉该行（`forgetSession`），再重读本页，避免删掉的会话以残影留在列表里。删除路径在物理删除前做 `lstat` 与 realpath 包含性校验（见 §5）。导出 / 全文搜索 / 体检三个端点仍挂在 host 上供 CLI 与 SDK 调用（`RPC_HOST_ONLY_TARGETS`），只是浏览器半不再有入口。
 
 ### 🔌 MCP 服务器
 行级 CRUD + 真实握手探测（initialize → tools/list）+ 工具试调用台（tools/call，60s 预算、16KB 截断）。「测试连接」与试调用读取**未掩码的存储配置**——探测必须等价于真实挂载，凭据型 server 才测得通；掩码只是读路径的投影，探测结果（不含秘密）回浏览器。**已挂载条目的配置修改热应用至运行中的 server（无需重启）**：保存即通过 loader 同款 `fiber.update` 通道热重启对应 server（按 serverName 匹配，改名也生效；noSave 保证 patch 文件不被宿主改写）；**新增条目**与**删除**仍需重启（新 fiber 挂载是 loader 启动期职责）。热应用失败时面板显示具体原因并回退到重启提示。
-
-### 🛰️ 子智能体
-受管子代理（toolName / persona / 工具约束 / 模型 / 执行后端 / 委托深度 / 后台模式）作为 profile patch 行 CRUD + 运行中监控/续接；CLI 后端页签检测 codex / claude-code provider 包，并扫描 PATH 上其他 agent CLI（gemini / qwen / opencode 等）一键挂载或手填自定义命令。
 
 ### 🧵 工作流
 agent 写 TS/JS 脚本并行编排子代理，执行底座是 `ctx.subagents`（宿主原生并行 + 可续接）。生命周期（journal / 状态机 / amend / resume）在 `lib/workflow-runs.js`，引擎只负责「把一段脚本跑完」。
@@ -136,9 +132,9 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 | 会话 | `sessionExportEventCap` | 200000 | 导出/体检整份读日志的事件上限，超出标记截断 |
 | 用量台账 | `usageSnapshotIntervalMs` | 3600000 | 后台快照间隔（ms），`0` 关闭 |
 | 用量台账 | `usageLedgerCap` | 2000 | 台账保留行数（100–100000；>100000 挂载期报错），超出按最后见到时间淘汰 |
-| 面板开关 | `panels` | `{}` | 逐面板三态开关：`auto`（默认，官方已覆盖就让位）/ `on`（即使官方有也注册）/ `off`（不注册，优先级最高）。键名必须是 11 个面板 id 之一（`extensions` / `mcp` / `skills` / `subagents` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`），值必须是三态之一；写错任一处**挂载期报错**。浏览器半读不到 config 行，所以挂载时经 `pluginAdmin/panels` 问宿主一次，答**上次的答案缓存**在 localStorage（键 `dsh-admin-panels-policy`），新答案到达后对账（关掉该关的、补上该开的）。 |
+| 面板开关 | `panels` | `{}` | 逐面板三态开关：`auto`（默认，官方已覆盖就让位）/ `on`（即使官方有也注册）/ `off`（不注册，优先级最高）。键名必须是 9 个面板 id 之一（`extensions` / `mcp` / `commands` / `hooks` / `sessions` / `webSearch` / `usage` / `automation` / `todo`），值必须是三态之一；写错任一处**挂载期报错**。浏览器半读不到 config 行，所以挂载时经 `pluginAdmin/panels` 问宿主一次，答**上次的答案缓存**在 localStorage（键 `dsh-admin-panels-policy`），新答案到达后对账（关掉该关的、补上该开的）。 |
 | 面板开关 | `workspaceAdmin` | `legacy` | 已退役的 workspaceAdmin RPC 面的挂载开关：`legacy`（默认，照常挂载，行为与历史版本一致）/ `off`（**不挂载服务**——RPC 描述符保留在 wire 上，兼容调用方仍能看到表面，但调用在网关处得到 typed 错误，不再能变更这个部署已关闭的面）。该命名空间无客户端入口（见 docs/COMPAT.md「工作区管理 已退役」行），`off` 是给想彻底关掉这组变更 RPC 的部署准备的；写错值挂载期报错。 |
-| 安装 | `installScripts` | `registry-only` | pnpm 安装与 CLI 后端的全局 `npm install -g`（子智能体页装 codex / claude-code）是否允许依赖的生命周期脚本、以及什么样的来源规格可以被安装：`registry-only`（**默认（v1.27.19 起）**：**registry 包**与**本机路径**照常装且可跑脚本——原生模块需要它的 prepare；而任意**远程仓库/协议规格**——`git+https://…`、`github:user/repo`、`user/repo`、tarball URL、**UNC 网络路径**（`\\server\share\pkg` 及其 `//` 写法，与 fsAdmin/reveal 拒绝的同一形状）——直接**拒绝**，不是禁脚本）/ `allow`（与 `dsh plugin add` 完全一致——registry / git / URL / 本机路径一律装、一律可跑脚本；需要装远程规格的部署显式打开）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL / UNC 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来（CLI 后端的全局 npm 安装同样受此约束——claude-code 的原生二进制不再落位），这一取舍由部署方决定；`registry-only` 正是为了避免这个取舍而加——在它之前，想让 registry 包构建就只能同时在任意 git 仓库上也构建。**`registry-only` 的拒绝发生在 pnpm 启动之前**（拒绝之后已经克隆并构建完了）。`remove` 不受该键约束（卸载不取代码）。**运行这些脚本的子进程会继承操作者的环境（只剔除 `DSH_*`）——含 API key 等凭据，详见 §5。** |
+| 安装 | `installScripts` | `registry-only` | pnpm 安装（插件装卸 / 钩子桥的 `pnpm add`）是否允许依赖的生命周期脚本、以及什么样的来源规格可以被安装：`registry-only`（**默认（v1.27.19 起）**：**registry 包**与**本机路径**照常装且可跑脚本——原生模块需要它的 prepare；而任意**远程仓库/协议规格**——`git+https://…`、`github:user/repo`、`user/repo`、tarball URL、**UNC 网络路径**（`\\server\share\pkg` 及其 `//` 写法，与 fsAdmin/reveal 拒绝的同一形状）——直接**拒绝**，不是禁脚本）/ `allow`（与 `dsh plugin add` 完全一致——registry / git / URL / 本机路径一律装、一律可跑脚本；需要装远程规格的部署显式打开）/ `local-only`（只有**本机路径**与 `file:` / `link:` 规格可跑脚本，registry / git / URL / UNC 一律加 `--ignore-scripts`）/ `deny`（一律 `--ignore-scripts`）。写错值挂载期报错。注意：`deny` 会让**需要 prepare/postinstall 构建**的包装上却跑不起来（CLI 后端的全局 npm 安装同样受此约束——claude-code 的原生二进制不再落位），这一取舍由部署方决定；`registry-only` 正是为了避免这个取舍而加——在它之前，想让 registry 包构建就只能同时在任意 git 仓库上也构建。**`registry-only` 的拒绝发生在 pnpm 启动之前**（拒绝之后已经克隆并构建完了）。`remove` 不受该键约束（卸载不取代码）。**运行这些脚本的子进程会继承操作者的环境（只剔除 `DSH_*`）——含 API key 等凭据，详见 §5。** |
 
 **受校验直通覆盖（14）**——同一 config 行原样透传给各子模块（缺省时保持 undefined，由各模块取下表默认值），类型 / 范围同样在挂载期校验：
 
@@ -165,7 +161,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 
 浏览器端可触发本地 pnpm 安装（含 package prepare 脚本——默认 **`registry-only`**：registry 包与本机路径照常构建、**任意远程仓库/协议规格直接拒绝**；`installScripts: 'allow'` 显式恢复远程规格安装，`'local-only' | 'deny'` 进一步收紧脚本执行）、hooks 桥一键安装与挂载（桥会在宿主本地执行钩子命令）、会话日志物理删除——与 `dsh plugin` CLI 及本地管理同属最高本地信任级（loopback 默认信任面）。工作流脚本体来自模型或面板，可经 `shell()` 在宿主执行命令——暴露到非本机前请务必评估权限范围。
 
-关于 pnpm 子进程与 CLI 后端全局 `npm install -g` 子进程的环境（两条安装路径同一份策略与同一份环境裁剪，`lib/subagent-admin.js` 直接复用 `scrubbedPnpmEnv` / `shouldIgnoreScripts`）：**剔除的只有 `DSH_*` 命名空间（大小写不敏感），其余环境原样继承**——包括 `NPM_TOKEN` 这类 registry 凭据，也包括 `DEEPSEEK_API_KEY` / `GITHUB_TOKEN` / `AWS_*` / 任何 `*_PASSWORD` 等与本插件无关的凭据。这是**刻意的**：pnpm 需要 registry 凭据才能装私有包（丢掉会把可用的安装变成看起来像网络故障的 401），而精确区分"pnpm 需要的凭据"与"不该外传的凭据"在环境变量这一层做不到。**后果要如实认知**：`pnpm add` 的依赖，其 `prepare` / `postinstall` 生命周期脚本会继承这份环境，因此**只应安装你信任的包**；默认的 `installScripts: 'registry-only'`（v1.27.19 起）只放行 registry 包与本机路径（需要本地构建的包能装上，远程仓库/协议规格在 pnpm 启动前拒绝），要恢复与 `dsh plugin add` 的完全平价（允许 git / URL 远程规格）就用 `installScripts: 'allow'`，要进一步收紧就用 `'local-only'`（只有本机路径与 `file:` / `link:` 规格可跑脚本）或 `'deny'`（一律 `--ignore-scripts`）。注意 MCP 探测走的是**另一套**更严的策略（按 `KEY|PASSWORD|SECRET|TOKEN` 名称模式剔除），两处不同是刻意的：探测是拿存储凭据去连第三方 server，而 pnpm 是要用凭据访问 registry。
+关于 pnpm 子进程的环境（`lib/plugin-admin.js` 的 `scrubbedPnpmEnv` / `shouldIgnoreScripts`，`lib/index.js` 把自己的实例传给需要安装的挂载点）：**剔除的只有 `DSH_*` 命名空间（大小写不敏感），其余环境原样继承**——包括 `NPM_TOKEN` 这类 registry 凭据，也包括 `DEEPSEEK_API_KEY` / `GITHUB_TOKEN` / `AWS_*` / 任何 `*_PASSWORD` 等与本插件无关的凭据。这是**刻意的**：pnpm 需要 registry 凭据才能装私有包（丢掉会把可用的安装变成看起来像网络故障的 401），而精确区分"pnpm 需要的凭据"与"不该外传的凭据"在环境变量这一层做不到。**后果要如实认知**：`pnpm add` 的依赖，其 `prepare` / `postinstall` 生命周期脚本会继承这份环境，因此**只应安装你信任的包**；默认的 `installScripts: 'registry-only'`（v1.27.19 起）只放行 registry 包与本机路径（需要本地构建的包能装上，远程仓库/协议规格在 pnpm 启动前拒绝），要恢复与 `dsh plugin add` 的完全平价（允许 git / URL 远程规格）就用 `installScripts: 'allow'`，要进一步收紧就用 `'local-only'`（只有本机路径与 `file:` / `link:` 规格可跑脚本）或 `'deny'`（一律 `--ignore-scripts`）。注意 MCP 探测走的是**另一套**更严的策略（按 `KEY|PASSWORD|SECRET|TOKEN` 名称模式剔除），两处不同是刻意的：探测是拿存储凭据去连第三方 server，而 pnpm 是要用凭据访问 registry。
 
 - **pnpm 操作数走 shell 元字符白名单**——`& | > < %` 等注入面不存在（`assertPnpmOperand` 只放行包名 / 作用域名 / 版本区间 / `git+` 与本地路径这几类字符，因此引号、空白、重定向、展开符都到不了命令行）。**白名单管的是 shell 注入，不是"会执行远端代码"**——后者由 `installScripts` 管，因为 `pnpm add <registry 包>` 本身就允许包自带 `prepare` 脚本通过。两者分工明确：白名单保证一条操作数不会变成第二条命令，`installScripts` 决定什么样的**来源**被允许构建。**Windows 上另有一层传输修正**：pnpm 经 cmd.exe（`.cmd` shim）启动，而 cmd.exe 把 `^` 当转义字符吃掉——`pkg@^1.2.3` 会**静默**变成 `pkg@1.2.3`（用户要区间，profile 却记下精确锁定，此后永不升级）。**双写 `^` 修不好它**：cmd.exe 只按 4 个一组放行 caret，`^^1.2.3` 实测仍然落成 `1.2.3`；`pnpmSpawnArgs` 因此改为给**带 caret 的那个操作数加引号**（引号内 cmd.exe 不再把 `^` 当转义），实测 manifest 正确记下 `^1.2.3`。引号安全的前提是白名单已经排除了 `"` 与空白，两者是配套的；无需转义的参数一律原样透传。这条端到端结论由 `scripts/check-pnpm-caret.mjs` 用**真实 pnpm** 复验（需要 registry 且会真装一个包，故与 `bench-*` / `repro-*` / `smoke:real-host` 同类，**不在 `npm test` 内**；缺 pnpm 或无网时如实 SKIP 而不是假装通过）。
 - **原子写 + 权限收紧**：`package.json` / `cordis.patch.yml` / 全部 JSON 状态走 temp + rename，被替换的 patch 版本留滚动 `.bak`；凡是可能装着凭据的存储（patch 及其备份、hooks、MCP/子代理行、审计、webhook 规则、工作流脚本）创建即 `0600`，已存在的宽权限文件在下一次写入时收紧。
@@ -186,7 +182,7 @@ dsh 自身的 token 记账只存在于会话日志里——删掉会话，用量
 ## 6. 测试与接缝契约
 
 ```sh
-npm test   # 5 道静态闸门 + 40 个脚本（self-check / host-check / 39 个 verify-* / integration-check），共 45 步；数字以 npm test 输出为准
+npm test   # 5 道静态闸门 + 37 个脚本（self-check / host-check / 36 个 verify-* / integration-check），共 42 步；数字以 npm test 输出为准
 ```
 
 静态闸门（`npm test` 先跑，任一失败即中止）：
@@ -197,15 +193,15 @@ npm test   # 5 道静态闸门 + 40 个脚本（self-check / host-check / 39 个
 - `verify-doc-claims`：**文档里可机械校验的声明必须与仓库一致**——步数 / 静态闸门数 / verify-* 脚本数、文档点名的脚本与模块路径是否存在、最新 CHANGELOG 各节的 `N → M checks` 是否自洽且不超出该套件声明的用例数、config 键数是否等于 `lib/index.js` 导出的两张表。它守的是整条链**自己的数字**，所以排在链首。
 - `verify-line-anchors`：**文档里的 `path:line` 锚点必须落在文件内**。行号锚点的失效方式比路径更隐蔽——重构把代码挪走后，文件与路径都还在，所以"路径存在"检查照旧全绿，而行号已经指向无关函数甚至越过文件末尾。本闸门就是为两个真实案例写的：`CHANGELOG.md` 与 `docs/COMPAT.md` 都曾引用 ~~`lib/index.js:1756-1795`（用量台账观察器），而 v1.26.2 的拆分把 `index.js` 从 3648 行减到 936 行，该行号早已不存在。三类分别处理：**本仓锚点**（`lib|src|scripts|types|docs/`）必须落在文件内；**上游锚点**（`packages/…`，指向未 vendored 的 dsh checkout）只校验形态，并在输出里**如实报告"未核对"**而不是假装通过——设 `DSH_CHECKOUT` 后按真实 checkout 核对；**反例引用**（在反引号前加 `~~`）不算声明，闸门跳过。锚点形态本身也有断言（只认已知顶层目录，裸文件名不算声明）。
 
-- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**148 条断言**，覆盖全部管理 RPC 命名空间、workflow 引擎接缝，以及三处「镜像宿主行为」的上游规则——插件准入门 `engines.dsh` 优先分支、tool-subagent 对 persona/toolFilter 的硬拒绝、GitRunner 的 git 环境纪律；条数以 `npm test` 输出为准）。
-- **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（**28 项断言**，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**21 次只读调用覆盖 13/14 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
-- `verify-service-injects.mjs` 静态扫描 `lib/**`：断言**没有任何模块直接读 `ctx.<service>` 属性**（那在服务缺失时会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见——`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着），并要求命中集合非空、shell 调用点只用当前动词。`inject` 为空（见 §1），所以每个服务读取都必须经 `lib/host-seams.js` 的 `ctx.get()` 并在缺失时降级；本闸门现在报「45 处可选接缝读取 / 40 个宿主文件」。
+- `integration-check.mjs` 对真实 dsh checkout 做源码级契约探针（**145 条断言**，覆盖全部管理 RPC 命名空间、workflow 引擎接缝，以及两处「镜像宿主行为」的上游规则——插件准入门 `engines.dsh` 优先分支、GitRunner 的 git 环境纪律；条数以 `npm test` 输出为准）。
+- **`npm run smoke:real-host`** —— 唯一会**启动真实 dsh** 的检查（**28 项断言**，实测约 11–30 秒）：用一次性 `DSH_HOME` 从 dsh 自带模板生成 profile、把本插件装进去、boot 起来，依次断言 loader 组出了我们的行、客户端 bundle 进了模块表并被真实 web 服务端出来、**18 次只读调用覆盖 12/13 个管理命名空间**、**写路径真的落盘**（cron 存储 + profile patch 的 `disabled` 行 + `admin-audit.jsonl` 留痕，并用 `pluginAdmin/list` 的 `disabled` 字段做往返），最后在**真实 headless Chromium** 里点开设置、断言我们自己的面板文案出现在 DOM 中且页面无未捕获异常。不碰你真实的 `$DSH_HOME`；CI 里是独立的 `host-smoke` 作业（无浏览器即失败）。
+- `verify-service-injects.mjs` 静态扫描 `lib/**`：断言**没有任何模块直接读 `ctx.<service>` 属性**（那在服务缺失时会抛 `cannot get property … without inject`，而所有替身 ctx 的检查都看不见——`projectAdmin/list` 就是这样在 v1.25.3 前一直坏着），并要求命中集合非空、shell 调用点只用当前动词。`inject` 为空（见 §1），所以每个服务读取都必须经 `lib/host-seams.js` 的 `ctx.get()` 并在缺失时降级；本闸门现在报「44 处可选接缝读取 / 39 个宿主文件」。
 - `verify-i18n.mjs` 断言英文文案表与全部 `dshT()` 调用点互为覆盖（防新增文案漏翻）、英文值不得残留中文。
 - `self-check.mjs` 末尾包含 **en 模式冒烟**：以英文 locale 重新物化一份客户端，断言导航/工具栏 chrome 翻译与语言切换控件。
 - `verify-cron-panel.mjs` 在 jsdom 里真实挂载「自动化」页并驱动定时任务页签（列表 / 开关 / 手填编辑器：id + 每小时频率 → `0 * * * *` → 保存）；模板卡片路径由 `self-check` 用例 15y1 覆盖，两者互补。
 - `verify-mcp-admin.mjs` 盯 mcpAdmin `remove` 对 boot-critical patch 的落盘形状：删光最后一个条目必须归一为合法空序列 `[]`（注释保留其上）而不是裸换行（后者让宿主下次启动即拒），同块/异块兄弟条目存活、拒绝写不留字节、动作留痕。
 - 诊断工具（不在 npm test 内）：`node scripts/repro-delete-session.mjs` 复现会话删除路径的全部失败模式（在线未捕获 + 宿主无 teardown 原语 / 在线未捕获但可重建 teardown / 布局漂移 / 并发竞态），用于把面板报错对号入座。
 
-RPC 契约同源：`lib/rpc-manifest.js` 是唯一真相表（**91 方法 / 14 命名空间**；以 `host-check` 输出为准），模块描述符从表生成（`invocationsFor`），87 个参数 wire 挂 `mode: 'strict'` 由网关在边界校验（零依赖手写校验器 `lib/rpc-schema.js`）；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）。
+RPC 契约同源：`lib/rpc-manifest.js` 是唯一真相表（**79 方法 / 12 命名空间**；以 `host-check` 输出为准），模块描述符从表生成（`invocationsFor`），77 个参数 wire 挂 `mode: 'strict'` 由网关在边界校验（零依赖手写校验器 `lib/rpc-schema.js`）；host-check 双向闸门（表↔描述符、表↔客户端调用点、必填/可选线名）。
 
 多版本矩阵：`npm run test:matrix` 对三档 checkout（验证基线 / 支持下限 / master 预警） 跑同一套探针（无 checkout 记 SKIP；CI 的 `seam-matrix` 作业显式列出目录，让"无可探测"变成失败而不是绿色静默）。

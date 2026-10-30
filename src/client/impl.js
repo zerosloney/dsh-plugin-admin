@@ -456,9 +456,7 @@ function downloadTextFile(filename, text) {
  * painted it, which is what keeps the DOM patch below scoped to our own rows. */
 /** @type {Record<string, string>} */
 var SETTINGS_NAV_ICONS = {
-  '技能': '<path d="M8 4.6C6.9 3.6 5.3 3.2 3 3.3v8.4c2.3-.1 3.9.3 5 1.3 1.1-1 2.7-1.4 5-1.3V3.3c-2.3-.1-3.9.3-5 1.3z"/><path d="M8 4.6v8.4"/>',
   'MCP服务器': '<rect x="2.25" y="2.25" width="11.5" height="4.75" rx="1.2"/><rect x="2.25" y="9" width="11.5" height="4.75" rx="1.2"/><circle cx="5" cy="4.62" r="0.95" fill="currentColor" stroke="none"/><circle cx="5" cy="11.38" r="0.95" fill="currentColor" stroke="none"/>',
-  '子智能体': '<rect x="2.2" y="2.6" width="6" height="4.2" rx="1.2"/><rect x="7.8" y="9.2" width="6" height="4.2" rx="1.2"/><path d="M5.2 6.8v3a1.6 1.6 0 0 0 1.6 1.6h1"/>',
   '用量仪表盘': '<path d="M3.5 13V8.5"/><path d="M8 13V3"/><path d="M12.5 13V6"/>',
   '自动化': '<circle cx="8" cy="8" r="5.6"/><path d="M9.2 4.8L6.7 8.6h2.3l-2 3.3"/>',
   'Web 与会话': '<circle cx="7" cy="7" r="4.8"/><path d="M7 4.8V7l1.8 1.2"/><path d="M10.6 10.6l2.6 2.6"/>',
@@ -939,8 +937,9 @@ function sameCoverageVerdict(a, b) {
  *
  * The `notes` list existed since v1.30 with a comment saying it was "for the
  * mount log", but nothing read it (v1.30.1 fixes that). It matters because the
- * alternative to a note is silence: an operator seeing both our 子智能体 page and
- * the official one has no way to learn from the plugin that this is deliberate.
+ * alternative to a note is silence: an operator seeing both our 自动化 entry and
+ * the official schedule page has no way to learn from the plugin that this is
+ * deliberate.
  * @param {Record<string, any>} coverage - a resolveNativeCoverage() verdict.
  * @returns {void}
  */
@@ -1214,18 +1213,6 @@ function apply(ctx) {
     component: withLocale(lazyPanel('McpSection')),
   },
   {
-    panel: 'skills',
-    slot: 'settings.plugins.tab',
-    options:       {
-              name: 'settings.plugins.tab',
-              id: 'skills',
-              order: 30,
-              label: function () { return dshT('技能') },
-              inject: function () { return { call: call } },
-          },
-    component: withLocale(lazyPanel('SkillsSection')),
-  },
-  {
     panel: 'sessions',
     slot: 'settings.section',
     options:       {
@@ -1236,18 +1223,6 @@ function apply(ctx) {
               inject: function () { return { call: call, refreshSessions: reconcileSessionList, forgetSession: reconcileSessionList, pinBridge: pinBridge } },
           },
     component: withLocale(lazyPanel('WebSessionsSection')),
-  },
-  {
-    panel: 'subagents',
-    slot: 'settings.plugins.tab',
-    options:       {
-              name: 'settings.plugins.tab',
-              id: 'subagent-admin',
-              order: 50,
-              label: function () { return dshT('子智能体') },
-              inject: function () { return { call: call } },
-          },
-    component: withLocale(lazyPanel('SubagentAdminSection')),
   },
   {
     panel: 'commands',

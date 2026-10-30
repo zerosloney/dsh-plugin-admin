@@ -227,31 +227,6 @@ const ctx = {
             archivedSessionIds: ['s1'],
           } }
         }
-        // The 技能 roster read: the panel asks sessionAdmin/list first, then
-        // hands every session id to the host in one request.
-        if (method === 'skillsAdmin/list') {
-          ctx.skillsRequests = ctx.skillsRequests ?? []
-          ctx.skillsRequests.push(Array.isArray(payload.args.sessionIds) ? payload.args.sessionIds.slice() : [])
-          return { ok: true, value: {
-            available: true,
-            registry: true,
-            complete: ctx.skillsIncomplete !== true,
-            skills: [
-              { name: 'alpha-only', description: '只在这个工作区可见', whenToUse: '改 alpha 的时候', source: 'project-agents', sources: ['project-agents'], provider: 'filesystem', path: '/proj/.agents/skills/alpha-only/SKILL.md', url: null, resource: 'directory', modelInvocable: true, userInvocable: true, scopes: ['alpha @ build'] },
-              { name: 'global-skill', description: '插件内置技能', whenToUse: null, source: 'bundled', sources: ['bundled'], provider: 'runtime', path: null, url: null, resource: 'opaque', modelInvocable: true, userInvocable: false, scopes: ['全局'] },
-              { name: 'human-only', description: '仅人类可调用', whenToUse: null, source: 'user-agents', sources: ['user-agents'], provider: 'filesystem', path: '/home/.agents/skills/human-only/SKILL.md', url: null, resource: 'directory', modelInvocable: false, userInvocable: true, scopes: ['alpha @ build'] },
-            ],
-            scopes: [
-              { label: '全局', kind: 'global', cwd: null, preset: null, sessionIds: [], count: 1, error: null },
-              { label: 'alpha @ build', kind: 'session', cwd: 'E:/Demo/alpha', preset: 'build', sessionIds: ['s2'], count: 2, error: null },
-            ],
-            sessions: [
-              { sessionId: 's2', ok: true, cwd: 'E:/Demo/alpha', preset: 'build', message: '' },
-              { sessionId: 's1', ok: false, cwd: null, preset: null, message: '会话没有项目 cwd' },
-            ],
-            warnings: [],
-          } }
-        }
         // The Web 搜索 provider config editor: one read, then one save.
         if (method === 'webSearchAdmin/config') {
           ctx.webSearchConfigReads = ctx.webSearchConfigReads ?? []
@@ -458,26 +433,26 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Eleven slot contributions: the SIX plugins-page tabs inside the shell-owned
-// 插件 section (扩展插件 20, 技能 30, MCP服务器 40, 子智能体 50, 命令 60,
-// 钩子 70), the standalone Web 搜索 / 用量仪表盘 / 定时任务 / Webhook 触发 /
-// 工作流 settings sections, the 待办清单 dock above the composer, and the
-// session-row delete item in the sidebar list slot. Neither
-// the Codex bridge (a banner inside the 钩子 tab) nor the Agent preset editor
-// (the shell's own ui-agent-preset section owns that roster) gets a section of
-// its own — and 历史会话 + Web 搜索 share ONE standalone nav entry, Web 与会话
-// (工作区 has no plugin surface anywhere any more: dsh covers it natively).
-assert.equal(injectedSections.length, 11, 'eleven slot contributions injected')
+// Nine slot contributions: the FOUR plugins-page tabs inside the shell-owned
+// 插件 section (扩展插件 20, MCP服务器 40, 命令 60, 钩子 70), the standalone
+// Web 搜索 / 用量仪表盘 / 定时任务 / Webhook 触发 / 工作流 settings sections,
+// the 待办清单 dock above the composer, and the session-row delete item in the
+// sidebar list slot. Neither the Codex bridge (a banner inside the 钩子 tab) nor
+// the Agent preset editor (the shell's own ui-agent-preset section owns that
+// roster) gets a section of its own — and 历史会话 + Web 搜索 share ONE
+// standalone nav entry, Web 与会话 (工作区 has no plugin surface anywhere any
+// more: dsh covers it natively).
+assert.equal(injectedSections.length, 9, 'nine slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
-  'injections wait on settings.section (×3), settings.plugins.tab (×6), conversation.input.dock, and the session-row menu list',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
+  'injections wait on settings.section (×3), settings.plugins.tab (×4), conversation.input.dock, and the session-row menu list',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 11, 'eleven registrations: extensions + skills + MCP + subagents + commands + hooks + automation tabs + web search + usage dashboard + todo dock + session-row delete item')
+assert.equal(registeredSections.length, 9, 'nine registrations: extensions + MCP + commands + hooks + automation tabs + web search + usage dashboard + todo dock + session-row delete item')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId.skills && byId['mcp-servers'] && byId['subagent-admin'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['web-sessions'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化, 历史会话 + Web 搜索 inside Web 与会话)')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['web-sessions'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化, 历史会话 + Web 搜索 inside Web 与会话)')
 assert.equal(byId['session-history'], undefined, '历史会话 rides the Web 与会话 tab — no section of its own')
 assert.equal(byId['web-search-admin'], undefined, 'the standalone Web 搜索 section merged into Web 与会话')
 assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
@@ -490,27 +465,15 @@ assert.equal(slotLabel(extensions), '扩展插件', 'extensions tab label')
 const extensionsFace = extensions.options.inject()
 assert.equal(typeof extensionsFace.call, 'function', 'extensions tab inject face carries the RPC call')
 
-const skillsTab = byId.skills
-assert.equal(skillsTab.options.name, 'settings.plugins.tab', '技能 is a plugins-page tab, not a settings nav section')
-assert.equal(skillsTab.options.order, 30, '技能 tab sorts right after 扩展插件 (order 20)')
-assert.equal(slotLabel(skillsTab), '技能', 'skills tab label')
-assert.equal(byId['skills-admin'], undefined, 'the standalone 技能 settings nav section is gone')
-assert.equal(typeof skillsTab.options.inject().call, 'function', 'skills tab inject face carries the RPC call')
-
 const mcpSection = byId['mcp-servers']
 assert.equal(mcpSection.options.name, 'settings.plugins.tab', 'MCP服务器 is a plugins-page tab, not a settings nav section')
-assert.equal(mcpSection.options.order, 40, 'MCP服务器 tab sorts right after 技能 (order 30)')
+assert.equal(mcpSection.options.order, 40, 'MCP服务器 tab sorts after 扩展插件 (order 20)')
 assert.equal(slotLabel(mcpSection), 'MCP服务器', 'MCP section label')
-
-const subagentSection = byId['subagent-admin']
-assert.equal(subagentSection.options.name, 'settings.plugins.tab', '子智能体 is a plugins-page tab, not a settings nav section')
-assert.equal(subagentSection.options.order, 50, '子智能体 tab sorts right after MCP服务器 (order 40)')
-assert.equal(slotLabel(subagentSection), '子智能体', 'subagent section label')
 
 const chCommandsTab = byId['ch-commands']
 const automationSectionRef = byId['automation']
 assert.equal(chCommandsTab.options.name, 'settings.plugins.tab', '命令 is a plugins-page tab, not a settings nav section')
-assert.equal(chCommandsTab.options.order, 60, '命令 tab sorts right after 子智能体 (order 50)')
+assert.equal(chCommandsTab.options.order, 60, '命令 tab sorts after MCP服务器 (order 40)')
 assert.equal(slotLabel(chCommandsTab), '命令', 'commands tab label')
 assert.equal(typeof chCommandsTab.options.inject().call, 'function', 'commands tab inject face carries the RPC call')
 const chHooksTab = byId['ch-hooks']
@@ -573,10 +536,6 @@ assert.equal(byId['webhook-triggers'], undefined, 'the standalone Webhook 触发
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/unified-section.css"]'),
   'unified section css injected',
-)
-assert.ok(
-  document.querySelector('style[data-dsh-sa-styles]'),
-  'subagent section css injected',
 )
 assert.ok(
   document.querySelector('style[data-plugin-css="dsh-plugin-admin/command-hooks.css"]'),
@@ -825,209 +784,80 @@ assert.equal(allErrorToasts.length, 1, 'consecutive failures keep exactly one fl
 assert.ok(allErrorToasts[0].textContent.includes('卸载失败：'), 'the single surviving toast carries the latest failure')
 ctx.removeResult = undefined
 
-// 7. Unmount the plugins panel and mount the 历史会话 section instead.
+// 7. 历史会话 lists ARCHIVED sessions only, one hairline section per workspace.
 await act(async () => { pluginsRoot.unmount() })
 host.remove()
+ctx.deletes = []
+ctx.closeDeletes = []
+ctx.sessionListOverride = undefined
 const sessionsRoot = await mountSection(sessionsSection)
-
 text = document.body.textContent
-assert.ok(text.includes('分析与重构插件系统架构'), 'session 1 title rendered')
-assert.ok(text.includes('请帮我将 dsh-session-admin 和 dsh-plugin-admin 合并'), 'session 1 content summary rendered')
-assert.ok(text.includes('5 条消息'), 'session 1 message count tag')
-assert.ok(text.includes('探索Cordis依赖注入与Typert RPC网关通信协议'), 'session 2 content summary rendered')
-assert.ok(text.includes('alpha-project'), 'session 1 group header / archived session cwd')
-assert.ok(text.includes('beta-project'), 'session 2 group header / live session cwd')
-assert.ok(text.includes('已归档'), 'archived badge')
-assert.ok(text.includes('会话在线'), 'live badge reads 会话在线 (online, not 进行中)')
-assert.ok(text.includes('取消归档'), 'unarchive button for archived session')
-assert.ok(text.includes('未分组'), 'ungrouped bucket header for orphan sessions')
-assert.ok(text.includes('独立会话'), 'ungrouped session card rendered')
-assert.ok(text.includes('摘要读取失败：event log unreadable'), 'session summary read failure is visible')
-assert.ok(text.includes('全部(3)'), 'session filter pill count')
-assert.ok(text.includes('会话修改即时同步到侧边栏'), 'session hint footer')
+assert.ok(text.includes('分析与重构插件系统架构'), 'the archived session is listed')
+assert.ok(text.includes('alpha-project'), 'its workspace names the group header')
+assert.ok(!text.includes('探索Cordis依赖注入与Typert RPC网关通信协议'), 'a session that is not archived is NOT listed')
+assert.ok(!text.includes('请帮我将 dsh-session-admin'), 'the row is title + id + time — no summary line')
+assert.ok(!text.includes('导出') && !text.includes('置顶') && !text.includes('全文搜索'), 'the panel carries no export / pin / full-text surface any more')
 
-// 7b. Session export: the ⬇ 导出 button pulls sessionAdmin/exportSession and
-// downloads the markdown via an object URL (stubbed here — jsdom has none;
-// the client's bare `URL` is Node's global in this harness, so stub there).
-let createdObjectUrl = null
-URL.createObjectURL = (blob) => { createdObjectUrl = blob; return 'blob:mock' }
-URL.revokeObjectURL = () => {}
-await act(async () => {
-  button('⬇ 导出').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  await new Promise((resolve) => setTimeout(resolve, 30))
-})
-assert.ok((ctx.exportCalls ?? []).length === 1, 'export button triggers sessionAdmin/exportSession')
-assert.ok(createdObjectUrl !== null, 'markdown handed to a download blob')
-const exportedText = await createdObjectUrl.text()
-assert.ok(exportedText.includes('# 测试会话') && exportedText.includes('## 👤 用户'), 'blob carries the markdown payload')
-assert.ok(document.body.textContent.includes('✅ 已导出 1 条消息'), 'export success toast shown')
-
-// 7c. Session pinning: 📌 置顶 toggles the local whitelist and the filter pill.
-await act(async () => {
-  const pinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 置顶'))
-  assert.ok(pinBtn !== undefined, 'pin button present on session cards')
-  pinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  await new Promise((resolve) => setTimeout(resolve, 30))
-})
-assert.ok(document.body.textContent.includes('已置顶(1)'), 'pinned pill count updates')
-assert.ok(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/pinned-sessions')).length === 1, 'pin persisted to localStorage')
-await act(async () => {
-  const unpinBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('📌 已置顶'))
-  assert.ok(unpinBtn !== undefined, 'unpin button present')
-  unpinBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  await new Promise((resolve) => setTimeout(resolve, 30))
-})
-assert.ok(document.body.textContent.includes('已置顶(0)'), 'unpin restores the count')
-
-// 7d. Token usage: the card tag and the totals strip fold the host tokens.
-assert.ok(document.body.textContent.includes('↑12.3k ↓3.4k'), 'per-session usage tag rendered')
-assert.ok(document.body.textContent.includes('缓存8.9k'), 'cache-read part of the usage tag')
-assert.ok(document.body.textContent.includes('输入 12.3k'), 'totals strip input column')
-
-
-// 8. Test Session delete inline confirmation
-await act(async () => {
-  button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(document.body.textContent.includes('确认删除'), 'inline delete confirmation appears')
-await act(async () => {
-  button('取消').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(!document.body.textContent.includes('确认删除'), 'cancel restores session actions')
-
-// 8b. Online sessions now offer 关停并删除 (closeSession): the live mock
-// session s2 must render the close button, and its confirm flow calls the
-// closeSession RPC instead of deleteSession.
-assert.ok(document.body.textContent.includes('关停并删除'), 'live session offers 关停并删除')
-ctx.closeDeletes = ctx.closeDeletes ?? []
-const originalCall = ctx.connection.rpc.call
+// 7b. Delete is two-step IN PLACE (删除 -> 确认删除), then the RPC runs and the
+// list is re-read. A live archived session would go through closeSession
+// instead, asserted below.
+const baseCall = ctx.connection.rpc.call
+let listReads = 0
 ctx.connection.rpc.call = async (route, method, payload) => {
+  if (method === 'sessionAdmin/list') listReads += 1
   if (method === 'sessionAdmin/closeSession') {
     ctx.closeDeletes.push(payload.args.sessionId)
-    return { ok: true, value: { deleted: payload.args.sessionId } }
+    return { ok: true, value: { closed: payload.args.sessionId } }
   }
-  return originalCall(route, method, payload)
+  return baseCall(route, method, payload)
 }
-await act(async () => {
-  const closeBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('关停并删除'))
-  assert.ok(closeBtn !== undefined, 'close button present')
-  closeBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(document.body.textContent.includes('关停该在线会话'), 'close confirmation text warns about stopping the conversation')
-await act(async () => {
-  button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await new Promise((resolve) => setTimeout(resolve, 60))
-assert.deepEqual(ctx.closeDeletes, ['s2'], 'close confirm calls sessionAdmin/closeSession with the live session id')
-ctx.connection.rpc.call = originalCall
+await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+assert.ok(document.body.textContent.includes('确认删除'), 'delete asks for confirmation in place')
+assert.ok(document.body.textContent.includes('取消'), 'the confirmation can be cancelled')
+await act(async () => { button('取消').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+assert.ok(!document.body.textContent.includes('确认删除'), 'cancel drops the confirmation')
+assert.deepEqual(ctx.deletes, [], 'cancel never reaches the host')
+await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+ctx.sessionListOverride = mockSessions.filter((row) => row.id !== 's1')
+await act(async () => { button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+assert.deepEqual(ctx.deletes, ['s1'], 'the delete RPC carries the archived session id')
+assert.ok(listReads >= 1, 'the panel re-reads the archived list after the delete')
+assert.ok(!document.body.textContent.includes('分析与重构插件系统架构'), 'the deleted row leaves the list')
 
-// 8c. Directory groups are collapsible: clicking a group header hides its
-// sessions (persisted to localStorage); clicking again restores them.
-const groupHeaders = () => [...document.querySelectorAll('.group-header')]
-const cardCount = () => document.querySelectorAll('.card').length
-assert.equal(groupHeaders().length, 3, 'session list renders one header per directory group')
-const cardsExpanded = cardCount()
-await act(async () => {
-  groupHeaders()[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(cardCount() < cardsExpanded, 'collapsing a group hides its session cards')
-assert.ok(groupHeaders()[0].className.includes('collapsed'), 'the collapsed header is marked')
-assert.ok(document.body.textContent.includes('已折叠'), 'the collapsed header shows a 已折叠 note')
-assert.equal(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/collapsed-groups') ?? '[]').length, 1, 'the collapsed group key is persisted')
-await act(async () => {
-  groupHeaders()[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.equal(cardCount(), cardsExpanded, 'expanding restores the session cards')
-assert.equal(JSON.parse(dom.window.localStorage.getItem('dsh-plugin-admin/collapsed-groups') ?? '[]').length, 0, 'expanding clears the persisted key')
-
-// 8d. Collapse-all / expand-all from the filter bar tail.
-const collapseAllButton = () => [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('全部折叠') || b.textContent?.includes('全部展开'))
-await act(async () => {
-  collapseAllButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.equal(cardCount(), 0, 'collapse-all hides every session card')
-assert.ok(document.body.textContent.includes('全部展开'), 'the toggle flips to 全部展开')
-await act(async () => {
-  collapseAllButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.equal(cardCount(), cardsExpanded, 'expand-all restores every session card')
-
-// 8e. Bulk delete of the current projection: the filter bar's action raises a
-// confirm bar; confirming fires one RPC per session, routing live sessions
-// through closeSession and ended/archived ones through deleteSession.
-ctx.deletes = []
-ctx.closeDeletes = []
-ctx.connection.rpc.call = async (route, method, payload) => {
-  if (method === 'sessionAdmin/closeSession') {
-    ctx.closeDeletes.push(payload.args.sessionId)
-    return { ok: true, value: { deleted: payload.args.sessionId } }
-  }
-  return originalCall(route, method, payload)
-}
-const bulkAllButton = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('删除当前 ('))
-assert.ok(bulkAllButton !== undefined, 'bulk delete-all action present')
-await act(async () => {
-  bulkAllButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(document.body.textContent.includes('确认删除 当前筛选的 3 个会话'), 'the bulk confirm bar names the scope and count')
-const bulkConfirmButton = () => [...document.querySelectorAll('.bulk-bar button')].find((b) => b.textContent?.includes('确认删除'))
-await act(async () => {
-  bulkConfirmButton().dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await new Promise((resolve) => setTimeout(resolve, 200))
-assert.deepEqual(ctx.deletes.slice().sort(), ['s1', 's3'], 'bulk delete routes ended/archived sessions through deleteSession')
-assert.deepEqual(ctx.closeDeletes, ['s2'], 'bulk delete closes the live session first')
-assert.equal(document.querySelectorAll('.bulk-bar').length, 0, 'the bulk bar clears once the run finishes')
-
-// 8f. Per-directory bulk delete from the group header.
-const groupBulkButton = [...document.querySelectorAll('.group-header button')].find((b) => b.textContent?.includes('整个目录'))
-assert.ok(groupBulkButton !== undefined, 'per-directory bulk delete action present')
-await act(async () => {
-  groupBulkButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(document.body.textContent.includes('确认删除 目录「alpha-project」的 1 个会话'), 'the group confirm names the directory and count')
-await act(async () => {
-  [...document.querySelectorAll('.bulk-bar button')].find((b) => b.textContent?.includes('取消')).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.equal(document.querySelectorAll('.bulk-bar').length, 0, 'cancel dismisses the bulk bar')
-ctx.connection.rpc.call = originalCall
-
-// 8g. Selection is pruned to what the current filter/search SHOWS: a tick left
-// on a row that the next filter hides must not stay armed, or 「删除已选」 would
-// delete a session the operator can no longer see.
-const tickAll = async () => {
-  const button = [...document.querySelectorAll('.selection-bar button')]
-    .find((b) => b.textContent?.includes('全选'))
-  assert.ok(button !== undefined, 'the selection strip offers 全选')
-  await act(async () => {
-    button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  })
-}
-await tickAll()
-assert.ok(document.body.textContent.includes('已选 3 个 / 3'), '全选 ticks every visible session')
-const liveFilter = [...document.querySelectorAll('[data-dsh-admin-section] button')]
-  .find((b) => b.textContent?.includes('在线('))
-assert.ok(liveFilter !== undefined, 'the 在线 filter pill is present')
-await act(async () => {
-  liveFilter.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-assert.ok(
-  !document.body.textContent.includes('已选 3 个 / 3'),
-  'switching to 在线 drops the ticks the new projection does not show',
-)
-assert.equal(
-  [...document.querySelectorAll('.selection-bar button')].some((b) => b.textContent?.includes('删除已选')),
-  false,
-  'with nothing left selected the delete-selected action disappears',
-)
-await act(async () => {
-  [...document.querySelectorAll('[data-dsh-admin-section] button')]
-    .find((b) => b.textContent?.includes('全部(')).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-// Leave the delete spies empty for the sidebar-menu tests below (they assert
-// the exact RPC count of an armed/second click).
-ctx.deletes = []
-ctx.closeDeletes = []
+// 7c. A still-live archived session is torn down through closeSession.
+await act(async () => { sessionsRoot.unmount() })
+host.remove()
+ctx.sessionListOverride = [{
+  id: 's4',
+  cwd: 'E:\\Demo\\alpha-project',
+  createdAt: 1_760_000_000_000,
+  archived: true,
+  live: true,
+  title: '归档但仍在线',
+  workspaceId: 'w-alpha',
+  workspaceTitle: 'alpha-project',
+}, {
+  id: 's5',
+  cwd: 'E:\\Demo\\loose-project',
+  createdAt: 1_760_000_000_000,
+  archived: true,
+  live: false,
+  title: '无工作区归档',
+  workspaceId: null,
+  workspaceTitle: null,
+}]
+const liveRoot = await mountSection(sessionsSection)
+assert.ok(document.body.textContent.includes('未分组'), 'a row with no registry workspace lands in the ungrouped bucket')
+assert.ok(document.body.textContent.includes('无工作区归档'), 'the ungrouped archived row renders')
+await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+assert.deepEqual(ctx.closeDeletes, ['s4'], 'a live archived session is closed through closeSession, not deleted blindly')
+await act(async () => { liveRoot.unmount() })
+host.remove()
+ctx.sessionListOverride = undefined
+ctx.connection.rpc.call = baseCall
 
 // 9. Unmount the sessions panel and mount the MCP服务器 section instead.
 await act(async () => { sessionsRoot.unmount() })
@@ -1206,8 +1036,13 @@ const openNativeMenu = async (rowKey) => {
     wrap.appendChild(button)
     menu.appendChild(wrap)
   }
+  // The host opens the portal inside the click's OWN task (React flushes a
+  // discrete event synchronously) and the hook's watch ends with that task, so
+  // the fixture must not defer the menu to a later one: a menu that appears
+  // after the gesture belongs to whoever opened it next.
+  row.querySelector('button').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   document.body.appendChild(menu)
-  await new Promise((resolve) => setTimeout(resolve, 40))
+  await new Promise((resolve) => setTimeout(resolve, 0))
   return menu
 }
 const wsMenu = await openNativeMenu('workspace:w-alpha')
@@ -1262,7 +1097,7 @@ const mkNavRow = (label) => {
 // from the registrations above, so a new page without an icon fails here), plus
 // the shell's own rows — including 'Agent 预设', the label this plugin must NOT
 // reuse (the official ui-agent-preset page owns it, and the icon injector can
-// only key off the label text). The 扩展插件 / 技能 / MCP服务器 tabs live
+// only key off the label text). The 扩展插件 / MCP服务器 tabs live
 // INSIDE the 内置插件 page, not the settings nav, so they have no nav rows here.
 const pluginSectionLabels = registeredSections
  .filter((entry) => entry.options.name === 'settings.section')
@@ -1275,7 +1110,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 3, `three settings.section pages carry an icon (got ${pluginSectionLabels.length}); 技能 / MCP服务器 / 子智能体 / 命令 / 钩子 / 工作流 are plugins-page tabs, 历史会话 + Web 搜索 share the Web 与会话 row`)
+assert.ok(pluginSectionLabels.length === 3, `three settings.section pages carry an icon (got ${pluginSectionLabels.length}); 扩展插件 / MCP服务器 / 命令 / 钩子 / 工作流 are plugins-page tabs, 历史会话 + Web 搜索 share the Web 与会话 row`)
 for (const row of officialRows) {
  assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows (incl. dsh\'s own 已归档会话 page) keep their own icon')
 }
@@ -1801,95 +1636,6 @@ assert.ok(host.textContent.includes('已保存'), 'a successful save reports bac
 await act(async () => { webSearchRoot.unmount() })
 host.remove()
 
-// 15z-skills-roster. The 技能 page renders the WHOLE roster from
-// skillsAdmin/list (the host merges the global layer with one read per agent
-// preset standing scope and one per session scope) and filters it locally —
-// the previous revision could only ever show ONE session's user-invocable
-// subset.
-const skillsRoot = await mountSection(byId.skills)
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = host.textContent
-assert.equal(ctx.skillsRequests.length, 1, 'the panel asks the host once for the whole roster')
-assert.deepEqual(ctx.skillsRequests[0], ['s2', 's3', 's1'], 'every session id travels, non-archived first')
-assert.ok(text.includes('/alpha-only'), 'a project-scoped skill renders')
-assert.ok(text.includes('/global-skill'), 'a global (bundled) skill renders')
-assert.ok(text.includes('🤖 模型可调用'), 'the model-invocable badge renders')
-assert.ok(text.includes('👤 人类可调用'), 'the user-invocable badge renders')
-assert.ok(text.includes('插件内置'), 'a bundled skill carries its source label')
-assert.ok(text.includes('/proj/.agents/skills/alpha-only/SKILL.md'), 'the SKILL.md path renders')
-assert.ok(text.includes('可见于：'), 'the per-skill scope list renders')
-assert.ok(text.includes('会话 s1 的作用域未能解析'), 'an unresolved session scope is surfaced')
-// Text filter: a needle matching one skill must hide the others.
-const skillsNeedle = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === '过滤技能')
-assert.ok(skillsNeedle !== undefined, 'the roster filter input renders')
-await act(async () => {
-  propsOf(skillsNeedle).onChange({ target: { value: 'alpha' } })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-assert.ok(host.textContent.includes('/alpha-only'), 'the matching skill survives the filter')
-assert.ok(!host.textContent.includes('/global-skill'), 'a non-matching skill is filtered out')
-// An incomplete host read must never read as a complete roster.
-await act(async () => {
-  propsOf(skillsNeedle).onChange({ target: { value: '' } })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-ctx.skillsIncomplete = true
-await act(async () => {
-  const skillsRefresh = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('⟳ 刷新'))
-  propsOf(skillsRefresh).onClick()
-  await new Promise((resolve) => setTimeout(resolve, 40))
-})
-// An incomplete host read no longer prints a discovery caveat: the panel just
-// lists the skills it could load, so the check is that the roster still
-// renders and the caveat stayed away.
-assert.ok(host.textContent.includes('📌 共 '), 'an incomplete read still renders the roster it produced')
-assert.ok(!host.textContent.includes('complete=false'), 'the discovery-incomplete caveat is no longer surfaced')
-ctx.skillsIncomplete = undefined
-await act(async () => { skillsRoot.unmount() })
-host.remove()
-
-// 15z-search. Full-text search: toggle opens the panel, Enter returns hits.
-// Section 7's sessionsRoot was unmounted at line 705 — mount a fresh one.
-const searchSessionRoot = await mountSection(sessionsSection)
-await act(async () => {
-  const ftBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🔎 全文搜索'))
-  assert.ok(ftBtn !== undefined, 'fulltext toggle present in the sessions host')
-  ftBtn[Object.keys(ftBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
-  await new Promise((resolve) => setTimeout(resolve, 60))
-})
-assert.ok(host.textContent.includes('检索所有会话的消息内容') || host.querySelector('input[placeholder*="检索所有会话"]') !== null, 'fulltext query box rendered in the sessions host')
-await act(async () => {
-  const box = [...host.querySelectorAll('input')].find((i) => (i.placeholder || '').includes('检索所有会话'))
-  assert.ok(box !== undefined, 'fulltext input in the sessions host')
-  propsOf(box).onChange({ target: { value: '合并' } })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-await act(async () => {
-  const go = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === '搜索')
-  go.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  await new Promise((resolve) => setTimeout(resolve, 40))
-})
-assert.ok(host.textContent.includes('命中 1 个会话'), 'fulltext hit summary rendered')
-assert.ok(host.textContent.includes('分析与重构插件系统架构'), 'fulltext hit card rendered')
-await act(async () => { searchSessionRoot.unmount() })
-host.remove()
-
-// 15z-health. Session health check: 🩺 button loads the per-session report.
-const healthRoot = await mountSection(sessionsSection)
-await act(async () => {
-  const healthBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('🩺 体检'))
-  assert.ok(healthBtn !== undefined, 'health button present on a session card')
-  healthBtn[Object.keys(healthBtn).find((k) => k.startsWith('__reactProps$'))].onClick()
-  await new Promise((resolve) => setTimeout(resolve, 60))
-})
-assert.ok(host.textContent.includes('🩺'), 'health report card rendered')
-assert.ok(host.textContent.includes('read') && host.textContent.includes('×3'), 'tool stat row rendered')
-await act(async () => { healthRoot.unmount() })
-host.remove()
-
-URL.createObjectURL = () => { throw new Error("stubbed out after the export test") }
-URL.revokeObjectURL = () => {}
-
 // 15. The 命令 and 钩子 tabs, mounted here so their assertions below run against
 // their own panels (15a-15f) — separate pages since the v1.24.0 split.
 const chCommandsRoot = await mountSection(chCommandsTab)
@@ -2011,7 +1757,7 @@ exportsEn.apply({
   },
 })
 injectedEn.forEach((i) => i.callback())
-assert.equal(registeredEn.length, 11, 'en mode also registers eleven sections')
+assert.equal(registeredEn.length, 9, 'en mode also registers nine sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
 assert.equal(slotLabel(byIdEn.extensions), 'Extensions', 'en nav label for the extensions tab')
@@ -2219,14 +1965,13 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
 
   /* Granularity (v1.30, N-1/N-2). A coverage hit is NOT a verdict on the whole
-   * panel unless the official surface is an equivalent management page. Three
+   * panel unless the official surface is an equivalent management page. Two
    * rows prove the distinction, and each one failed before this round:
    *
    *  - automation: ui-schedule covers the cron tab only. Yielding the panel took
    *    Webhook and 工作流 with it — two surfaces upstream has no page for.
-   *  - subagents / webSearch: the official cards configure the official feature
-   *    (depth/capacity/model, official provider keys). They do not author
-   *    delegation instances or switch providers, which is the whole panel.
+   *  - webSearch: the official card configures the official provider keys. It
+   *    does not switch providers, which is the whole tab.
    */
   const automationOfficial = await mountPanels(['schedules'])
   assert.ok(automationOfficial.includes('automation'),
@@ -2237,9 +1982,6 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   assert.ok(automationPlusPlugins.includes('automation') && !automationPlusPlugins.includes('extensions'),
     'per-row scope: schedules keeps automation, plugins still retires extensions')
 
-  const subagentOfficial = await mountPanels([], {}, { officialItems: ['subagent'] })
-  assert.ok(subagentOfficial.includes('subagent-admin'),
-    'official 子智能体 配置卡 covers depth/capacity/model only → the authoring panel stays')
   const webSearchOfficial = await mountPanels([], {}, { officialItems: ['web-search'] })
   assert.ok(webSearchOfficial.includes('web-sessions'),
     'official web-search provider card does not switch providers → the Web 搜索 tab stays inside its panel')
@@ -2276,8 +2018,8 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
    * duplication was deliberate. v1.30.1 logs it; this asserts the log line
    * exists and names the panel. */
   loggedLines.length = 0
-  await mountPanels([], {}, { officialItems: ['subagent'] })
-  assert.ok(loggedLines.some((line) => line.includes('相近界面但不等价') && line.includes('subagents')),
+  await mountPanels([], {}, { officialItems: ['web-search'] })
+  assert.ok(loggedLines.some((line) => line.includes('相近界面但不等价') && line.includes('webSearch')),
     'a panel kept despite an overlapping official surface is reported in the mount log (notes)')
   loggedLines.length = 0
   await mountPanels(['schedules'])
@@ -2395,4 +2137,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, selection strip (select-all + pruning to the visible projection), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), workspace-row menu (row-id keyed DOM hook, host-resolved path, session rows never arm it), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, archived-only session list grouped by workspace (two-step delete, closeSession for a live one, sidebar reconcile), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), workspace-row menu (row-id keyed DOM hook, host-resolved path, session rows never arm it), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

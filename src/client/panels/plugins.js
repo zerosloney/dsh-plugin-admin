@@ -4,7 +4,7 @@ import { formatTestTime, loadUpdateReminders, mergeUpdateReminders, saveUpdateRe
 
 /**
  * Types for this panel's helpers. `call` stays a duck-typed RPC boundary by
- * design (the same seam skills.js / mcp.js / web-search.js declare): its result
+ * design (the same seam mcp.js / web-search.js declare): its result
  * envelope is per-method, so the resolved value type is `any` — a boundary,
  * not unmodelled data.
  * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any> }} PluginsSectionProps

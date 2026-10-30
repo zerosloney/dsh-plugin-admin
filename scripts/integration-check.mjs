@@ -567,15 +567,6 @@ const PROBES = [
     ],
   },
   {
-    id: 'Session.snapshotEvents (running subagent tail reader)',
-    file: 'packages/core/session/src/index.ts',
-    checks: [
-      // subagentAdmin.runtimeList rides this deprecated synchronous reader —
-      // its removal turns the 运行中 tab's eventCount/descriptor lookups empty.
-      ['snapshotEvents(fromSeq, toSeqExclusive) still declared', t => /snapshotEvents\(\s*fromSeq: SessionLogOffset = SessionLogOffset\(0\),\s*toSeqExclusive: SessionLogOffset = this\.seq,?\s*\)/.test(t)],
-    ],
-  },
-  {
     id: 'loader fiber.update seam (MCP + hooks hot-apply)',
     // lib/patch-utils.js:hotApplyFiberConfig centralizes BOTH hot-apply paths
     // (MCP entry edits + hooks-bridge reloads) on fiber.update(config, noSave).
@@ -594,43 +585,6 @@ const PROBES = [
         const loader = readSource('vendor/loader/src/index.ts')
         return loader !== null && loader.includes("ctx.on('internal/update', function (config, noSave, next) {")
       }],
-    ],
-  },
-  {
-    id: 'skill registry (skillsAdmin roster)',
-    file: 'packages/skill/skill/src/index.ts',
-    checks: [
-      // The merged roster reads the registry directly — the session-addressed
-      // catalog strips path / source / model-only rows, which is why the 技能
-      // page used to be systematically incomplete. A rename here degrades it
-      // back to one session's user-invocable subset.
-      ['ctx.skills.snapshot() returns { skills, complete } (the incomplete flag)', t => /snapshot\(options: SkillViewOptions = \{\}\): Promise<SkillCatalogSnapshot>/.test(t)],
-      ['ctx.skills.list() returns SkillSummary[] (fallback read)', t => /list\(options: SkillViewOptions = \{\}\): Promise<SkillSummary\[\]>/.test(t)],
-      ['SkillSummary carries name/description/whenToUse/invocation/source/provider/resourceBase', t => has('readonly name: string', 'readonly description: string', 'readonly whenToUse?: string', 'readonly invocation: SkillInvocationPolicy', 'readonly source: SkillSource', 'readonly provider: string', 'readonly resourceBase?: SkillResourceBase')(blockOf(t, 'export interface SkillSummary'))],
-      ['SkillInvocationPolicy keeps both flags (independent badges + scope merge)', t => has('readonly modelInvocable: boolean', 'readonly userInvocable: boolean')(blockOf(t, 'export interface SkillInvocationPolicy'))],
-      ['SkillResourceBase keeps directory.path / url.url / opaque.description', t => has("kind: 'directory'; readonly path: string", "kind: 'url'; readonly url: string", "kind: 'opaque'; readonly description: string")(t)],
-    ],
-  },
-  {
-    id: 'session observation seam (skill scope resolution)',
-    file: 'packages/session-query/session-query/src/index.ts',
-    checks: [
-      // skills-admin resolves each session's cwd + recorded agent preset
-      // through observeSession() WITHOUT activating a cold Agent; the returned
-      // observation is a disposable resource the module releases.
-      ['observeSession(sessionId, options) returns Promise<SessionObservation>', t => has('observeSession(', 'sessionId: SessionId', 'options: SessionObservationOptions = {},', '): Promise<SessionObservation> {')(t)],
-    ],
-  },
-  {
-    id: 'agent preset scope seam (scoped lease + scoped services)',
-    file: 'packages/preset/agent-preset-registry/src/index.ts',
-    checks: [
-      // dsh 0.1.7 replaced standingKeyFor with the acquireScope revision
-      // lease ({ key, [Symbol.asyncDispose] }): a cold session's scope is
-      // pinned only while the lease is held. A live session still reads its
-      // preset-scoped registries through serviceFor(agent, name).
-      ['acquireScope(id?) returns a disposable { key } lease', t => /acquireScope\(id\?: string\): Promise<\{ key: ScopeKey \} & AsyncDisposable>/.test(t)],
-      ['serviceFor(agent, name) exposes the preset-scoped service', t => /serviceFor<K extends string & keyof Context>\(agent: \{ ctx: Context \}, name: K\): Context\[K\] \| undefined/.test(t)],
     ],
   },
   {
@@ -851,26 +805,6 @@ const PROBES = [
     ],
   },
   {
-    id: 'llm catalog service (provider/model dropdowns)',
-    // lib/subagent-admin.js:1715-1725 powers the panel's provider/model selects.
-    file: 'packages/llm/llm/src/index.ts',
-    checks: [
-      ['the service key is llm', t => t.includes("super(ctx, 'llm')")],
-      ['listProviders() is synchronous and returns the catalog', t => t.includes('listProviders(): LlmProviderInfo[]')],
-      ['listModels(provider) is awaitable', t => t.includes('async listModels(provider: string): Promise<LlmModelInfo[]>')],
-    ],
-  },
-  {
-    id: 'llm catalog entry shapes',
-    file: 'packages/llm/llm/src/types.ts',
-    checks: [
-      ['LlmProviderInfo keeps id + name', t => has('id: string', 'name: string')(blockOf(t, 'export interface LlmProviderInfo'))],
-      // The plugin reads `p.id || p.provider`: `provider` no longer exists on the
-      // provider info, so `id` is the only thing keeping the dropdown populated.
-      ['LlmModelInfo keeps id + name', t => has('id: string', 'name: string')(blockOf(t, 'export interface LlmModelInfo'))],
-    ],
-  },
-  {
     id: 'storageDomain facility (projection-cache cleanup)',
     // lib/session-admin.js deletes a deleted session's projection-cache row through
     // this facility: get('session_projcache') → table('sessions') → delete(id).
@@ -919,21 +853,6 @@ const PROBES = [
         t => t.includes("if (Object.hasOwn(engines, 'dsh')) {") || t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return undefined")],
       ['peerDependencies are skipped entirely when engines.dsh decides (0.2.x) OR still resolved (0.1.7 floor)',
         t => t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return {}") || t.includes("if (!Object.hasOwn(fields, 'peerDependencies')) return undefined")],
-    ],
-  },
-  {
-    id: 'tool-subagent persona / toolFilter: removed on 0.2.1+, still legal on the floor',
-    // lib/subagent-admin.js gates persona/toolFilter on the host version: on
-    // 0.2.1+ a config carrying either key makes that row's apply() throw, so the
-    // panel must refuse to write them there — while the 0.1.7 support floor
-    // still accepts them. The probe therefore pins "one of the two host
-    // behaviours is present", which is what the panel's version gate branches on.
-    file: 'packages/subagent/tool-subagent/src/index.ts',
-    checks: [
-      ['either the 0.2.1+ rejection exists or the floor still accepts the keys',
-        t => t.includes("for (const field of ['persona', 'toolFilter']) {") || t.includes('persona?: string')],
-      ['the 0.2.1+ rejection names Agent Preset as the replacement (absent on the floor)',
-        t => t.includes('configure persona and tool plugins in an Agent Preset') || t.includes('persona?: string')],
     ],
   },
   {

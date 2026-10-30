@@ -20,9 +20,6 @@
  *   - `ui-schedule` is a task page; our 自动化 entry is three tabs (定时任务 /
  *     Webhook / 工作流). Yielding the entry took Webhook and 工作流 away — two
  *     surfaces upstream has NO page for at all.
- *   - `ui-settings-subagent` configures depth / capacity / model; our 子智能体
- *     entry authors named delegation instances, personas, tool fences and CLI
- *     backends. Different job, same neighbourhood.
  *   - `ui-settings-web-search` configures the official provider; our Web 搜索
  *     tab installs and switches providers (exa / perplexity).
  *
@@ -55,8 +52,8 @@
  * see must never be treated as covered.
  *
  * Probes are slot-entry lookups against ids read from the upstream source in
- * the 0.2.1-rc.3 tree, never guessed. Five rows are probed today (extensions,
- * subagents, webSearch, automation, todo); the six remaining `return false`
+ * the 0.2.1-rc.3 tree, never guessed. Four rows are probed today (extensions,
+ * webSearch, automation, todo); the six remaining `return false`
  * rows have no client-side surface of their own to look for, and
  * docs/COMPAT.md explains why at each row.
  */
@@ -92,37 +89,6 @@ export const NATIVE_COVERAGE = Object.freeze([
     // ships no browser slot for its connections (packages/mcp has no src/client
     // half at all). Stays false.
     detect: function () { return false },
-  }),
-  Object.freeze({
-    panel: 'skills',
-    label: '技能',
-    scope: 'none',
-    official: 'ui-skill（/ 触发与调用卡片）；全量清单仍无官方页',
-    since: null,
-    // ui-skill contributes conversation-side trigger cards, not a settings or
-    // sidebar entry; probing it would claim "covered" for a list page that does
-    // not exist upstream. Stays false.
-    detect: function () { return false },
-  }),
-  Object.freeze({
-    panel: 'subagents',
-    label: '子智能体',
-    scope: 'none',
-    official: 'ui-settings-subagent（深度/容量/模型）；编写侧仍无官方页',
-    since: null,
-    // Slot entry: ui-settings-subagent/src/client/index.ts:85-87 injects
-    // 'plugins.item' and registers id 'subagent'. The registration is wrapped in
-    // ctx.configForms.whileServed([...]) — it appears when the config form is
-    // served, which may be after our apply.
-    //
-    // 'none', NOT 'panel': the official card edits recursion depth / concurrency
-    // / model. This panel authors named delegation instances, personas, tool
-    // fences and external CLI backends — upstream has no page for any of that,
-    // so retiring the panel on the card's presence would delete the feature.
-    signals: Object.freeze([['plugins.item', 'subagent']]),
-    detect: function (/** @type {any} */ ctx) {
-      return hasSlotEntry(ctx, 'plugins.item', 'subagent')
-    },
   }),
   Object.freeze({
     panel: 'commands',
@@ -163,7 +129,7 @@ export const NATIVE_COVERAGE = Object.freeze([
     official: 'ui-settings-web-search（官方 provider 的配置页）；provider 切换仍无官方页',
     since: null,
     // Slot entry: ui-settings-web-search/src/client/index.ts:64-65 registers
-    // 'plugins.item' with id 'web-search' (same whileServed caveat as subagent).
+    // 'plugins.item' with id 'web-search' (same whileServed caveat).
     //
     // 'none', NOT 'panel': the official card edits the official provider's API
     // key / endpoint / per-search budget. This tab installs and switches between

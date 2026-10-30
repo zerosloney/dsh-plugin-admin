@@ -4,6 +4,33 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.35.0] - 2026-10-30
+
+### Fixed
+
+- **「打开工作目录」不再串进「选模型」菜单**（`src/client/workspace-menu.js`）。注入窗口过去是**挂钟时间**：点中 `[data-row-key="workspace:<id>"]` 后等 1.5 秒内第一个新出现的 `[role="menu"]`。可工作区行里只有 `…` 会开菜单——行体（展开/收起）与 `＋新会话` 都在同一行内、却什么都不开——于是那 1.5 秒成了泄漏窗口：之后出现的**别的** `[role="menu"]` 会被当成目标，而输入框的「选模型」下拉正好是 `[role="menu"]`（首个 `button[role="menuitem"]` 还是 provider/effort 的 drill 单元格），克隆行就此落进选模型。
+  现在窗口与「**本次点击自己的任务**」同寿：React 对离散 click 同步 flush，菜单 portal 在该任务结束前就已存在，观察者微任务能看到它；`setTimeout(disarm, 0)` 与「下一个 pointerdown / keydown」都会收窗，所以更晚的手势拥有它自己打开的菜单。结构锚点（`data-row-key="workspace:<id>"`、不读任何宿主文案）不变。
+  新增 `scripts/verify-workspace-menu.mjs`（jsdom 驱动真实模块），**0 → 5 checks**：无菜单的手臂点击**永远不会**认领下一个菜单（模型菜单那一例被显式复现）、新手势提前收窗、本次点击自己打开的菜单照常拿到那一行、已开菜单不是目标、源码里不再留挂钟窗口。
+
+### Changed
+
+- **历史会话收敛成「归档清单 + 逐条删除」**（`src/client/panels/sessions.js`，1387 行 → 约 200 行）。这一页过去是一个小号侧边栏：筛选胶囊、置顶白名单、目录折叠、勾选批量删除、Markdown 导出、单会话体检、跨会话全文搜索、token 用量条。现在它只做三件事——**列归档会话**、**按工作区分组**、**删掉**：工具栏只有「历史会话 + 计数 + 刷新」，每行是标题 + 等宽 session id + 时间 + 两段式删除（删除 → 确认删除 / 取消），仍在线的那条先走 `closeSession` 再删。删除成功后先让侧边栏投影忘掉该行（`forgetSession`）再重读本页，删掉的会话不会以残影留下。
+  随之：导出 / 全文搜索 / 体检三个端点与 `overlayAdmin/searchEnable` 失去浏览器入口，改挂在 `RPC_HOST_ONLY_TARGETS`（CLI / SDK 仍可用）；i18n 表再删 98 条孤儿文案；`self-check` 里 204 行的批删/选择条/折叠/导出/体检/全文用例换成 63 行的归档清单用例（只列归档、按工作区分组、未分组兜底、两段式删除、在线走 closeSession）。
+
+- **面板观感换成编辑器 / CLI 语言**（`src/client/styles.js` 的共享配方）。此前每个面板看起来像一叠圆角卡片：`border-radius: 8–12px`、投影、hover 抬升、分段胶囊页签。现在统一成一套「像编辑器」的配方——工具栏是扁平命令条（发丝边框、无投影）；列表行贴合（间距 10px → 3px）、hover 只换边框与淡底、不位移；卡片收到 4px 圆角无投影；页签改成编辑器式（发丝底线 + 活动页签 2px 底部强调线，取消浮起白底）；圆角全部收到 2–4px；`group-count` / `group-path` / `footer` / `tag` 以及命令与钩子表的 `count` / `path-chip` 改用 `var(--dsw-font-mono, …)` + `tabular-nums`，让 id、计数、路径与状态行对齐成列。共重写 40 条配方（28 条整条重写 + 12 条半径收敛 + 1 条共享 `.mono`，并删掉一条已无意义的深色投影覆盖）。
+  共享配方的单一来源不变：面板只写结构类名，`verify-client-hygiene`（渲染出的 className 必须有样式规则）与 `self-check`（同一组件只在一个样式表里定义）继续守着它不走样；设计语言记在 `docs/ARCHITECTURE.md` §3。仓库里提交的 `.screenshots/*.png` 仍是重构前拍的（`npm run screenshots` 需要真起一个 dsh profile + Chromium，本轮未重拍）。
+
+### Removed
+
+- **「技能」页签整体移除**（客户端面板模块、宿主侧 skillsAdmin 服务，以及 `src/client/native-coverage.js` 的对应行、`lib/panel-ids.js` 的 `skills`、`lib/rpc-manifest.js` 的 `skillsAdmin` 命名空间、`lib/index.js` 的挂载与描述符）。官方 `ui-skill` 已经在会话侧给出 `/` 触发与调用卡片，而插件这份只读清单的增量只剩「把三层作用域合并成一张表」——为它维持一个 33 KB 宿主服务、一套三作用域 lease 读取和 47 条文案不划算。设置里从此只有九个面板，`panels` 开关的面板 id 从 10 个减到 9 个（旧配置里的 `skills: 'on' | 'off'` 会在挂载期报错）；RPC 面随之收到 79 方法 / 12 命名空间，strict wire 78 → 77。`ctx.skills` 与 `agentPresets.acquireScope` 的宿主能力本身不受影响，只是本插件不再消费。
+
+
+- **「子智能体」页签整体移除**（客户端面板模块、宿主侧 subagentAdmin 服务与工具名种子模块，以及 `src/client/native-coverage.js` 的对应行、`lib/panel-ids.js` 的 `subagents`、`lib/rpc-manifest.js` 的 `subagentAdmin` 命名空间、`lib/audit-log.js` 的审计行、`lib/index.js` 的挂载与描述符）。官方 `ui-settings-subagent` 已覆盖这条邻域（深度 / 容量 / 模型），插件再维护一份具名委派实例 + persona + 工具约束 + CLI 后端的**编写侧**面板不划算：它带来 13 个 RPC 面、一个 150 KB 级的宿主模块和一套只有它用的表单控件。设置里从此只有十个面板。
+  随之收敛：`panels` 三态开关的面板 id 从 11 个减到 10 个（**旧配置里的 `subagents: 'on' | 'off'` 会在挂载期报错**，这正是"写错必须响亮失败"的既有约定）；`ctx.subagents` 宿主服务本身不受影响（工作流引擎仍以它为硬依赖，缺了才降级）；只被该面板使用的 Picker 组件、`.sa-picker*` / 段式页签样式与 140 条 i18n 文案一并删除，其中 `.tabs` / `.tab` / `.form` / `.form-actions` / `.field` 这些**其它面板也在渲染**的共享配方迁到 `src/client/styles.js` 的统一表并重新挂根。子智能体相关的三个 verify 脚本与它们在 `run-gate` 里的步骤删除。
+
+[1.35.0]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.34.1...v1.35.0
+[1.34.1]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.34.0...v1.34.1
+
 ## [1.34.1] - 2026-10-30
 
 同名会话删不掉、删完还赖在「未分组」：宿主半挂载前就已经在线的会话不再只能靠重启 dsh 才能删除，删掉的会话也不会以「未分组」残影留在侧栏。
