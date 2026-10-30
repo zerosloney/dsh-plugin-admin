@@ -35,4 +35,10 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const Tooltip: Atom
   export const Menu: Atom
   export const MenuItemButton: Atom
+  /**
+   * Host-versioned: the icon set moves between dsh releases, so a shell that
+   * predates this glyph answers `undefined` at runtime. Callers feature-detect
+   * and fall back instead of rendering an undefined component.
+   */
+  export const IconTrashOutlineRegular: Atom | undefined
 }

@@ -168,5 +168,31 @@ check('11. every className literal a panel renders has a rule in the stylesheet'
     `these classNames are emitted but have no CSS rule in src/client/styles.js: ${unstyled.join(', ')}`)
 })
 
+check('12. the workspace-row menu hook keys on structure, not on menu copy', () => {
+  // The one DOM hook (src/client/workspace-menu.js) exists because ui-workspace
+  // hardcodes the workspace row menu and declares no slot for it. What keeps it
+  // from regressing into the old scraper is the identification chain, so that
+  // is what this pin holds: the row attribute gives the workspace id, the id
+  // resolves the path host-side, and no menu label or geometry is ever read.
+  const hook = read('workspace-menu.js')
+  // Assert against CODE, not prose: the module's header explains which old
+  // heuristic steps it refuses, and those words must not trip the pins.
+  const hookCode = hook
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  assert.ok(/data-row-key/.test(hookCode), 'the trigger is the host row attribute')
+  assert.ok(/workspaceAdmin\/list/.test(hookCode) && /fsAdmin\/reveal/.test(hookCode),
+    'the directory is resolved host-side from the row id, then revealed through the gated RPC')
+  assert.ok(!/aria-label/.test(hookCode), 'no aria-label selector hunts the menu down')
+  assert.ok(!/textContent\s*===|textContent\.includes/.test(hookCode),
+    'no menu label classifies the menu (the appended row is the only copy it writes)')
+  assert.ok(!/getBoundingClientRect|elementFromPoint/.test(hookCode),
+    'no geometry heuristics: the click target carries the identity')
+  // The session-row menu must stay a slot contribution — the DOM hook is scoped
+  // to the workspace row alone.
+  assert.ok(impl.includes('sidebar.workspaces.session.menu.item'),
+    'the session row menu is still registered into the documented slot')
+})
+
 console.log(checks.join('\n'))
 console.log(`\nverify-client-hygiene OK: ${checks.length} source pins`)

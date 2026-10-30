@@ -696,6 +696,7 @@ var I18N_EN = {
   "检查目录是否仍存在（不修改记录）": "Check whether the directory still exists (does not modify the record)",
   "🔎 检查状态": "🔎 Check status",
   "确定删除工作区「": "Delete workspace \"",
+  "打开工作目录": "Open working directory",
   "」？（仅删除注册，目录与会话本体保留）": "\"? (only the registration is removed; the directory and sessions are kept)",
   "删除中…": "Deleting…",
   "创建于 ": "Created ",

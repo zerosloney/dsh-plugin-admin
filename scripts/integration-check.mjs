@@ -63,7 +63,9 @@ function resolveSpecifier(fromRel, specifier) {
     else parts.push(segment)
   }
   const path = parts.join('/')
-  return /\.(?:[cm]?[jt]s)$/.test(path) ? path : `${path}.ts`
+  // `.tsx`/`.jsx` are as real as `.ts` here: the icon barrel is `index.tsx`,
+  // and rejecting it silently turned a star re-export into "not exported".
+  return /\.(?:[cm]?[jt]sx?)$/.test(path) ? path : `${path}.ts`
 }
 
 /**
@@ -794,6 +796,17 @@ const PROBES = [
           for (const part of m[1].split(',')) {
             const name = part.trim().split(/\s+as\s+/).pop().trim()
             if (name !== '') exported.add(name)
+          }
+        }
+        // A star re-export is how the icon barrel reaches the package surface
+        // (`export * from './icons/index.tsx'`). Without following it the probe
+        // would reject every icon the shell genuinely exports — and the honest
+        // fix is to read the barrel, not to drop the icon import.
+        for (const m of t.matchAll(/export\s*\*\s*from\s*'([^']+)'/g)) {
+          const barrel = readSource(resolveSpecifier('packages/client/ui-primitives/src/index.ts', m[1]))
+          if (barrel === null) continue
+          for (const inner of barrel.matchAll(/export\s*(?:const|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
+            exported.add(inner[1])
           }
         }
         return [...names].every((name) => exported.has(name))

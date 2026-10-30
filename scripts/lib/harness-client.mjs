@@ -86,7 +86,8 @@ function stubPrimitives(React) {
         component = function Input({ icon, className, ...rest }) {
           return h('span', { className }, icon != null ? h('span', null, icon) : null, h('input', rest))
         }
-      } else component = atom('div')
+      } else if (name === 'IconTrashOutlineRegular' || name === 'IconFolderCloseRegular') component = atom('svg')
+      else component = atom('div')
       cache.set(name, component)
       return component
     },

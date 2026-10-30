@@ -1144,6 +1144,83 @@ for (const retired of ['归档会话', '复制会话 ID', '在资源管理器打
     `the shipped entry no longer greps the menu for "${retired}"`)
 }
 
+// 10c. Workspace-row "..." menu: ui-workspace hardcodes exactly rename + delete
+// and declares no slot for it, so「打开工作目录」is the plugin's ONE DOM hook
+// (src/client/workspace-menu.js). What makes it safe is what it keys on: the
+// row's own `data-row-key` workspace id (structure), never a menu label — and
+// the directory is resolved host-side from that id, so the client cannot act on
+// a directory it guessed.
+const wsRow = document.body.appendChild(document.createElement('div'))
+wsRow.setAttribute('data-row-key', 'workspace:w-alpha')
+const wsFolder = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+wsFolder.setAttribute('class', 'row-folder')
+wsRow.appendChild(wsFolder)
+wsRow.appendChild(document.createElement('button')).textContent = '⋯'
+const wsCalls = []
+ctx.connection.rpc.call = async (route, method, payload) => {
+  assert.equal(route, '/api')
+  wsCalls.push([method, payload && payload.args])
+  if (method === 'workspaceAdmin/list') {
+    return { ok: true, value: { available: true, workspaces: mockWorkspaces, archivedSessionIds: [] } }
+  }
+  return { ok: true, value: { path: payload && payload.args && payload.args.path } }
+}
+// A native workspace menu: two menuitems (rename, delete), each icon + label —
+// the exact shape the injected row is cloned from.
+const openNativeMenu = async (rowKey) => {
+  const row = document.body.querySelector(`[data-row-key="${rowKey}"]`)
+  assert.ok(row !== null, `the fixture row ${rowKey} exists`)
+  await act(async () => {
+    row.querySelector('button').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  })
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  for (const label of ['重命名', '删除工作区']) {
+    const wrap = document.createElement('div')
+    const button = document.createElement('button')
+    button.setAttribute('role', 'menuitem')
+    const icon = document.createElement('span')
+    icon.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'svg'))
+    const text = document.createElement('span')
+    text.textContent = label
+    button.appendChild(icon)
+    button.appendChild(text)
+    wrap.appendChild(button)
+    menu.appendChild(wrap)
+  }
+  document.body.appendChild(menu)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  return menu
+}
+const wsMenu = await openNativeMenu('workspace:w-alpha')
+const wsInjected = [...wsMenu.querySelectorAll('button[role="menuitem"]')].pop()
+assert.equal(wsInjected.textContent, '打开工作目录', 'the reveal row is injected into the native menu')
+assert.ok(wsMenu.children[wsMenu.children.length - 1].hasAttribute('data-dsh-admin-open-dir'),
+  'the reveal row sits BELOW the native 删除工作区 row (appended last)')
+assert.ok(wsInjected.querySelector('svg') !== null,
+  'the reveal row borrows the workspace row\'s own folder glyph')
+await act(async () => {
+  wsInjected.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+})
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(wsCalls, [
+  ['workspaceAdmin/list', {}],
+  ['fsAdmin/reveal', { path: 'E:\\Demo\\alpha-project' }],
+], 'the directory is resolved from the row id, never matched from a menu label')
+// A session row is not a workspace row: it must not arm the hook, so a menu
+// opened from it gets no reveal row at all.
+const sessRow = document.body.appendChild(document.createElement('div'))
+sessRow.setAttribute('data-row-key', 'session:s1')
+sessRow.appendChild(document.createElement('button')).textContent = '⋯'
+const strayMenu = await openNativeMenu('session:s1')
+assert.equal(strayMenu.querySelector('[data-dsh-admin-open-dir]'), null,
+  'a session row never injects a workspace action')
+wsRow.remove()
+sessRow.remove()
+wsMenu.remove()
+strayMenu.remove()
+ctx.connection.rpc.call = menuCallBase
+
 // 11.5 Settings-nav icon identity: the settings dialog's nav paints one
 // generic gear for every unknown section id, so the plugin repaints its four
 // pages' rows with distinct per-page icons (matched by nav label, marked with
@@ -2300,4 +2377,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, selection strip (select-all + pruning to the visible projection), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, session delete confirm, group collapse/expand-all, bulk delete (projection + per-directory) with live-close routing, selection strip (select-all + pruning to the visible projection), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), workspace-row menu (row-id keyed DOM hook, host-resolved path, session rows never arm it), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, skills roster + text filter, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')

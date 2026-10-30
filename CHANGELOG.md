@@ -4,6 +4,35 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.34.0] - 2026-10-30
+
+侧边栏两个「…」菜单各补一项：会话行菜单的删除项有了图标，工作区行菜单在「删除工作区」下方多了「打开工作目录」。
+
+### Added
+
+- **侧边栏工作区行「…」菜单：`打开工作目录`**（`src/client/workspace-menu.js`）。上游 `ui-workspace` 的
+  工作区行菜单是第一方硬编码（`ProjectRowItem` 里只有 rename + delete），**没有 slot 可注册**，所以这是本插件
+  唯一一处 DOM 注入。它只认结构、不认文案：点中 `[data-row-key="workspace:<id>"]` 即取 `<id>`
+  （`groupByWorkspace` 传的就是 `workspace.workspaceId`）→ 等 1 秒内**新出现**的 `[role="menu"]` 把
+  「打开工作目录」追加到末行（即「删除工作区」下方）→ 目录由宿主侧 `workspaceAdmin/list` 按 id 解析、
+  再走带 `assertRevealablePath` 闸门的 `fsAdmin/reveal`。全程不读菜单文案、不做几何反推、不做标题模糊匹配
+  （这三样正是旧 `setupMenuInjection` 会认错对象的成因）；会话行是兄弟节点，`closest` 拿到的是
+  `session:` 键，因此永远不会误触发。
+
+### Changed
+
+- **侧边栏会话行「…」菜单的 `删除会话` 补上图标**：走 `MenuItemButton` 的 `icon` 槽（宿主自己的
+  `IconTrashOutlineRegular`，与 置顶/重命名/分支/归档 同一套 16px 线框图标），不再是一条纯文字行。
+  图标按名导入且 `typeof` 特性探测：图标集是按宿主版本演进的命名导出，老宿主没有该导出时降级为「无图标」，
+  而不是把 `undefined` 当组件类型交给 React。
+
+**验证**：`check:types` / `check:lint` 干净；`build:client` 通过且入口包 149.4 KB（150 KB 预算内）；
+`self-check` 新增「工作区行菜单：按行 id 注入、路径由宿主解析、会话行不会触发」与反向用例（会话行不注入）；
+`verify-client-hygiene` 12 pins（新增第 12 条钉住本 DOM 钩子的识别链：只认 `data-row-key`、只经
+`workspaceAdmin/list` + `fsAdmin/reveal`、代码里不得出现 `aria-label` / 菜单文案比较 / 几何反推）；
+`verify-i18n` 909 call sites / 909 entries（新增键 `打开工作目录`）；`verify-doc-claims` 与
+`verify-line-anchors` 通过。
+
 ## [1.33.5] - 2026-10-29
 
 `v1.33.4` 的 tag 指向只含第一半修复的提交，其 Release 红在 `host-smoke`；本轮把第二半（真正让设置入口

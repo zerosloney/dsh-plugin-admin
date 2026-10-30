@@ -16,12 +16,27 @@ import { COVERAGE_SLOT_KEYS, resolveNativeCoverage } from './native-coverage.js'
 // behave like the first-party items around them. The build keeps the specifier
 // external and the loader answers it from the seed table (same as the panels
 // half), so this adds no dependency.
-import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
+//
+// The icon is imported by NAME on purpose (not `import * as`): esbuild compiles
+// a named import to a property read on the required module, so a host that
+// predates the export answers `undefined` — which the feature test below turns
+// into "no icon" instead of handing the row an undefined component type.
+import { MenuItemButton, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { installWorkspaceMenuOpenDir } from './workspace-menu.js'
 
 var createElement = React.createElement
 var useState = React.useState
 var useRef = React.useRef
 var useEffect = React.useEffect
+
+/**
+ * The shell's own trash glyph for the destructive row, when this host ships it:
+ * the icon set is a per-version named export, so an older shell degrades to
+ * "no icon" rather than rendering an undefined component.
+ */
+var trashIcon = typeof IconTrashOutlineRegular === 'function'
+  ? createElement(IconTrashOutlineRegular)
+  : undefined
 
 /**
  * Re-render the wrapped subtree when the shell locale changes (Phase C).
@@ -673,6 +688,9 @@ function DeleteSessionMenuItem(props) {
   var dismiss = useMenuDismiss(props.useMenuOpenState)
   return createElement(MenuItemButton, {
     danger: true,
+    // Same icon slot the shell's own rows use (置顶/重命名/分支/归档), so the
+    // plugin row reads as one of them instead of a bare text row.
+    icon: trashIcon,
     onSelect: function () {
       dismiss()
       var title = displayTitleText(props.displayTitle)
@@ -1068,6 +1086,15 @@ function apply(ctx) {
   // distinct per-page icons (the shell paints one generic gear for unknown
   // section ids). Observer lives for the page lifetime like the menu one.
   ctx.effect(function () { return setupSettingsNavIcons() })
+
+  // The Workspace row menu is the ONE native menu ui-workspace hardcodes
+  // (rename + delete) with no slot to register into, so「打开工作目录」rides the
+  // plugin's single DOM hook. It keys on the row's `data-row-key` workspace id
+  // and resolves the directory host-side — see workspace-menu.js for why this
+  // is not the old label/geometry scraper. Mounted for the page lifetime.
+  ctx.effect(function () {
+    return installWorkspaceMenuOpenDir({ call: call, notify: showToast, describeError: messageOf })
+  })
 
   // Phase E3: `config.panels` gives the PROFILE the final word on a panel —
   //   panels: { <id>: 'auto' | 'on' | 'off' }   (host-validated; lib/panel-ids.js)
