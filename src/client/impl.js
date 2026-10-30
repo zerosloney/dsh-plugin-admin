@@ -630,24 +630,29 @@ function useMenuDismiss(useMenuOpenState) {
  * `sessionAdmin/closeSession` is correct for BOTH states, which is why this
  * needs no `list()` lookup and therefore no snapshot in which an id resolved
  * from a stale list could act on the wrong session: for a live session it
- * disposes the captured agent first, and for an already-closed one it falls
- * through to the same artifact removal (`lib/session-admin.js:1502-1555` —
+ * disposes the live agent first (the captured handle, or a teardown rebuilt from
+ * the live agent when this plugin mounted after that session — see
+ * `recoverLiveAgentHandle`), and for an already-closed one it falls
+ * through to the same artifact removal (`lib/session-admin.js:1712-1769` —
  * `wasLive` only records which path ran). The receipt carries a non-null
  * `degraded` when the cross-process fence was skipped; surface that instead of
  * a plain success toast, exactly as the panel's delete does.
  * @param {(method: string, args: any) => Promise<any>} call
  * @param {string} sessionId
- * @param {(() => void)|null} refreshSessions
+ * @param {(sessionId: string) => void} forgetSession - drops the row from the
+ *   shell's session list (and reconciles it) after a successful delete.
  */
-function deleteSessionFromMenu(call, sessionId, refreshSessions) {
+function deleteSessionFromMenu(call, sessionId, forgetSession) {
   call('sessionAdmin/closeSession', { sessionId: sessionId }).then(function (/** @type {any} */ result) {
     if (result && result.ok) {
       var degraded = result.value && typeof result.value.degraded === 'string' ? result.value.degraded : ''
       if (degraded !== '') showToast('info', dshT('⚠️ 会话已删除，但跨进程护栏未生效：') + degraded)
       else showToast('success', dshT('🗑️ 会话已删除'))
-      // Nudge the sidebar so the removed row vanishes now instead of lingering
-      // in 未分组 until a reload.
-      if (refreshSessions) refreshSessions()
+      // Drop the row from the shell's own list NOW. The host detached this
+      // session from its workspace as part of the delete, so a list that still
+      // holds it renders it under 未分组 — the reported "deleted session moved
+      // to Ungrouped" symptom.
+      if (typeof forgetSession === 'function') forgetSession(sessionId)
       return
     }
     var failure = messageOf(result && result.error)
@@ -704,7 +709,7 @@ function DeleteSessionMenuItem(props) {
         confirmLabel: dshT('确认删除'),
         cancelLabel: dshT('取消'),
         danger: true,
-        onConfirm: function () { deleteSessionFromMenu(props.call, props.sessionId, props.refreshSessions) },
+        onConfirm: function () { deleteSessionFromMenu(props.call, props.sessionId, props.forgetSession) },
       })
     },
   }, dshT('删除会话'))
@@ -718,10 +723,11 @@ function DeleteSessionMenuItem(props) {
  * the thunk only runs once ui-workspace declares the slot.
  * @param {any} ctx - the plugin context (its slot service).
  * @param {(method: string, args: any) => Promise<any>} call
- * @param {(() => void)|null} refreshSessions
+ * @param {(sessionId?: string) => void} reconcileSessionList - drops the deleted
+ *   row from the shell list when given an id, and always reconciles it.
  * @returns {() => void}
  */
-function setupSessionMenuItems(ctx, call, refreshSessions) {
+function setupSessionMenuItems(ctx, call, reconcileSessionList) {
   /** @type {(() => void)[]} */
   var disposers = []
   // ONE row. The shell already registers a 'session-id' row (order 450) that
@@ -734,7 +740,7 @@ function setupSessionMenuItems(ctx, call, refreshSessions) {
       name: SESSION_MENU_SLOT,
       id: 'plugin-admin.delete-session',
       order: 460,
-      inject: function () { return { call: call, refreshSessions: refreshSessions } },
+      inject: function () { return { call: call, refreshSessions: reconcileSessionList, forgetSession: reconcileSessionList } },
     }, withLocale(DeleteSessionMenuItem))
   }))
   return function () {
@@ -1069,18 +1075,36 @@ function apply(ctx) {
   // Sidebar session "..." menu: the delete row, registered on the shell's own
   // slot so it lands in the menu ui-workspace owns (no DOM scraping). Mounted
   // once for the page lifetime; dispose when the plugin unmounts.
-  // The sessions service lets us nudge the sidebar list after a delete so
-  // the removed session disappears immediately instead of lingering in
-  // "未分组" until the next reload.
-  /** @type {(() => void)|null} */
-  var refreshSessions = null
-  try {
-    var sessionsSvc = ctx.get && ctx.get('sessions')
-    if (sessionsSvc && typeof sessionsSvc.refresh === 'function') {
-      refreshSessions = function () { sessionsSvc.refresh().catch(function () {}) }
+  //
+  // The `sessions` service is resolved AT CALL TIME, never captured here.
+  // This plugin's client `inject` is ['slots', 'connection'], so `apply` can run
+  // before the shell provides `sessions`; an eager capture then stayed null for
+  // the whole page lifetime, no refresh ever ran, and a deleted row lingered in
+  // "未分组" (the host had already detached it from its workspace) until reload.
+  // Re-reading `ctx.get` at call time also survives a re-applied session
+  // controller, whose replacement instance is the one the sidebar renders from.
+  /**
+   * Drop one deleted session from the shell's own list, then reconcile it.
+   *
+   * `handleSessionRemoved` is the exact client mutation the host's
+   * `api-session/removed` frame drives (`dsh-api-session-controller`
+   * `client/sessions/manager.ts`): it removes the row from `summaries` and marks
+   * the list dirty, so the sidebar re-renders without the deleted session
+   * instead of leaving it to fall into "未分组" because the host's workspace no
+   * longer claims it. Called with no id it only reconciles; a host whose client
+   * exposes no such mutation still gets that authoritative `refresh()`.
+   * @param {string} [sessionId] - the session the host just deleted.
+   */
+  function reconcileSessionList(sessionId) {
+    var svc = null
+    try { svc = (ctx.get && ctx.get('sessions')) || null } catch (e) { svc = null }
+    if (svc === null) return
+    if (sessionId !== undefined && typeof svc.handleSessionRemoved === 'function') {
+      try { svc.handleSessionRemoved(sessionId) } catch (e) { /* refresh below is the fallback */ }
     }
-  } catch (e) { refreshSessions = null }
-  var disposeSidebar = ctx.effect(function () { return setupSessionMenuItems(ctx, call, refreshSessions) })
+    if (typeof svc.refresh === 'function') svc.refresh().catch(function () {})
+  }
+  var disposeSidebar = ctx.effect(function () { return setupSessionMenuItems(ctx, call, reconcileSessionList) })
 
   // Settings-nav icon identity: repaint the four plugin pages' nav rows with
   // distinct per-page icons (the shell paints one generic gear for unknown
@@ -1209,7 +1233,7 @@ function apply(ctx) {
               id: 'web-sessions',
               order: 27,
               label: function () { return dshT('Web 与会话') },
-              inject: function () { return { call: call, refreshSessions: refreshSessions, pinBridge: pinBridge } },
+              inject: function () { return { call: call, refreshSessions: reconcileSessionList, forgetSession: reconcileSessionList, pinBridge: pinBridge } },
           },
     component: withLocale(lazyPanel('WebSessionsSection')),
   },

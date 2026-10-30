@@ -4,6 +4,20 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.34.1] - 2026-10-30
+
+同名会话删不掉、删完还赖在「未分组」：宿主半挂载前就已经在线的会话不再只能靠重启 dsh 才能删除，删掉的会话也不会以「未分组」残影留在侧栏。
+
+### Fixed
+
+- **在线但未捕获 `AgentHandle` 的会话：从存活 agent 重建 teardown 后直接删除**（`lib/session-admin.js`）。捕获表只拿得到宿主半挂载**之后** `agents.create()/resume()` 返回的 handle；挂载前已存在的会话在注册表里有一个真 agent 却没有 handle，旧实现只报 `is live but its agent handle was not captured … restart dsh, then delete` 并拒绝——在运行中的桌面应用里这是死路，两条标题相同的会话因此永远清不掉（宿主审计日志里能看到同一 id 被反复拒绝）。
+  现在 `recoverLiveAgentHandle` 用 dsh 自己的 teardown 顺序重建 handle：`agent.cancel({kind:'disposed'})` → `await agent.whenIdle()` → `await agent.scope.dispose()` → 对 `agents`/`sessions` 两个注册表各做一次 `detachEntered(store.get(id))`。最后一步才让会话不再「在线」，其 `agent/disposed` / `session/disposed` 边同时让 JSONL 后端关掉 writer（`session/disposed` → `writer.close()`），把跨进程写租约交给随后的删除——正是 `acquireDeleteWriteLease` 已有的 fire-and-forget 重试路径。所有原语（`agents.get/store/detachEntered`、`sessions.store/detachEntered`、`agent.cancel/whenIdle/scope.dispose`）都做特性探测，且只有排空与 scope 释放都成功后才 detach：老宿主或不肯 quiesce 的 agent 仍退回原来的重启提示，绝不会在 agent 还在跑时把条目从注册表抹掉。
+
+- **删除成功后会话不再以「未分组」残影留在侧栏**（`src/client/impl.js`、`src/client/panels/sessions.js`）。宿主删除时会把该会话从所属工作区的记账里 detach 掉，而浏览器半的会话列表若还留着这一行，`groupByWorkspace` 就只能把它渲染成「未分组」——正是「删掉的会话被移到未分组」的成因。旧实现只在 `apply()` 时**一次性捕获** `ctx.get('sessions')` 再调 `refresh()`：本插件客户端 `inject` 是 `['slots','connection']`，`apply` 可能早于宿主把 `sessions` 提供出来，捕获为 `null` 之后整个页面生命周期都不会再刷新；即便捕获成功，也只等一次往返拉取。
+  现在改为**在删除那一刻**重新解析服务（晚到的服务、或重挂后的新实例都能拿到），并先调用宿主自己的客户端移除动词 `handleSessionRemoved(sessionId)`（`dsh-api-session-controller` 的 `client/sessions/manager.ts`：`api-session/removed` 帧走的就是它），把该行从 `summaries` 里移除并标脏，侧栏立刻重渲染、不再往「未分组」掉；`refresh()` 仍随后发起作为权威对账，宿主客户端没有该动词时它也是唯一兜底。单删、批量删除、面板删除三条路径都走这一个函数。
+
+**验证**：`check:types` / `check:lint` 干净，入口包仍在 150 KB 预算内；`host-check` 新增「未捕获 handle + 宿主暴露 teardown 原语 → 重建后删除成功」块（断言 teardown 顺序为 cancel → whenIdle → scope.dispose → agents.detachEntered → sessions.detachEntered、日志目录被删、两个注册表条目清空），原有「无原语 → fail closed」用例不变；`self-check` 新增两条断言（菜单注入面携带 `forgetSession`；确认删除后 `handleSessionRemoved` 恰好收到该 id 且列表被对账），并让 `ctx.get('sessions')` 在删除时而非挂载时解析；`repro-delete-session` 增至 7 个场景（新增可重建路径，并补上缺失的 `ctx.inject` 桩让该诊断脚本重新可跑）；`docs/COMPAT.md` 与 `docs/ARCHITECTURE.md` 记录新路径，顺带修正两处早已漂移的行锚（`closeSession` 与全文检索 `error.code`）。
+
 ## [1.34.0] - 2026-10-30
 
 侧边栏两个「…」菜单各补一项：会话行菜单的删除项有了图标，工作区行菜单在「删除工作区」下方多了「打开工作目录」。
@@ -353,7 +367,7 @@ v1.29.0 跳过这件事的理由（「状态色换 token 会改浅色色相，�
   「the sweep records the session it found: 14 !== 1」——一条与插件行为无关的红灯。改为每段一个 `mkdtempSync` 的新 home，
   「空账本」从希望变成断言。
 - **`SESSION_QUERY_SEARCH_DISABLED` 的存在性首次被闸门钉住**（`scripts/integration-check.mjs`，中等）：
-  会话面板的「一键启用全文检索」横幅只在宿主以这个 code 报错时出现（`lib/session-admin.js:2031` 读 `error.code`）；
+  会话面板的「一键启用全文检索」横幅只在宿主以这个 code 报错时出现（`lib/session-admin.js:2258` 读 `error.code`）；
   上游改名即横幅永久失效，而那是**死 UI 不是报错**。新增两条探针（声明处 `service-boundary.ts` + 抛出点 `session-query-sqlite`），
   接缝契约 148 → **150**。
 

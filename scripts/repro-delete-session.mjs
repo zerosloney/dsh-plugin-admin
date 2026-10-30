@@ -30,21 +30,26 @@ const BASE_HEADER = { id: 'sess-x', cwd: 'E:/repro/project', createdAt: 1 }
 let lastAgents = undefined
 
 /** Build one mount with the knobs each case needs. */
-function mount({ header = BASE_HEADER, sizeBytes = 3, sessionsGet = () => undefined, agents = undefined, onStat = undefined }) {
+function mount({ header = BASE_HEADER, sizeBytes = 3, sessionsGet = () => undefined, sessions = undefined, agents = undefined, onStat = undefined }) {
   const effects = []
   lastAgents = agents
+  const sessionsService = sessions ?? { get: sessionsGet }
   const ctx = {
     baseUrl: pathToFileURL(join(here, '..')).href,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     provide: (key, service) => { ctx.provided[key] = service },
     provided: {},
     effect: (fn, name) => { const d = fn(); if (typeof d === 'function') effects.push({ name, d }) },
+    // apply() ends by opening the RPC surface on a child fiber through
+    // `ctx.inject(['typert'], cb)` (lib/index.js); a stub without it throws
+    // before any scenario can run.
+    inject: function (names, cb) { return cb(this) },
     // 'agents' must resolve to the same object lastAgents refers to: the
     // plugin wraps the service IN PLACE via ctx.get('agents'), and in-process
     // consumers (the web session controller) call the wrapped methods through
     // the very same instance.
     get: (name) => (name === 'sessions'
-      ? { get: sessionsGet }
+      ? sessionsService
       : name === 'agents'
         ? agents
         : name === 'workspaceRegistry'
@@ -86,7 +91,7 @@ function materialize(header, file = 'session.jsonl.zstd') {
 }
 
 let reproduced = 0
-const TOTAL = 6
+const TOTAL = 7
 async function scenario(title, run) {
   try {
     await run()
@@ -172,10 +177,52 @@ await scenario('删除瞬间会话刚好被恢复（并发 resume 竞态）→ "
   await assert.rejects(() => admin.deleteSession(header.id), /became live — close it before deleting/)
 })
 
+/* Case 7 — the SAME live+uncaptured state, but on a host that exposes its
+ * teardown primitives (the agent's cancel/whenIdle/scope.dispose and both
+ * registries' entry table + detachEntered). closeSession rebuilds the handle
+ * from the live agent, replays the loop's own teardown order, and deletes —
+ * no restart. This is the "two rows with the same title, neither deletes"
+ * report. */
+await scenario('在线会话 + handle 未捕获，但宿主暴露 teardown 原语 → 重建 handle 后免重启删除成功', async () => {
+  const header = { ...BASE_HEADER, id: 'sess-recovered' }
+  const dir = materialize(header)
+  const calls = []
+  const agentStore = new Map()
+  const sessionStore = new Map()
+  const liveAgent = {
+    id: header.id,
+    cancel: (cause) => { calls.push(['cancel', cause && cause.kind]) },
+    whenIdle: async () => { calls.push(['whenIdle']) },
+    scope: { dispose: async () => { calls.push(['scope.dispose']) } },
+  }
+  agentStore.set(header.id, { id: header.id, agent: liveAgent, announced: true })
+  sessionStore.set(header.id, { id: header.id, announced: true })
+  const admin = mount({
+    header,
+    agents: {
+      get: (id) => (id === header.id ? liveAgent : undefined),
+      store: agentStore,
+      detachEntered: (entry) => { agentStore.delete(entry.id); calls.push(['agents.detachEntered', entry.id]) },
+    },
+    sessions: {
+      get: (id) => (id === header.id ? { id } : undefined),
+      store: sessionStore,
+      detachEntered: (entry) => { sessionStore.delete(entry.id); calls.push(['sessions.detachEntered', entry.id]) },
+    },
+  })
+  const receipt = await admin.closeSession(header.id)
+  assert.equal(receipt.closed, true, 'receipt reports the live teardown')
+  assert.deepEqual(calls, [
+    ['cancel', 'disposed'], ['whenIdle'], ['scope.dispose'],
+    ['agents.detachEntered', header.id], ['sessions.detachEntered', header.id],
+  ])
+  assert.ok(!existsSync(dir), 'log directory removed after the recovered teardown')
+})
+
 console.log(`\n${reproduced}/${TOTAL} 个场景复现成功`)
 console.log('判定指南（把面板/菜单里看到的报错对号入座）：')
 console.log('  · "is live — close it before deleting"        → 会话在线，用「关停并删除」（closeSession）而非直接删除')
-console.log('  · "agent handle was not captured … restart"   → 会话在插件挂载前已打开（或插件中途热替换过），重启 dsh 后再删')
+console.log('  · "agent handle was not captured … restart"   → 宿主既没捕获 handle，也没暴露 teardown 原语（极老版本），重启 dsh 后再删')
 console.log('  · "became live — close it before deleting"    → 删除瞬间被并发恢复，刷新后重试即可')
 console.log('  · "durable bytes but no log directory …"      → 非标准持久化布局（SQLite 后端/自定义根/DSH_HOME 迁移）：')
 console.log('                                                   插件按 jsonl 物理布局推导日志目录失败时拒绝删除以防误删，')

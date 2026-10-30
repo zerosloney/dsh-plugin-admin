@@ -1,6 +1,6 @@
 # DSH 兼容矩阵
 
-> **验证基线：dsh 0.2.1-rc.4**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.4`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.34.0。
+> **验证基线：dsh 0.2.1-rc.4**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.4`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.34.1。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
 > 参数校验现状（Phase D2 已落地）：87 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
@@ -120,7 +120,7 @@ DSH_CHECKOUTS="D:/dsh/0.2.1-rc.4, D:/dsh/next" npm run test:matrix
 
 | 能力 | 旧实现 | 现在 | 依据（上游源码） |
 |---|---|---|---|
-| 会话「…」行菜单 | DOM 抓取：按 `aria-label` 文案挑按钮 → 用菜单矩形几何反推最近一行 → 按 `归档会话` / `Delete workspace` 字面量判断菜单种类 → 再按 DOM 标题对 `sessionAdmin/list` 做模糊匹配拿 id（`impl.js` 旧 `setupMenuInjection`） | 注册 `sidebar.workspaces.session.menu.item`（`kind: 'list'`, `scope: 'root'`, owner `SessionRowOwnerProps` 直接给 `sessionId`），条目 id `plugin-admin.delete-session`（order 460），删除走 `sessionAdmin/closeSession`（在线/已结束都由它处理，故不再需要 list 快照） | `ui-workspace/src/client/contract/slots.ts:186-195`（slot 定义）、`:78-83`（owner props）、`:164-185`（注册示例）；`lib/session-admin.js:1502-1555`（closeSession 对两种状态都正确） |
+| 会话「…」行菜单 | DOM 抓取：按 `aria-label` 文案挑按钮 → 用菜单矩形几何反推最近一行 → 按 `归档会话` / `Delete workspace` 字面量判断菜单种类 → 再按 DOM 标题对 `sessionAdmin/list` 做模糊匹配拿 id（`impl.js` 旧 `setupMenuInjection`） | 注册 `sidebar.workspaces.session.menu.item`（`kind: 'list'`, `scope: 'root'`, owner `SessionRowOwnerProps` 直接给 `sessionId`），条目 id `plugin-admin.delete-session`（order 460），删除走 `sessionAdmin/closeSession`（在线/已结束都由它处理，故不再需要 list 快照）；**未捕获 handle 的在线会话**不再要求重启 dsh——`recoverLiveAgentHandle` 从存活 agent 重建 teardown（cancel → whenIdle → scope.dispose → 两个 registry 的 `detachEntered`），原语缺失时才退回重启提示 | `ui-workspace/src/client/contract/slots.ts:186-195`（slot 定义）、`:78-83`（owner props）、`:164-185`（注册示例）；`lib/session-admin.js:1712-1769`（closeSession 对两种状态都正确）、`:693-800`（重建 teardown 的降级路径） |
 | 工作区「…」菜单 | 同一段 DOM 抓取里的工作区分支（`在资源管理器打开`）：按菜单矩形几何反推最近一行 → 用 DOM 标题对工作区做模糊匹配拿路径 | **改由结构性 DOM 钩子承担**（`src/client/workspace-menu.js`，唯一一处 DOM 注入）：上游没有工作区行菜单 slot，`ProjectRowItem` 里 rename/delete 两行是第一方硬编码。钩子只认结构——点中 `[data-row-key="workspace:<id>"]` 即取 `<id>`（`groupByWorkspace` 传的就是 `workspace.workspaceId`），等 1 秒内新出现的 `[role="menu"]` 把「打开工作目录」追加到末行（即「删除工作区」下方）；**不读任何菜单文案**，也不做标题模糊匹配。目录由宿主侧 `workspaceAdmin/list` 按 id 解析，再走 `fsAdmin/reveal`（该 RPC 自身还有 `assertRevealablePath` 闸门），客户端不猜路径 | `ui-workspace/src/client/rows/Rows.tsx`（`ProjectRowItem`：`data-row-key` 与硬编码 `workspaceMenuItems`）；`packages/workspace/workspace/src/index.ts`（`workspaceId` 即分组键）；`lib/workspace-admin.js`（`list` 投影 `workspaceId`/`path`）、`lib/workspace-path.js`（reveal 闸门） |
 | 界面语言 | 工具栏胶囊写 `localStorage['dsh-admin-lang']`、必要时 `window.location.reload()`，且 `locale` 服务只在 `apply()` 时读一次（服务晚到则永久回退中文源串） | 语言归属宿主：切换只经 `locale.setLocale(id)`（宿主唯一用户偏好写入口，自带持久化与通知）；宿主未提供该能力时控件禁用并说明原因；`locale` 经 `ctx.inject(['locale'], …)` 等待，晚到也能挂上 | `packages/client/locale/src/client/index.ts:256`（setLocale 语义）、`:588`（`ctx.provide('locale', …)`）、`:403-423`（`register(ns, locale, dict)` 及其非法/重复抛错）、`:622`（第一方语言选择器位置） |
 

@@ -1048,6 +1048,7 @@ assert.equal(menuEntry.options.order, 460, 'delete item sorts after the shell �
 const menuFace = menuEntry.options.inject()
 assert.equal(typeof menuFace.call, 'function', 'menu item inject face carries the RPC call')
 assert.ok('refreshSessions' in menuFace, 'menu item inject face carries the sidebar refresh hook')
+assert.equal(typeof menuFace.forgetSession, 'function', 'menu item inject face carries the per-session drop hook')
 
 // The entry gets the owner share plus ui-workspace's bound hook, exactly as a
 // real render occurrence would pass them, and is clicked the way a user clicks.
@@ -1056,6 +1057,20 @@ let menuDismissals = 0
 // that patch is scoped to the panel test that installed it, and a capture that
 // silently misses would make this test pass on a menu item that does nothing.
 const menuCalls = []
+// The shell's session list is the `sessions` service, and the plugin resolves it
+// at DELETE time on purpose (never at mount). A mount-time capture stayed null
+// whenever the shell provided `sessions` after this plugin's apply; no refresh
+// ever ran, and because the host had already detached the session from its
+// workspace the stale row re-rendered under 未分组. So the fake has to exist
+// before the confirm click, not before the render.
+const menuRemoved = []
+let menuRefreshes = 0
+ctx.get = (key) => (key === 'sessions'
+  ? {
+      handleSessionRemoved: (sessionId) => { menuRemoved.push(sessionId) },
+      refresh: async () => { menuRefreshes += 1 },
+    }
+  : undefined)
 const menuCallBase = ctx.connection.rpc.call
 ctx.connection.rpc.call = async (route, method, payload) => {
   menuCalls.push([method, payload && payload.args])
@@ -1114,6 +1129,9 @@ assert.deepEqual(menuCalls, [['sessionAdmin/closeSession', { sessionId: 's1' }]]
   'confirm closes exactly the session the owner named, and reads no list() to find it')
 assert.ok(document.body.textContent.includes('会话已删除'), 'delete success toast shown')
 assert.equal(document.body.querySelector('.dsh-admin-confirm'), null, 'the dialog closes after confirming')
+assert.deepEqual(menuRemoved, ['s1'],
+  'a deleted session is dropped from the shell session list at once (no 未分组 residue)')
+assert.ok(menuRefreshes >= 1, 'the shell list is reconciled with the host after the delete')
 // Cancel is a real close: dialog gone, no RPC, no toast for a fresh action.
 await clickRow('删除会话')
 const cancelPanel = document.body.querySelector('.dsh-admin-confirm')

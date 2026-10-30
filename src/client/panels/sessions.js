@@ -9,7 +9,7 @@ import { WebSearchSection } from './web-search.js'
  * `{ ok: false, error }` — so the resolved type stays `any` by design: a
  * boundary, not unmodelled data), plus the sidebar nudge the entry threads
  * down to 历史会话.
- * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any>, refreshSessions: (() => void) | null }} WebSessionsSectionProps
+ * @typedef {{ call: (method: string, args: Record<string, any>) => Promise<any>, refreshSessions: (() => void) | null, forgetSession?: ((sessionId: string) => void) | null }} WebSessionsSectionProps
  */
 
 // Error code dsh raises when full-text session search is not enabled; the
@@ -208,6 +208,9 @@ export function SessionsSection(props) {
       callRemote('sessionAdmin/' + (item.live ? 'closeSession' : 'deleteSession'), { sessionId: item.id }).then(function (result) {
         if (!alive.current) return
         if (!result || result.ok !== true) failures++
+        // Same immediate drop as the single delete: the host detached this
+        // session from its workspace, so the shell's list must not keep it.
+        else if (props.forgetSession) props.forgetSession(item.id)
         patchSession({ bulkDone: done })
         step()
       }, function () {
@@ -385,10 +388,13 @@ export function SessionsSection(props) {
           next.healthBySession = hb
           return next
         })
-        // Refresh this panel's own list, and nudge the sidebar (via the
-        // sessions service) so a deleted session disappears immediately
-        // instead of lingering until reload.
-        if ((method === 'deleteSession' || method === 'closeSession') && props.refreshSessions) props.refreshSessions()
+        // Drop the deleted row from the shell's own session list now (the
+        // host already detached it from its workspace, so a stale list would
+        // render it under 未分组), then refresh this panel's list.
+        if (method === 'deleteSession' || method === 'closeSession') {
+          if (props.forgetSession) props.forgetSession(sessionId)
+          else if (props.refreshSessions) props.refreshSessions()
+        }
         // Honest receipt: the delete succeeded, but the host reports a guard
         // was skipped on the way (e.g. the cross-process write lease could
         // not be taken) — say so instead of letting the host log be the only

@@ -2524,6 +2524,87 @@ await assert.rejects(
 )
 assert.ok(existsSync(noHandleDir), 'no-handle failure leaves the log directory intact')
 
+/* ---------- closeSession: live session opened before the host half mounted ----------
+ * The capture map only holds handles minted after this plugin mounted, but a
+ * session that was already live at that moment (boot restore, plugin re-mount)
+ * still has a real agent in the registry. closeSession must rebuild the
+ * teardown from that agent instead of telling the operator to restart dsh —
+ * otherwise two rows that share a title can never be pruned from a running app.
+ * The fake host exposes the same primitives the real loop uses: the agent's
+ * cancel/whenIdle/scope.dispose, and both registries' entry table + the exact
+ * detach verb (detachEntered).
+ */
+const recoverHeader = { id: 'session-recover', cwd: 'E:/nowhere', createdAt: 1 }
+const recoverDir = sessionLogDirFor(recoverHeader)
+rmSync(recoverDir, { recursive: true, force: true })
+mkdirSync(recoverDir, { recursive: true })
+writeFileSync(join(recoverDir, 'session.jsonl.zstd'), '{}\n')
+const recoverCalls = []
+const recoverAgentStore = new Map()
+const recoverSessionStore = new Map()
+const recoverAgent = {
+  id: 'session-recover',
+  cancel: (cause) => { recoverCalls.push(['cancel', cause && cause.kind]) },
+  whenIdle: async () => { recoverCalls.push(['whenIdle']) },
+  scope: { dispose: async () => { recoverCalls.push(['scope.dispose']) } },
+}
+recoverAgentStore.set('session-recover', { id: 'session-recover', agent: recoverAgent, announced: true })
+recoverSessionStore.set('session-recover', { id: 'session-recover', announced: true })
+const recoverAgents = {
+  get: (id) => (id === 'session-recover' ? recoverAgent : undefined),
+  store: recoverAgentStore,
+  detachEntered: (entry) => {
+    recoverAgentStore.delete(entry.id)
+    recoverCalls.push(['agents.detachEntered', entry.id])
+  },
+}
+const recoverSessions = {
+  get: (id) => (id === 'session-recover' ? { id } : undefined),
+  store: recoverSessionStore,
+  detachEntered: (entry) => {
+    recoverSessionStore.delete(entry.id)
+    recoverCalls.push(['sessions.detachEntered', entry.id])
+  },
+}
+const recoverCtx = {
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  baseUrl: pathToFileURL(join(here, '..')).href,
+  provided: {},
+  provide: function (key, service) { this.provided[key] = service },
+  effect: (fn) => { const d = fn(); if (typeof d === 'function') globalEffectDisposers.push(d) },
+  get: function (name) {
+    if (name === 'agents') return recoverAgents
+    if (name === 'sessions') return recoverSessions
+    if (name === 'workspaceRegistry') return this.workspaceRegistry
+    return this[name]
+  },
+  on: (name, fn) => () => {},
+  typert: { register: () => () => {} },
+  workspaceRegistry: {
+    list: () => [],
+    archivedSessionIds: [],
+    unarchiveSession: async () => {},
+  },
+  sessionPersistence: {
+    list: async () => [{ header: recoverHeader, revision: 'r' }],
+    stat: async (id) => (id === 'session-recover' ? { header: recoverHeader, revision: 'r', sizeBytes: 3 } : undefined),
+    open: async () => ({ read: async () => [], close: async () => {} }),
+  },
+}
+apply(recoverCtx)
+const recovered = await recoverCtx.provided.sessionAdmin.closeSession('session-recover')
+assert.deepEqual(recoverCalls, [
+  ['cancel', 'disposed'],
+  ['whenIdle'],
+  ['scope.dispose'],
+  ['agents.detachEntered', 'session-recover'],
+  ['sessions.detachEntered', 'session-recover'],
+], 'recovered teardown replays the loop order (cancel → drain → scope) then detaches both registries')
+assert.equal(recovered.closed, true, 'the receipt reports a live teardown, not a plain artifact delete')
+assert.ok(!existsSync(recoverDir), 'the recovered teardown still removes the log directory')
+assert.equal(recoverAgentStore.size, 0, 'the agent entry is gone, so the session is no longer live')
+assert.equal(recoverSessionStore.size, 0, 'the session entry is gone, so the removal guard cannot re-refuse')
+
 // closeSession on a non-live session behaves exactly like deleteSession.
 const closeNonLiveHeader = { id: 'session-close-nonlive', cwd: 'E:/nowhere', createdAt: 1 }
 const closeNonLiveDir = sessionLogDirFor(closeNonLiveHeader)

@@ -4,7 +4,7 @@ Admin web UI for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepsee
 
 Panel copy ships in Simplified Chinese and English and rides dsh's own locale service (`ctx.locale`): the 🌐 switch sets the language of the whole interface, and these panels repaint live — no reload.
 
-**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.34.0 · MIT · supports dsh **≥ 0.1.7-rc.2** (verification baseline **0.2.1-rc.4**; declared upper bound **< 0.3.0**, see [docs/COMPAT.md](docs/COMPAT.md))
+**npm:** [`dsh-plugin-admin`](https://www.npmjs.com/package/dsh-plugin-admin) · v1.34.1 · MIT · supports dsh **≥ 0.1.7-rc.2** (verification baseline **0.2.1-rc.4**; declared upper bound **< 0.3.0**, see [docs/COMPAT.md](docs/COMPAT.md))
 **CI:** the full gate plus the real-host smoke on every push (Node 24 — dsh itself requires >= 24.9.0); tagged releases publish to npm with provenance.
 **🇨🇳 中文文档:** [README.md](./README.md)
 
