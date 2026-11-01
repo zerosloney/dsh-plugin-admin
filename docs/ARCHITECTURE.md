@@ -66,7 +66,7 @@ agent 写 TS/JS 脚本并行编排子代理，执行底座是 `ctx.subagents`（
 TS 脚本需要 esbuild（**可选** peer dependency：不装也能用纯 JS 工作流，TS 脚本给出明确诊断而不是静默失败）。运行与工作库落 `$DSH_HOME/workflows/{runs,saved}/`。
 
 ### ⌨️ 命令与钩子
-命令保存即实时注册（fs.watch），会话里输入 `/名称 <输入>` 使用；JSON 导出/导入批量迁移（同名跳过）。钩子编辑 hooks.json 保存即热重启桥（写入与停用 sidecar `hooks.disabled.json` 同走**跨进程文件锁**，双实例共享 profile 时不再 last-writer-wins——这是钩子对补丁/JSON 店锁纪律的补齐）；「停用」移入 hooks.disabled.json；桥三态横幅（未安装 → ⚡ 安装并挂载 → 重启）；Codex 兄弟桥同页第二条状态条。项目 hooks 与官方 hooks 桥共用同一默认超时（单钩子 10 分钟，dsh 官方 hook 协议默认值；可用 hooks 配置里的 `timeout` 按钩子覆盖）——若干挂起的钩子会串行拖慢当前轮次，可用轮次取消中断。
+命令保存即实时注册（fs.watch），会话里输入 `/名称 <输入>` 使用；JSON 导出/导入批量迁移（同名跳过）。钩子编辑 hooks.json 保存即热重启桥（写入与停用 sidecar `hooks.disabled.json` 同走**跨进程文件锁**，双实例共享 profile 时不再 last-writer-wins——这是钩子对补丁/JSON 店锁纪律的补齐）；「停用」移入 hooks.disabled.json；页首一张「运行环境」状态卡按桥各占一行呈现三态（未安装 / 已安装待重启 / 运行中），安装、修复 configPath 指向与两步确认卸载都收进那一行，Codex 兄弟桥是同卡的第二行。编辑器按参考观感重排：发丝边框卡片、静默字段标签 + 白底字段、`命令` 单列多行、折叠「高级」（超时 / 启用）、右下角「保存 / 取消」；打开表单时整页替换列表（不再是浮在列表上方的第二块）。项目 hooks 与官方 hooks 桥共用同一默认超时（单钩子 10 分钟，dsh 官方 hook 协议默认值；可用 hooks 配置里的 `timeout` 按钩子覆盖）——若干挂起的钩子会串行拖慢当前轮次，可用轮次取消中断。
 
 ### 🤖 定时任务（自动化 · 第一页签）
 **宿主级**语义：dsh 进程存活期间到点即触发，与任何会话无关。**注意不要把这条差异说成「官方是会话级」**——那是过时说法：`dsh-schedule` 的 `catalog` 读的是全量宿主任务、存储持久、`ui-schedule` 也有 cron 编辑页。仍然成立的唯一差异是 `create(sessionId, request)` **必须绑定会话**，所以「无会话绑定的任务」没有官方路径（详见 `docs/COMPAT.md` 的矩阵与 `lib/cron-admin.js` 的模块注释）。结构化频率编辑器（每小时 / 每天 / 每周 / 自定义）实时回显合成表达式；五字段语法支持 `*` / 逗号列表 / 短横范围 / 斜杠步长，周接受 `0-7` 与 `SUN-SAT`。

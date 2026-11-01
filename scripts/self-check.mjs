@@ -1653,8 +1653,8 @@ URL.revokeObjectURL = () => {}
 let exportedCommandsBlob = null
 assert.ok(button('⬆ 导入') !== undefined, '⬆ 导入 button present (import panel covered by renderer surface)')
 
-// 15b. The 钩子 page: rows + bridge banner with the install affordance while
-// the stock bridge is neither installed nor mounted.
+// 15b. The 钩子 page: rows + the runtime-status card with the install
+// affordance while the stock bridge is neither installed nor mounted.
 await act(async () => { chCommandsRoot.unmount() })
 host.remove()
 const chHooksRoot = await mountSection(chHooksTab)
@@ -1662,8 +1662,15 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 text = document.body.textContent
 assert.ok(text.includes('node guard.js'), 'hook command row rendered')
 assert.ok(text.includes('stop.sh'), 'disabled hook row rendered (sidecar)')
-assert.ok(text.includes('当前未安装 hooks 桥'), 'bridge-missing banner rendered')
-const installBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('安装并挂载 hooks 桥'))
+/** The runtime-status row whose text names this bridge. */
+const statusRow = (name) => [...document.querySelectorAll('.chk-status-row')].find((row) => row.textContent.includes(name))
+/** A button inside one bridge's status row. */
+const statusRowButton = (name, label) => [...(statusRow(name)?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes(label))
+const claudeRow = statusRow('Claude Code 钩子桥')
+assert.ok(claudeRow, 'claude bridge status row rendered')
+assert.ok(claudeRow.textContent.includes('未安装'), 'claude bridge reads as not installed')
+assert.ok(text.includes('钩子会写入 C:/Users/demo/.dsh/hooks.json，安装桥后才会执行。'), 'missing-bridge hint names the managed file')
+const installBtn = statusRowButton('Claude Code 钩子桥', '安装')
 assert.ok(installBtn, 'one-click bridge install button rendered while missing')
 
 await act(async () => {
@@ -1672,8 +1679,8 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 60))
 assert.equal((ctx.bridgeInstalls ?? []).length, 1, 'bridgeInstall RPC fired')
 assert.ok(document.body.textContent.includes('hooks 桥已安装并写入 profile，重启 dsh 后生效'), 'install note rendered (not silently wiped)')
-assert.ok(document.body.textContent.includes('重启 dsh 后挂载生效'), 'banner flipped to the installed-but-not-mounted state')
-const uninstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('卸载桥'))
+assert.ok(statusRow('Claude Code 钩子桥').textContent.includes('已安装，待重启'), 'status flipped to the installed-but-not-mounted state')
+const uninstallBtn = statusRowButton('Claude Code 钩子桥', '卸载')
 assert.ok(uninstallBtn, 'uninstall affordance rendered once installed')
 
 // 15c. Uninstall is a two-click confirm.
@@ -1682,7 +1689,7 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
 assert.equal((ctx.bridgeRemoves ?? []).length, 0, 'first click only arms the confirm')
-const confirmRemove = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认卸载'))
+const confirmRemove = [...(statusRow('Claude Code 钩子桥')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('确认卸载'))
 assert.ok(confirmRemove, 'confirm button rendered after the first click')
 await act(async () => {
   confirmRemove.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1692,11 +1699,12 @@ assert.equal((ctx.bridgeRemoves ?? []).length, 1, 'second click fires bridgeRemo
 assert.ok(document.body.textContent.includes('hooks 桥已卸载'), 'remove note rendered')
 
 // 15d. The Codex bridge rides the same tab (no settings page of its own): its
-// banner reads the same listHooks payload, and its install path must re-read
-// through listHooks — the verb answers with a sparse payload that would blank
-// the hook list and both banners if it were rendered as the whole state.
-assert.ok(document.body.textContent.includes('当前未安装 Codex 钩子桥'), 'codex bridge banner rendered inside the 钩子 tab')
-const codexInstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('安装 Codex 钩子桥'))
+// status row reads the same listHooks payload, and its install path must
+// re-read through listHooks — the verb answers with a sparse payload that
+// would blank the hook list and both status rows if it were rendered as the
+// whole state.
+assert.ok(statusRow('Codex 钩子桥')?.textContent.includes('未安装'), 'codex bridge status row reads as not installed inside the 钩子 tab')
+const codexInstallBtn = statusRowButton('Codex 钩子桥', '安装')
 assert.ok(codexInstallBtn, 'codex bridge install affordance rendered while missing')
 await act(async () => {
   codexInstallBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1705,7 +1713,7 @@ await new Promise((resolve) => setTimeout(resolve, 80))
 assert.equal((ctx.codexBridgeInstalls ?? []).length, 1, 'codexBridgeInstall RPC fired')
 assert.ok(document.body.textContent.includes('Codex 钩子桥已安装并写入 profile（钩子文件'), 'codex install note rendered')
 assert.ok(document.body.textContent.includes('node guard.js'), 'hook rows survived the sparse-payload re-read')
-const codexUninstallBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('卸载 Codex 桥'))
+const codexUninstallBtn = statusRowButton('Codex 钩子桥', '卸载')
 assert.ok(codexUninstallBtn, 'codex uninstall affordance rendered once installed')
 
 // 15e. Codex uninstall is a two-click confirm too, with its own sentinel
@@ -1715,7 +1723,7 @@ await act(async () => {
 })
 await new Promise((resolve) => setTimeout(resolve, 20))
 assert.equal((ctx.codexBridgeRemoves ?? []).length, 0, 'first click only arms the codex confirm')
-const codexConfirm = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认卸载'))
+const codexConfirm = [...(statusRow('Codex 钩子桥')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('确认卸载'))
 assert.ok(codexConfirm, 'codex confirm button rendered after the first click')
 await act(async () => {
   codexConfirm.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1723,7 +1731,7 @@ await act(async () => {
 await new Promise((resolve) => setTimeout(resolve, 80))
 assert.equal((ctx.codexBridgeRemoves ?? []).length, 1, 'second click fires codexBridgeRemove')
 assert.ok(document.body.textContent.includes('Codex 钩子桥已卸载'), 'codex remove note rendered')
-assert.ok(document.body.textContent.includes('当前未安装 Codex 钩子桥'), 'codex banner back to the missing state')
+assert.ok(statusRow('Codex 钩子桥')?.textContent.includes('未安装'), 'codex status back to the missing state')
 
 // 15f. (removed) The 项目 tab was retired in the v1.24.0 split — its
 // session-list error-surfacing contract went with it.
