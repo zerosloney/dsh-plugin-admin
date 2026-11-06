@@ -353,6 +353,116 @@ await checkAsync('run detail loads and shows script', async () => {
   panel.unmount()
 })
 
+// ─── 一键生成（v1.38）：表单 → startRun 生成器脚本 → 终态自动存库 ─────────────
+
+/** React 受控 textarea 的填充：直接调节点上挂着的 React onChange——synthetic
+ * dispatchEvent 过不了 React 的 value tracker（bench-client-render.mjs 同款坑），
+ * 处理器会被静默跳过。 */
+function fillTextarea(panel, index, value) {
+  const ta = panel.queryAll('textarea')[index]
+  const propsKey = Object.keys(ta).find((k) => k.startsWith('__reactProps'))
+  if (propsKey === undefined || typeof ta[propsKey].onChange !== 'function') {
+    throw new Error('verify-workflow-client: the textarea carries no React onChange')
+  }
+  ta[propsKey].onChange({ target: { value } })
+}
+
+await checkAsync('one-click generate opens the generator form', async () => {
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  const genBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成'))
+  assert.ok(genBtn, 'toolbar generate button exists')
+  genBtn.click()
+  await new Promise((r) => setTimeout(r, 30))
+  assert.ok(panel.text().includes('一键生成工作流'), 'generator form header rendered')
+  assert.ok(panel.text().includes('生成需一次子代理调用'), 'generator form hint rendered')
+  panel.unmount()
+})
+
+await checkAsync('generate submit launches the generator script via startRun', async () => {
+  let started = null
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/startRun': (args) => { started = args; return { ok: true, value: { id: 'wf_gen_1', status: 'running' } } },
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
+  await new Promise((r) => setTimeout(r, 30))
+  fillTextarea(panel, 0, '审查代码')
+  await new Promise((r) => setTimeout(r, 30))
+  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+  assert.ok(goBtn, 'generator submit button rendered')
+  goBtn.click()
+  await new Promise((r) => setTimeout(r, 50))
+  assert.ok(started, 'startRun called')
+  assert.ok(started.spec.script.includes('await agent('), 'spec carries the generator script (subagent prompt)')
+  assert.ok(started.spec.label.startsWith('✨ '), 'label carries the ✨ prefix')
+  assert.equal(started.spec.args.description, '审查代码', 'args.description passes through')
+  assert.ok(!panel.text().includes('生成需一次子代理调用'), 'form closed after submit')
+  assert.ok(document.body.textContent.includes('已开始生成'), 'accepted toast shown')
+  panel.unmount()
+})
+
+await checkAsync('a completed generator run auto-saves into the library with a deduped name', async () => {
+  const started = { current: null }
+  const saves = []
+  let active = []
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [{ name: 'wf-dup', scope: 'global' }] }),
+    'workflowAdmin/startRun': (args) => { started.current = args; return { ok: true, value: { id: 'wf_gen_2', status: 'running' } } },
+    'workflowAdmin/getRun': (a) => ({ ok: true, value: { id: a.runId, status: 'completed', result: { name: 'wf-dup', script: 'return 1' } } }),
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
+  await new Promise((r) => setTimeout(r, 30))
+  fillTextarea(panel, 0, '审查代码')
+  await new Promise((r) => setTimeout(r, 30))
+  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成')).click()
+  // 提交后该 run 直接落 completed（reload 的 listRuns 会读到这一状态并结算）。
+  active = [{ id: 'wf_gen_2', label: '✨ 审查代码', status: 'completed' }]
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(saves.length, 1, 'saveSaved called exactly once')
+  assert.equal(saves[0].spec.name, 'wf-dup-2', 'name deduped against the existing global entry (-2)')
+  assert.equal(saves[0].spec.scope, 'global', 'auto-save writes global scope')
+  assert.equal(saves[0].spec.script, 'return 1', 'the returned script is saved')
+  assert.equal(saves[0].spec.description, '审查代码', 'the one-line description is stored')
+  assert.ok(document.body.textContent.includes('已保存到工作库：wf-dup-2'), 'saved toast shown')
+  panel.unmount()
+})
+
+await checkAsync('an errored generator run toasts failure and never calls saveSaved', async () => {
+  const saves = []
+  let active = []
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_gen_3', status: 'running' } }),
+    'workflowAdmin/getRun': () => ({ ok: true, value: { id: 'wf_gen_3', status: 'errored' } }),
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, record: { name: args.spec.name } } },
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
+  await new Promise((r) => setTimeout(r, 30))
+  fillTextarea(panel, 0, '审查代码')
+  await new Promise((r) => setTimeout(r, 30))
+  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成')).click()
+  active = [{ id: 'wf_gen_3', label: '✨ 审查代码', status: 'errored', error: '子代理没有返回脚本内容' }]
+  await new Promise((r) => setTimeout(r, 100))
+  assert.deepEqual(saves, [], 'saveSaved never called on failure')
+  assert.ok(document.body.textContent.includes('工作流生成失败'), 'failure toast shown')
+  panel.unmount()
+})
+
 // ─── 结果 ─────────────────────────────────────────────────────────────────────
 
 if (failures > 0) {

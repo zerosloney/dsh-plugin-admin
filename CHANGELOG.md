@@ -4,6 +4,17 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.37.0] - 2026-11-06
+
+### Added
+
+- **工作流面板「✨ 一键生成」：一句话需求，dsh 自己写工作流脚本并自动存入工作库**（`src/client/panels/workflow.js`）。工具栏新增主按钮，整页表单只收两样东西：需求描述（textarea，带示例 placeholder）与可选名称。提交走既有 `workflowAdmin/startRun`，跑一段固定的生成器脚本（realm 内执行）：把描述交给 `agent()`，要求子代理按脚本 facade（`agent` / `parallel` / `pipeline` / `phase`/`log`/`report` / `ask` / `shell` / 全局 `args`）写纯 JS 工作流脚本，第一行注释 `// name: <kebab-case-英文短名>`；脚本剥掉 markdown 围栏后把 `{ name, script }` 作为顶层 `return` 带回。生成 run 以 `'✨ ' + 需求描述` 为 label 出现在运行列表里，进度随既有轮询可见；落定后由面板结算（`settleGenerating`，先出账再异步处理防重入）：`getRun` 取 `result` → 名称清洗（空则 `wf-`+时间戳）→ 对工作库 global 同名去重追加 `-2/-3…`（`saveSaved` 是同名覆盖写，自动保存绝不覆盖旧条目）→ `saveSaved({ scope: 'global', description: 那句话 })` → 成功 toast；errored/stopped 只报失败不落库。幂等边界写在源码注释：面板重开丢账本后，生成 run 退化为普通 run（详情里能看到返回值中的脚本），不自动补存。
+  `scripts/verify-workflow-client.mjs` 追加 4 条用例（17 → 17 原有断言逐字保留）：表单打开、startRun spec 含生成器脚本与 `'✨ '` label 及 description 透传、completed 自动 saveSaved 且同名去重为 `-2`、errored 失败 toast 且零次 saveSaved。生成器脚本本体另做行为仿真验证（name 头提取 / 围栏剥离 / nameHint 清洗 / 空回复抛错）。
+
+### Changed
+
+- **工作流面板布局重写为编辑器 / CLI 风格**（`src/client/panels/workflow.js`，`src/client/styles.js`）。这一页是最后一个停留在 v1.35 之前「卡片 + 胶囊」观感的面板：蓝色新手引导大卡、10px 圆角模板卡、彩色实心胶囊状态；窄面板里运行卡的 flex 行被挤成竖排居中（名称 / 状态 / 步数 / 时长 / 按钮各占一行）。现在对齐钩子页（v1.36）的约定：内层「运行 / 工作库」改共享 `.tabs`/`.tab`（发丝底线 + 活动页签 2px 强调线，ARIA tabs 契约不变）；两页签各一条扁平 `.toolbar`（左命令右静默提示）；运行与工作库列表改 `.row` 树状行——名称 + 行 id（mono）居左，步数/时长（mono + tabular-nums）与状态 `.tag` 软色变体（completed 绿 / running 蓝 / errored 红 / stopped·orphaned 琥珀）靠右，动作按钮组按状态显隐；详情、新建/改建编辑器、工作库保存与一键生成全部改**整页替换列表**；引导大卡收成工具栏右侧一行 12px 静默提示，三个模板收成列表与编辑器内的静默快捷条。`.row` 家族在 `styles.js` 的 CH 规则上扩挂 `[data-dsh-admin-section]`（单一定义，非面板私有副本，钉 `flex-direction: row` 防 `.card` 的 column 叠加）；新增 `.tag.ok/.run/.err/.warn` 软色变体、`textarea.input` mono、全局 `.btn.primary`（blue-600 实心，白字对比达标）；`.btn` 基类补 `white-space: nowrap`（被挤压的命令条按钮不再把「一键生成」折成两行）。随之 i18n 表补 17 条新文案的英文条目并删 2 条孤儿条目（verify-i18n 双向精确）；`self-check` 15y2 的引导文案与模板可见性钉保持绿（提示与快捷条仍在列表视图可见、可点击）。
+
 ## [1.36.0] - 2026-11-01
 
 ### Changed

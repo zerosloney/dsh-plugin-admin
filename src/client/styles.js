@@ -125,7 +125,9 @@ var CSS_TEXT = [
   // placeholder is that the panel did not mount — so the rule is unscoped like
   // .dsh-admin-toast, and carries its own chrome instead of relying on a
   // section ancestor that is not there yet.
-  '.btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.4; border-radius: 6px; cursor: pointer; border: 1px solid var(--dsw-alias-border-l2, rgba(150,150,160,0.45)); background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #222); }',
+  // white-space pinned: a squeezed flex toolbar (the workflow panel's 命令条)
+  // must shrink-wrap its buttons, never wrap their labels mid-word.
+  '.btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.4; border-radius: 6px; cursor: pointer; border: 1px solid var(--dsw-alias-border-l2, rgba(150,150,160,0.45)); background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #222); white-space: nowrap; }',
   '.btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(120,120,130,0.10)); }',
   '[data-dsh-admin-section] .card{ display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); background: var(--dsw-alias-bg-layer-2, #fff); transition: border-color 0.12s ease, background 0.12s ease; }',
   // MCP editor: the section root is height-bounded, but the editor form must
@@ -319,6 +321,22 @@ var CSS_TEXT = [
   '[data-dsh-admin-section] .field, [data-cha-section] .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }',
   '[data-dsh-admin-section] .form-actions, [data-cha-section] .form-actions { position: sticky; bottom: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 6px; padding-top: 10px; background: var(--dsw-alias-bg-layer-2, #fff); border-top: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); }',
   '[data-dsh-admin-section] .mono, [data-cha-section] .mono { font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace); font-variant-numeric: tabular-nums; }',
+  // 工作流面板 (v1.38)：运行/工作库的状态标签走 .tag.event 的软色配方（淡色底 +
+  // 彩字），替代旧实心胶囊；completed=绿 / running|pending=蓝 / errored=红 /
+  // stopped|orphaned=琥珀。
+  '[data-dsh-admin-section] .tag.ok { background: rgba(16,185,129,0.12); color: #047857; }',
+  '[data-dsh-admin-section] .tag.run { background: rgba(59,130,246,0.12); color: var(--dsw-static-blue-500, #3b82f6); }',
+  '[data-dsh-admin-section] .tag.err { background: rgba(239,68,68,0.1); color: var(--dsw-alias-state-error-primary, #ef4444); }',
+  '[data-dsh-admin-section] .tag.warn { background: rgba(217,119,6,0.12); color: #b45309; }',
+  // 编辑器表单（新建 / 改建 / 工作库保存 / 一键生成）的脚本与 args 是代码输入：
+  // .input 的外壳 + mono 字面，纵向可拉伸（同 .mcp-playground textarea 的配方）。
+  '[data-dsh-admin-section] textarea.input { font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace); font-size: 12px; line-height: 1.55; resize: vertical; }',
+  // 主按钮：blue-600 实心填充（白字 >= 4.5:1），hover 往深走。刻意不挂
+  // [data-…] 作用域——self-check 的 retired-.btn 禁令封掉了 `[scope] .btn`
+  // 选择器，而 .btn 基类本就是这张表里唯一的未作用域 chrome，修饰符跟着基类走。
+  '.btn.primary { background: var(--dsw-static-blue-600, #2563eb); border-color: transparent; color: #fff; }',
+  '.btn.primary:hover:not(:disabled) { background: var(--dsw-static-blue-700, #1d4ed8); color: #fff; }',
+  '.btn.primary:disabled { opacity: 0.55; cursor: not-allowed; }',
 ].join('\n')
 
 function injectStyles() {
@@ -347,15 +365,19 @@ var CH_CSS_TEXT = [
   '[data-cha-section] .notice.ok { background: rgba(16,185,129,0.1); color: #047857; }',
   '[data-cha-section] .notice .notice-text { flex: 1 1 240px; }',
   '[data-cha-section] .notice .notice-actions { display: flex; gap: 5px; flex: none; }',
-  // Rows — card elevation + hover lift like the other list cards.
-  '[data-cha-section] .row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 4px; background: var(--dsw-alias-bg-layer-2, #fff); transition: border-color 0.12s ease, background 0.12s ease; }',
-  '[data-cha-section] .row:hover { border-color: var(--dsw-static-blue-500, #3b82f6); background: var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,0.06)); }',
+  // Rows — card elevation + hover lift like the other list cards. The workflow
+  // panel's run/library lists (v1.38) render the same family, so the selectors
+  // are re-rooted onto the admin scope here — ONE definition, not a per-panel
+  // copy. flex-direction is pinned to row because those admin rows also carry
+  // the .card class (whose column direction would otherwise win the cascade).
+  '[data-cha-section] .row, [data-dsh-admin-section] .row { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(200,200,210,0.4)); border-radius: 4px; background: var(--dsw-alias-bg-layer-2, #fff); transition: border-color 0.12s ease, background 0.12s ease; }',
+  '[data-cha-section] .row:hover, [data-dsh-admin-section] .row:hover { border-color: var(--dsw-static-blue-500, #3b82f6); background: var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,0.06)); }',
   '[data-cha-section] .row.off { opacity: 0.55; }',
-  '[data-cha-section] .row .main { flex: 1; min-width: 0; }',
-  '[data-cha-section] .row .name { font-weight: 600; }',
-  '[data-cha-section] .row .desc { color: var(--dsw-alias-label-secondary, #666); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '[data-cha-section] .row .main, [data-dsh-admin-section] .row .main { flex: 1; min-width: 0; }',
+  '[data-cha-section] .row .name, [data-dsh-admin-section] .row .name { font-weight: 600; }',
+  '[data-cha-section] .row .desc, [data-dsh-admin-section] .row .desc { color: var(--dsw-alias-label-secondary, #666); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
   '[data-cha-section] .row .desc.mono { font-family: var(--dsw-font-mono, ui-monospace, monospace); font-size: 12px; }',
-  '[data-cha-section] .row .meta { color: var(--dsw-alias-label-secondary, #61666b); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '[data-cha-section] .row .meta, [data-dsh-admin-section] .row .meta { color: var(--dsw-alias-label-secondary, #61666b); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
   '[data-cha-section] .name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }',
   '[data-cha-section] .actions { display: flex; gap: 5px; align-items: center; flex: none; }',
   // Tag badges — same recipe as the unified .tag family.
