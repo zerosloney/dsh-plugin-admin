@@ -3,24 +3,26 @@
  * verify-client-hygiene.mjs — source pins for client-side fixes whose bugs are
  * "silently wrong data" rather than visible breakage:
  *
- * 1. Pinned-session pruning: a deleted session's id must not linger in the
- *    local whitelist (the 「已置顶(N)」 count inflates), and pruning must skip
- *    an EMPTY list (which would wipe every pin).
+ * 1. The 历史会话 / Web 搜索 panels are excised: the two panel files must not
+ *    exist, and no reference to their section components, the slot entry or the
+ *    webSearchAdmin RPC surface may survive anywhere in the browser half.
  * 2. localStorage readers reject JSON arrays and own `__proto__` keys, and
  *    every map walk uses Object.keys (a `for...in` re-persists inherited
  *    entries).
  * 3. The workspace menu heuristic keys on the exact 「删除工作区」 label, not a
  *    bare 删除 that any other menu also carries.
  * 4. maxTokens rejects 0 (the host requires a positive integer).
- * 5. A cron countdown past its stored moment says so instead of rendering a
- *    negative "— 后 (过去时刻)".
+ * 5. The sidebar delete-session path reports the host reason instead of a
+ *    silent no-op, and reconciles the shell list before the plugin re-reads.
  * 6. The bulk-delete failure line points at the host log, not the webhook
  *    delivery history.
  * 7. The todo file-stats bail-out compares the per-file rows, not only totals.
  * 8. A usage project filter that is absent from the current range still has an
  *    explanation option instead of a blank select.
- * 9. Opening another run clears runDetail (a stale card used to render, and
- *    the new run's first 「详情」 click became a close).
+ * 9. The workflow panel is a library console, not a second run console: the
+ *    run-console RPCs and detail state are gone, and the one-click generator
+ *    settles a run OUT of its ledger before the async save tail (a stale
+ *    ledger entry re-enters on the next poll).
  * 10. A forced update check requested mid-flight is replayed, so an upgrade
  *     that lands during the panel-open check still gets a fresh answer.
  *
@@ -31,10 +33,10 @@
  * Run: node scripts/verify-client-hygiene.mjs
  */
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 
 const read = (/** @type {string} */ rel) => readFileSync(new URL(`../src/client/${rel}`, import.meta.url), 'utf8')
-const sessions = read('panels/sessions.js')
+const panelFile = (/** @type {string} */ rel) => existsSync(new URL(`../src/client/${rel}`, import.meta.url))
 const mcp = read('panels/mcp.js')
 const impl = read('impl.js')
 const automation = read('panels/automation.js')
@@ -55,19 +57,25 @@ const check = (/** @type {string} */ name, /** @type {() => void} */ fn) => {
   checks.push(`✅ ${name}`)
 }
 
-check('1. 历史会话 is an archived-only list: no pin/filter/bulk state survives, delete stays two-step', () => {
-  // The panel answers one question — what did I archive, and how do I remove
-  // it. These pins keep the removed surfaces from creeping back as "just one
-  // more filter": the list takes archived rows only, a still-live row is torn
-  // down through closeSession, and the sidebar projection is corrected BEFORE
-  // the page re-reads (otherwise a deleted row survives as a ghost).
-  assert.ok(/row\.archived === true/.test(sessions), 'only archived rows are listed')
-  assert.ok(/row\.live === true \? 'sessionAdmin\/closeSession' : 'sessionAdmin\/deleteSession'/.test(sessions),
-    'a still-live archived row is closed, not deleted blindly')
-  assert.ok(/props\.forgetSession\) props\.forgetSession\(row\.id\)/.test(sessions),
-    'the sidebar projection forgets the row before this page re-reads')
-  for (const gone of ['setPinnedIds', 'bulkTargets', 'selectedIds', 'buildSessionGroups', 'filterSessions', 'renderHealthReportCard']) {
-    assert.ok(!sessions.includes(gone), `${gone} is gone (the panel is not a second sidebar)`)
+check('1. the 历史会话 / Web 搜索 panels are excised: no panel file, no section component, no webSearchAdmin call site', () => {
+  // Both panels were removed outright: the Web 与会话 settings entry,
+  // its two tab components and the whole webSearchAdmin host domain are gone.
+  // These pins keep the excision from regressing piecemeal — a stray import,
+  // a resurrected file or a new call to the deleted RPC surface fails HERE
+  // instead of shipping as a dead reference the host answers with
+  // gateway errors.
+  assert.equal(panelFile('panels/sessions.js'), false, 'panels/sessions.js is deleted')
+  assert.equal(panelFile('panels/web-search.js'), false, 'panels/web-search.js is deleted')
+  const goneSymbols = ['WebSessionsSection', 'SessionsSection', 'WebSearchSection']
+  for (const symbol of goneSymbols) {
+    for (const source of clientSources) {
+      assert.ok(!source.includes(symbol), `${symbol} has no reference left in the browser half`)
+    }
+  }
+  for (const source of clientSources) {
+    assert.ok(!source.includes('webSearchAdmin'), 'no webSearchAdmin call site survives in the browser half')
+    assert.ok(!source.includes("'web-sessions'") && !source.includes('"web-sessions"'),
+      'the web-sessions slot entry id is gone from the browser half')
   }
 })
 
@@ -100,11 +108,17 @@ check('4. a past next-fire renders an explanation, not a negative countdown', ()
   assert.ok(/fireDue\s*\?/.test(automation), 'and rendered as its own state')
 })
 
-check('5. a failed delete reports the host reason instead of a silent no-op', () => {
-  assert.ok(/showToast\('error', dshT\('删除失败：'\) \+ messageOf\(error\)\)/.test(sessions),
-    'the row-level delete surfaces the host message')
-  assert.ok(/error: dshT\('读取会话失败：'\) \+ messageOf\(error\)/.test(sessions),
-    'a list read failure is rendered inline with its reason')
+check('5. the sidebar delete reports the host reason, then drops the row from the shell list', () => {
+  // The panel is gone; the ONE delete surface left is the session-row menu
+  // (impl.js). It must still surface a failed delete (with the lease hint),
+  // and on success drop the row from the shell's own projection BEFORE
+  // anything re-reads — the deleted row must not linger as a 未分组 ghost.
+  assert.ok(/showToast\('error', dshT\('❌ 删除会话失败：'\) \+ failure \+ deleteFailureHint\(failure\)\)/.test(impl),
+    'a failed delete surfaces the host message plus the actionable hint')
+  assert.ok(/call\('sessionAdmin\/closeSession', \{ sessionId: sessionId \}\)/.test(impl),
+    'the delete rides closeSession (live and closed sessions share the path)')
+  assert.ok(/if \(typeof forgetSession === 'function'\) forgetSession\(sessionId\)/.test(impl),
+    'success drops the row from the shell list before anything re-reads')
 })
 
 check('6. todo file stats compare the per-file rows', () => {
@@ -117,14 +131,28 @@ check('7. an out-of-range project filter explains itself', () => {
   assert.ok(/disabled: true/.test(usage), 'and shown as a disabled explanation option')
 })
 
-check('8. opening another run clears the detail card and cancels its in-flight fetch', () => {
-  const opens = workflow.match(/openRunId: r\.id[^\n]*/g) || []
-  assert.equal(opens.length, 4, 'four open-a-new-run sites (start / amend / resume / runSaved)')
-  for (const line of opens) {
-    assert.ok(/runDetail: null/.test(line), `every open clears runDetail: ${line.trim()}`)
+check('8. the workflow panel stays a library console: no run-console RPC or detail state, and the generator settles out of its ledger before the async tail', () => {
+  // The panel creates workflows (one-click generator + template drafts) and
+  // manages the saved library; running them lives on the session side
+  // (/workflow, workflow_admin). These pins keep the removed run console from
+  // creeping back: no run RPC call sites, no run-detail state machine, and
+  // the generator's settle path removes the ledger entry BEFORE the async
+  // getRun/saveSaved tail (an entry left in the book would re-enter when the
+  // next poll sees the same terminal run).
+  for (const gone of [
+    'workflowAdmin/stopRun', 'workflowAdmin/amendRun', 'workflowAdmin/resumeRun',
+    'workflowAdmin/answerRun', 'workflowAdmin/runSaved',
+    'openRunId', 'runDetail', 'detailSeq', 'answerText', 'exampleScript',
+    'parentSessionId:', 'startFromEditor',
+  ]) {
+    assert.ok(!workflow.includes(gone), `${gone} is gone (the panel is not a run console)`)
   }
-  assert.ok((workflow.match(/detailSeq\.current\+\+/g) || []).length >= 4,
-    'each also invalidates a detail request that is still in flight')
+  const settle = workflow.indexOf('generatingRef.current = rest')
+  const finish = workflow.indexOf('finishGeneration(runId, entry)')
+  assert.ok(settle !== -1 && finish > settle,
+    'the ledger entry is removed before finishGeneration runs (no poll re-entry)')
+  assert.ok(/pollFailures \+= 1/.test(workflow),
+    'getRun polling backs off on failures instead of retrying flat out')
 })
 
 check('9. a forced update check requested mid-flight is replayed', () => {
@@ -195,6 +223,17 @@ check('11. the workspace-row menu hook keys on structure, not on menu copy', () 
   // to the workspace row alone.
   assert.ok(impl.includes('sidebar.workspaces.session.menu.item'),
     'the session row menu is still registered into the documented slot')
+})
+
+check('12. the excision left no formatter debt: usage.js owns the two shared formatters', () => {
+  // The usage dashboard consumed formatTokenCount/usageDayKey from the deleted
+  // sessions panel file. They moved INTO usage.js verbatim; a re-import from
+  // the deleted file (or a copy-paste divergence between the two halves) would
+  // be a phantom dependency, so the ownership is pinned here.
+  assert.ok(/export function formatTokenCount/.test(usage), 'usage.js owns formatTokenCount now')
+  assert.ok(/export function usageDayKey/.test(usage), 'usage.js owns usageDayKey now')
+  assert.ok(!/from '\.\/sessions\.js'/.test(usage), 'usage.js no longer imports from the deleted panel file')
+  assert.ok(!/from '\.\/web-search\.js'/.test([...clientSources].join('\n')), 'no client module imports the deleted web-search file')
 })
 
 console.log(checks.join('\n'))

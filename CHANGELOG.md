@@ -4,6 +4,26 @@
 
 > 各节里的数量（探针条数 / 脚本个数 / RPC 方法数 / warning 数）是**该轮的快照**，不会随之后的工作回溯修改；要当前值请跑对应命令（`npm test` 的输出逐条列出）。唯一例外是最新一轮（`[Unreleased]` 与最新版本节）的数字，它们应与 HEAD 一致。
 
+## [1.38.0] - 2026-11-07
+
+### Changed
+
+- **工作流页收敛为「工作库控制台」**（`src/client/panels/workflow.js`、`src/client/panels/automation.js`，v1.37.0 发布后的第二轮收口）：运行台与整页详情撤除——运行 / 工作库列表统一为树状行（名称 + mono 行 id 居左，步数 / 时长与软色状态标签靠右），详情、编辑器、工作库保存与一键生成全部整页替换列表；生成卡不再依赖运行台，直接轮询 `getRun` 落定后自动存库；五个 host-only 动词退出 UI 调用面（CLI `/workflow runs` 与会话侧恢复路径保留）；运行详情条数上限 250 → 720。自动化页工具栏同步收口（整行不换行 + 输入最小宽）。`verify-workflow-client` 按新现实重写，hygiene / self-check / run-gate 钉同步。
+
+### Removed
+
+- **「历史会话」与「Web 搜索」两个面板整体切除**：「Web 与会话」设置入口（settings.section，order 27）连同其两个页签组件、面板源文件、以及宿主侧整套 Web 搜索 provider 管理域（selector / install / uninstall / config / saveConfig 七个 RPC 方法组成的命名空间及其 typert 注册、审计行、验收脚本）一并删除。设置界面现在注册**七个面板**：四个插件页页签（扩展插件 / MCP服务器 / 命令 / 钩子）、两个独立设置页（用量仪表盘 / 自动化）与待办浮层；`config.panels` 接受的面板 id 从 9 个收敛到 7 个（`sessions` / `webSearch` 不再是合法键，携带旧键的 config 行挂载期报错，与既有 fail-loud 契约一致）。
+  保留不动：`sessionAdmin` 命名空间的全部 11 个方法（归档 / 取消归档 / 导出 / 全文搜索 / 体检 / 用量报表 / git diff / 文件统计等继续供 CLI 与 SDK 调用），侧边栏会话行菜单的「删除会话」（走 `closeSession` + 删除即刷新侧栏投影），用量台账的删除前快照与后台 sweep，以及 `sessionExportEventCap` 等配置键。归档会话的清理自此没有插件内 UI——这是有意的：dsh 自己的侧边栏本就管着在线与最近的会话，第二张列表只是让人看两次。
+  随切除同步的计数（以各命令当前输出为准）：RPC 面 12 → 11 个命名空间、79 → 72 个方法、77 → 69 个 strict wire（可选 wire 6 → 5；`scalar` / `textList` 两个仅剩该域使用的 schema 随之移除，schema 表剩 4 个）；`npm test` 42 → 41 步（verify 链少一个脚本）；真实宿主冒烟的只读 sweep 17 → 15 次调用、扫过 11 → 10 个命名空间（11 减 fsAdmin 豁免）；接缝契约探针 137 → 133 条断言；i18n 英文表 658 → 565 条（双向闭合保持；其中 45 条为两面板专属文案，其余属同批工作流运行台撤除的文案增删）；入口/面板 chunk 重建后入口包仍在 150 KB 预算内。服务注入扫描的接缝读取数 43 → 42 处 / 38 → 37 个文件。客户端卫生闸门改钉切除后的新现实（两份面板文件必须不存在、全浏览器半零残留引用、零 webSearchAdmin 调用点、两个共享格式化函数原样迁入 usage 页并钉死归属）：11 → 12 checks；self-check 的注入/注册对账、session 行菜单全流程用例全部保持或收紧。文档（README 中英、架构、兼容矩阵、贡献指南）与官方覆盖表（9 → 7 行，`webSearch` 探测行消失）同步改写。
+
+### Fixed
+
+- **生成轮询加放弃上限**：`pollGeneration` 此前对 `getRun` 失败只退避不放弃（`pollFailures` 只增不读），记录消失还会清零续轮——宿主重启窗口里生成卡会永久「生成中」且禁用提交、无错误出口。现在三类失败（调用失败 / rejection / 记录不存在）统一计数，连续 8 次（`POLL_MAX_FAILURES`）即放弃：复位 busy、错误 toast 带 runId；健康运行路径不变。
+- **自动保存同名去重 fail-closed**：`listSaved` 失败时原实现把已存清单当空表，`saveSaved` 会同名覆盖旧工作库条目还弹成功 toast。现在失败改走 `name + '-' + 时间戳` 保底名，「自动保存绝不覆盖旧条目」的不变量恢复。
+- 生成表单「名称（可选）」输入此前被丢弃（面板发 `nameHint`、生成器脚本读 `args.name`），契约已接通；`argsText` 死字段删除；errored 用例 fake 信封补 `value` 层；两处失真注释纠正。
+- **接缝契约探针对齐 dsh 0.2.2-rc.1**：schedule `create(request, actorSessionId?, signal?)` 新签名与 `timing` cron 选择器、cordis `fiber.update` 的 noSave 持久化迁移至 `internal/commit`——共 7 项漂移重钉（web-search 两项随后随域整体删除）。
+- **真实宿主冒烟的设置探针修复**：失败根因是宿主首启「预览版说明」公告把 `#root` 置 `inert`，账号菜单点开即自关（并非菜单改版）；改为有界轮询点掉公告（15s 上限，无公告宿主不误判）。文档探针计数纠偏 18 → 实数（SWEEP 现为 15）；`lib/patch-utils.js` 过期 JSDoc 对齐 `internal/commit` 实况。
+
 ## [1.37.0] - 2026-11-06
 
 ### Added
@@ -53,6 +73,9 @@
 - **「子智能体」页签整体移除**（客户端面板模块、宿主侧 subagentAdmin 服务与工具名种子模块，以及 `src/client/native-coverage.js` 的对应行、`lib/panel-ids.js` 的 `subagents`、`lib/rpc-manifest.js` 的 `subagentAdmin` 命名空间、`lib/audit-log.js` 的审计行、`lib/index.js` 的挂载与描述符）。官方 `ui-settings-subagent` 已覆盖这条邻域（深度 / 容量 / 模型），插件再维护一份具名委派实例 + persona + 工具约束 + CLI 后端的**编写侧**面板不划算：它带来 13 个 RPC 面、一个 150 KB 级的宿主模块和一套只有它用的表单控件。设置里从此只有十个面板。
   随之收敛：`panels` 三态开关的面板 id 从 11 个减到 10 个（**旧配置里的 `subagents: 'on' | 'off'` 会在挂载期报错**，这正是"写错必须响亮失败"的既有约定）；`ctx.subagents` 宿主服务本身不受影响（工作流引擎仍以它为硬依赖，缺了才降级）；只被该面板使用的 Picker 组件、`.sa-picker*` / 段式页签样式与 140 条 i18n 文案一并删除，其中 `.tabs` / `.tab` / `.form` / `.form-actions` / `.field` 这些**其它面板也在渲染**的共享配方迁到 `src/client/styles.js` 的统一表并重新挂根。子智能体相关的三个 verify 脚本与它们在 `run-gate` 里的步骤删除。
 
+[1.38.0]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.37.0...v1.38.0
+[1.37.0]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.36.0...v1.37.0
+[1.36.0]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.34.1...v1.35.0
 [1.34.1]: https://github.com/deepseek-ai/dsh-plugin-admin/compare/v1.34.0...v1.34.1
 

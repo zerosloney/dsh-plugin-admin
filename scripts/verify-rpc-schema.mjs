@@ -29,12 +29,11 @@ const EXPECTED_OPTIONAL = Object.freeze({
   'workflowAdmin/listSaved': Object.freeze(['spec']),
   'workspaceAdmin/create': Object.freeze(['title']),
   'workspaceAdmin/insertBefore': Object.freeze(['beforeWorkspaceId']),
-  'webSearchAdmin/saveConfig': Object.freeze(['expectedRevision']),
 })
-/** Wires the gateway must reject when omitted: 77 declared − 6 optional. */
-const EXPECTED_REQUIRED = 71
-/** The optional wire count is the contract too (6). */
-const EXPECTED_OPTIONAL_COUNT = 6
+/** Wires the gateway must reject when omitted: 69 declared − 5 optional. */
+const EXPECTED_REQUIRED = 64
+/** The optional wire count is the contract too (5). */
+const EXPECTED_OPTIONAL_COUNT = 5
 
 const results = []
 const check = (name, fn) => {
@@ -51,9 +50,7 @@ const check = (name, fn) => {
 /** Values that must never pass a schema of the given name. */
 const WRONG = {
   text: [1, true, null, {}, ['a']],
-  scalar: [{}, ['a']],
   boolean: ['true', 1, null],
-  textList: ['a', [1], [null], {}],
   entry: ['a', 1, null, ['a']],
   json: [Number.NaN, Number.POSITIVE_INFINITY, { a: undefined }, () => {}],
 }

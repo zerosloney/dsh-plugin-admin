@@ -43,14 +43,14 @@ const callSites = new Set()
 for (const match of src.matchAll(/\bdshT\('((?:[^'\\]|\\.)*)'\)/g)) {
   callSites.add(decode(match[1]))
 }
-assert.ok(callSites.size > 600, `dshT call sites present (found ${callSites.size})`)
+assert.ok(callSites.size > 500, `dshT call sites present (found ${callSites.size})`)
 
 // -- 2. dictionary entries parse out of the injected table -------------------
 const dict = new Map()
 for (const match of src.matchAll(/^ {2}("(?:[^"\\]|\\.)*"): (""|"(?:[^"\\]|\\.)*"),$/gm)) {
   dict.set(JSON.parse(match[1]), JSON.parse(match[2]))
 }
-assert.ok(dict.size > 600, `I18N_EN entries parsed (found ${dict.size})`)
+assert.ok(dict.size > 500, `I18N_EN entries parsed (found ${dict.size})`)
 
 // -- 3. the exempt classes ----------------------------------------------------
 // The CSS selector probes are GONE: the menu injection picks its aria-label
@@ -118,10 +118,6 @@ const ALLOWED_BARE_CJK = [
   { text: 'ui-commands（客户端命令 API', why: '官方覆盖数据表' },
   { text: '钩子', why: '官方覆盖数据表' },
   { text: '无（宿主 hook 协议', why: '官方覆盖数据表' },
-  { text: 'Web 与会话', why: '官方覆盖数据表' },
-  { text: 'ui-workspace（浏览/归档/重命名/分叉）', why: '官方覆盖数据表' },
-  { text: 'Web 搜索', why: '官方覆盖数据表' },
-  { text: 'ui-settings-web-search（官方 provider 的配置页）', why: '官方覆盖数据表' },
   { text: '用量仪表盘', why: '官方覆盖数据表' },
   { text: '无（dsh 的 token 记账只存在于会话日志）', why: '官方覆盖数据表' },
   { text: '自动化', why: '官方覆盖数据表' },

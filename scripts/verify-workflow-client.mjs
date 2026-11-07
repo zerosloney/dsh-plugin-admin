@@ -4,8 +4,8 @@
  * 跑法：node scripts/verify-workflow-client.mjs
  *
  * 用 jsdom 真实渲染 WorkflowSection（与 self-check.mjs 同一套装载方式），
- * mock RPC 层，验证：面板装载 / 标签切换 / 运行卡片渲染 / 启动诊断回显 /
- * 工作库保存-列表-删除 / 降级提示。
+ * mock RPC 层，验证单视图工作流面板：一键生成（startRun → 轮询 getRun →
+ * 自动存库）/ 模板草稿 / 工作库编辑-保存-删除 / 降级提示。
  */
 
 import assert from 'node:assert/strict'
@@ -87,85 +87,23 @@ assert.ok(typeof WorkflowSection === 'function', 'WorkflowSection exported for t
 
 console.log('WorkflowSection:')
 
-await checkAsync('renders empty runs tab + new-run button', async () => {
+await checkAsync('renders the single view: generator card, two templates, library hint — no tabs, no run console', async () => {
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  assert.ok(panel.text().includes('暂无运行'), 'empty hint shown')
-  assert.ok(panel.container.querySelector('button'), 'has buttons')
-  panel.unmount()
-})
-
-await checkAsync('renders run cards with status pills', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({
-      ok: true,
-      value: { active: [
-        { id: 'wf_1', label: 'audit', status: 'running', stepCount: 3 },
-        { id: 'wf_2', label: 'migrate', status: 'completed', stepCount: 10, durationMs: 12340 },
-      ] },
-    }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-  }
-  const panel = renderPanel(makeCall(rpc))
-  await new Promise((r) => setTimeout(r, 30))
   const text = panel.text()
-  assert.ok(text.includes('audit'), 'run label rendered')
-  assert.ok(text.includes('运行中'), 'running pill rendered')
-  assert.ok(text.includes('已完成'), 'completed pill rendered')
-  assert.ok(text.includes('migrate'), 'second run rendered')
-  panel.unmount()
-})
-
-await checkAsync('stop button only on running runs', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({
-      ok: true,
-      value: { active: [
-        { id: 'wf_1', label: 'a', status: 'running' },
-        { id: 'wf_2', label: 'b', status: 'errored' },
-      ] },
-    }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-  }
-  const panel = renderPanel(makeCall(rpc))
-  await new Promise((r) => setTimeout(r, 30))
-  // 每个 .card 是一条运行；停止只在 running 卡片上，续跑只在 errored 卡片上
-  const cards = [...panel.queryAll('.card')].map((c) => ({
-    text: c.textContent,
-    buttons: [...c.querySelectorAll('button')].map((b) => b.textContent),
-  }))
-  const runningCard = cards.find((c) => c.text.includes('a'))
-  const failedCard = cards.find((c) => c.text.includes('b'))
-  assert.ok(runningCard && failedCard, 'both run cards rendered')
-  assert.ok(runningCard.buttons.some((t) => t.includes('⏹ 停止')), 'stop button on running card')
-  assert.ok(!runningCard.buttons.some((t) => t.includes('▶ 续跑')), 'resume absent on running card')
-  assert.ok(!failedCard.buttons.some((t) => t.includes('⏹ 停止')), 'stop absent on errored card')
-  assert.ok(failedCard.buttons.some((t) => t.includes('▶ 续跑')), 'resume on errored card')
-  panel.unmount()
-})
-
-await checkAsync('tabs switch to saved library', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [
-      { name: 'audit', scope: 'global', description: '审查代码' },
-      { name: 'migrate', scope: 'project' },
-    ] }),
-  }
-  const panel = renderPanel(makeCall(rpc))
-  await new Promise((r) => setTimeout(r, 30))
-  const savedTab = [...panel.queryAll('button')].find((b) => b.textContent.includes('工作库'))
-  assert.ok(savedTab, 'saved tab button exists')
-  savedTab.click()
-  await new Promise((r) => setTimeout(r, 30))
-  const text = panel.text()
-  assert.ok(text.includes('audit'), 'saved entry rendered')
-  assert.ok(text.includes('全局'), 'global scope pill rendered')
-  assert.ok(text.includes('项目'), 'project scope pill rendered')
+  assert.ok(text.includes('一键生成工作流'), 'generator card rendered')
+  assert.ok(text.includes('从模板开始'), 'template row header rendered')
+  assert.ok(text.includes('总结一个主题') && text.includes('并行双角度分析'), 'both template cards rendered')
+  assert.ok(!text.includes('分步润色流水线'), 'the third template is gone')
+  assert.ok(text.includes('工作库'), 'library area rendered')
+  assert.ok(!text.includes('运行 ('), 'no 运行 tab remains')
+  assert.ok(!panel.container.querySelector('[role="tablist"]'), 'no tablist in the single view')
+  assert.ok(!text.includes('新建工作流'), 'no new-workflow button remains')
+  assert.ok(text.includes('工作库为空'), 'empty-library hint guides to generate/templates')
   panel.unmount()
 })
 
@@ -182,106 +120,71 @@ await checkAsync('degrades when engine unavailable', async () => {
   panel.unmount()
 })
 
-await checkAsync('editor opens with example script', async () => {
+await checkAsync('library rows render with scope pills and no run button', async () => {
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [
+      { name: 'audit', scope: 'global', description: '审查代码' },
+      { name: 'migrate', scope: 'project' },
+    ] }),
   }
   const panel = renderPanel(makeCall(rpc))
-  await new Promise((r) => setTimeout(r, 30))
-  const newBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('新建工作流'))
-  assert.ok(newBtn, 'new-run button exists')
-  newBtn.click()
   await new Promise((r) => setTimeout(r, 30))
   const text = panel.text()
-  assert.ok(text.includes('parallel('), 'example script prefilled')
-  assert.ok(text.includes('🚀 启动'), 'submit button rendered')
+  assert.ok(text.includes('audit'), 'saved entry rendered')
+  assert.ok(text.includes('全局'), 'global scope pill rendered')
+  assert.ok(text.includes('项目'), 'project scope pill rendered')
+  const rowButtons = [...panel.queryAll('.card button')].map((b) => b.textContent)
+  assert.ok(rowButtons.some((t) => t.includes('编辑')), 'edit button on rows')
+  assert.ok(!rowButtons.some((t) => t.includes('🚀 运行')), 'no run button on rows')
   panel.unmount()
 })
 
-await checkAsync('run editor offers a parent-session picker when several sessions are live', async () => {
+await checkAsync('clicking a template card opens a saved-entry draft', async () => {
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    // 未 mock sessionAdmin/list 时 makeCall 返回 {ok:false}，面板必须软失败不受阻塞。
-    'sessionAdmin/list': () => ({
-      ok: true,
-      value: { sessions: [
-        { id: 'sess-a', live: true, title: 'Alpha', cwd: '/a' },
-        { id: 'sess-b', live: true, title: 'Beta', cwd: '/b' },
-      ] },
-    }),
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  const newBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('新建工作流'))
-  newBtn.click()
+  const tplCard = [...panel.queryAll('[role="button"]')].find((el) => el.textContent === '总结一个主题')
+  assert.ok(tplCard, 'the first template card is in the document')
+  tplCard.click()
   await new Promise((r) => setTimeout(r, 30))
+  const text = panel.text()
+  assert.ok(text.includes('保存到工作库'), 'the saved-entry editor opened')
+  const nameInput = panel.queryAll('input')[0]
+  assert.equal(nameInput.value, 'topic-summary', 'draft name prefilled with the legal kebab-case name')
   const select = panel.container.querySelector('select')
-  assert.ok(select, 'parent session picker rendered')
-  assert.equal(select.value, 'sess-a', 'auto-selects the first live session')
-  assert.ok(panel.text().includes('Alpha · /a'), 'picker lists live sessions with title + cwd')
+  assert.equal(select.value, 'global', 'draft scope is global')
+  assert.ok(select.disabled, 'scope select locked (panel only writes global)')
+  const ta = panel.queryAll('textarea')[0]
+  assert.ok(ta.value.includes('var summary = await agent('), 'the template script prefills the draft')
   panel.unmount()
 })
 
-await checkAsync('compile diagnostics surface in editor', async () => {
+await checkAsync('saving a template draft calls saveSaved and refreshes the library', async () => {
+  const saves = []
+  let listSavedCalls = 0
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    // 网关形状：宿主载荷包在 { ok, value } 里（真实 rpc.call 的返回即此形状）。
-    'workflowAdmin/startRun': (spec) => ({
-      ok: true,
-      value: { id: null, status: 'errored', diagnostics: [{ category: 'error', message: 'Unexpected token' }] },
-    }),
+    'workflowAdmin/listSaved': () => { listSavedCalls += 1; return { ok: true, value: [] } },
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
   }
-  const call = makeCall(rpc)
-  const panel = renderPanel(call)
+  const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  const newBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('新建工作流'))
-  newBtn.click()
+  const tplCard = [...panel.queryAll('[role="button"]')].find((el) => el.textContent === '总结一个主题')
+  tplCard.click()
   await new Promise((r) => setTimeout(r, 30))
-  const submit = [...panel.queryAll('button')].find((b) => b.textContent.includes('🚀 启动'))
-  submit.click()
-  await new Promise((r) => setTimeout(r, 50))
-  assert.ok(panel.text().includes('Unexpected token'), 'diagnostic shown in editor')
-  panel.unmount()
-})
-
-await checkAsync('successful start switches to runs tab via the gateway envelope', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [{ id: 'wf_1_abc', label: 'w', status: 'running' }] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_9_xyz', status: 'running', diagnostics: [] } }),
-  }
-  const call = makeCall(rpc)
-  const panel = renderPanel(call)
+  const saveBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('💾 保存'))
+  saveBtn.click()
   await new Promise((r) => setTimeout(r, 30))
-  const newBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('新建工作流'))
-  newBtn.click()
-  await new Promise((r) => setTimeout(r, 30))
-  const submit = [...panel.queryAll('button')].find((b) => b.textContent.includes('🚀 启动'))
-  submit.click()
-  await new Promise((r) => setTimeout(r, 50))
-  // toast 渲染在 document.body 单例上，不在面板容器内。
-  assert.ok(document.body.textContent.includes('🚀 工作流已启动'), 'success toast shown')
-  assert.ok(panel.text().includes('w'), 'switched to the runs tab (run row visible)')
-  panel.unmount()
-})
-
-await checkAsync('stop surfaces the abandoned warning from the envelope', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [{ id: 'wf_1_abc', label: 'w', status: 'running' }] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    'workflowAdmin/stopRun': () => ({ ok: true, value: { stopped: true, reason: 'panel', abandoned: true } }),
-  }
-  const call = makeCall(rpc)
-  const panel = renderPanel(call)
-  await new Promise((r) => setTimeout(r, 30))
-  const stopBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('⏹'))
-  assert.ok(stopBtn, 'stop button rendered for the active run')
-  stopBtn.click()
-  await new Promise((r) => setTimeout(r, 50))
-  assert.ok(document.body.textContent.includes('未在预算内落定'), 'abandoned warning shown')
+  assert.equal(saves.length, 1, 'saveSaved called once')
+  assert.equal(saves[0].spec.name, 'topic-summary', 'the draft name is saved')
+  assert.equal(saves[0].spec.scope, 'global', 'panel saves write global scope')
+  assert.ok(saves[0].spec.script.includes('var summary = await agent('), 'the template script is saved')
+  assert.ok(document.body.textContent.includes('💾 已保存：topic-summary'), 'saved toast shown')
+  assert.ok(listSavedCalls >= 2, 'the library list is re-read after the save')
   panel.unmount()
 })
 
@@ -289,20 +192,46 @@ await checkAsync('saved editor validates empty name', async () => {
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    'workflowAdmin/saveSaved': () => ({ ok: true, record: { name: 'x' } }),
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  const savedTab = [...panel.queryAll('button')].find((b) => b.textContent.includes('工作库'))
-  savedTab.click()
+  const tplCard = [...panel.queryAll('[role="button"]')].find((el) => el.textContent === '总结一个主题')
+  tplCard.click()
   await new Promise((r) => setTimeout(r, 30))
-  const newSaved = [...panel.queryAll('button')].find((b) => b.textContent.includes('保存一个工作流'))
-  newSaved.click()
+  // 清空名称输入（React 受控 input：直接调节点上的 onChange）
+  const nameInput = panel.queryAll('input')[0]
+  const propsKey = Object.keys(nameInput).find((k) => k.startsWith('__reactProps'))
+  nameInput[propsKey].onChange({ target: { value: '' } })
   await new Promise((r) => setTimeout(r, 30))
   const saveBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('💾 保存'))
   saveBtn.click()
   await new Promise((r) => setTimeout(r, 30))
   assert.ok(panel.text().includes('名称和脚本不能为空'), 'validation error shown')
+  panel.unmount()
+})
+
+await checkAsync('edit saved row opens the editor locked to its scope and saves back', async () => {
+  const saves = []
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [{ name: 'audit', scope: 'global', script: 'return 1', description: '审查代码' }] }),
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  const editBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('编辑'))
+  editBtn.click()
+  await new Promise((r) => setTimeout(r, 30))
+  const nameInput = panel.queryAll('input')[0]
+  assert.equal(nameInput.value, 'audit', 'editor prefilled with the entry name')
+  const select = panel.container.querySelector('select')
+  assert.equal(select.value, 'global', 'scope locked to the original value')
+  assert.ok(select.disabled, 'scope select disabled while editing')
+  const saveBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('💾 保存'))
+  saveBtn.click()
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(saves.length, 1, 'saveSaved called once')
+  assert.equal(saves[0].spec.name, 'audit', 'the edit saves back under the same name')
   panel.unmount()
 })
 
@@ -315,9 +244,6 @@ await checkAsync('delete saved has two-step confirm', async () => {
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  const savedTab = [...panel.queryAll('button')].find((b) => b.textContent.includes('工作库'))
-  savedTab.click()
-  await new Promise((r) => setTimeout(r, 30))
   const delBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('🗑 删除'))
   delBtn.click()
   await new Promise((r) => setTimeout(r, 30))
@@ -329,31 +255,7 @@ await checkAsync('delete saved has two-step confirm', async () => {
   panel.unmount()
 })
 
-await checkAsync('run detail loads and shows script', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({
-      ok: true,
-      value: { active: [{ id: 'wf_1', label: 'audit', status: 'completed', stepCount: 2 }] },
-    }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
-    'workflowAdmin/getRun': (args) => ({
-      ok: true,
-      value: { id: args.runId, label: 'audit', status: 'completed', script: 'return 42', result: 42, log: [{ kind: 'log', message: 'hi' }] },
-    }),
-  }
-  const panel = renderPanel(makeCall(rpc))
-  await new Promise((r) => setTimeout(r, 30))
-  const detailBtn = [...panel.queryAll('button')].find((b) => b.textContent === '详情')
-  detailBtn.click()
-  await new Promise((r) => setTimeout(r, 30))
-  const text = panel.text()
-  assert.ok(text.includes('return 42'), 'script shown in detail')
-  assert.ok(text.includes('42'), 'result shown')
-  assert.ok(text.includes('[log] hi'), 'log entry rendered')
-  panel.unmount()
-})
-
-// ─── 一键生成（v1.38）：表单 → startRun 生成器脚本 → 终态自动存库 ─────────────
+// ─── 一键生成：表单 → startRun 生成器脚本 → 轮询 getRun → 终态自动存库 ──────
 
 /** React 受控 textarea 的填充：直接调节点上挂着的 React onChange——synthetic
  * dispatchEvent 过不了 React 的 value tracker（bench-client-render.mjs 同款坑），
@@ -367,23 +269,22 @@ function fillTextarea(panel, index, value) {
   ta[propsKey].onChange({ target: { value } })
 }
 
-await checkAsync('one-click generate opens the generator form', async () => {
-  const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
-    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+async function submitGeneration(panel, description, name) {
+  fillTextarea(panel, 0, description)
+  if (name !== undefined) {
+    // 名称输入（可选）：与 textarea 同款坑，必须直接调节点上的 React onChange。
+    const nameInput = panel.queryAll('input')[0]
+    const propsKey = Object.keys(nameInput).find((k) => k.startsWith('__reactProps'))
+    nameInput[propsKey].onChange({ target: { value: name } })
   }
-  const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  const genBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成'))
-  assert.ok(genBtn, 'toolbar generate button exists')
-  genBtn.click()
-  await new Promise((r) => setTimeout(r, 30))
-  assert.ok(panel.text().includes('一键生成工作流'), 'generator form header rendered')
-  assert.ok(panel.text().includes('生成需一次子代理调用'), 'generator form hint rendered')
-  panel.unmount()
-})
+  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+  assert.ok(goBtn, 'generator submit button rendered')
+  goBtn.click()
+  await new Promise((r) => setTimeout(r, 50))
+}
 
-await checkAsync('generate submit launches the generator script via startRun', async () => {
+await checkAsync('generate submit launches the generator script via startRun and shows the busy card', async () => {
   let started = null
   const rpc = {
     'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
@@ -392,75 +293,187 @@ await checkAsync('generate submit launches the generator script via startRun', a
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
-  await new Promise((r) => setTimeout(r, 30))
-  fillTextarea(panel, 0, '审查代码')
-  await new Promise((r) => setTimeout(r, 30))
-  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
-  assert.ok(goBtn, 'generator submit button rendered')
-  goBtn.click()
-  await new Promise((r) => setTimeout(r, 50))
+  await submitGeneration(panel, '审查代码', 'review-flow')
   assert.ok(started, 'startRun called')
   assert.ok(started.spec.script.includes('await agent('), 'spec carries the generator script (subagent prompt)')
   assert.ok(started.spec.label.startsWith('✨ '), 'label carries the ✨ prefix')
   assert.equal(started.spec.args.description, '审查代码', 'args.description passes through')
-  assert.ok(!panel.text().includes('生成需一次子代理调用'), 'form closed after submit')
+  assert.equal(started.spec.args.name, 'review-flow', 'args.name passes the optional label through (the generator script reads args.name)')
+  assert.ok(!('nameHint' in started.spec.args), 'the legacy nameHint field is gone from the payload')
   assert.ok(document.body.textContent.includes('已开始生成'), 'accepted toast shown')
+  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('生成中…'))
+  assert.ok(goBtn, 'the generator card shows the generating state')
+  assert.ok(goBtn.disabled, 'the submit button is disabled while generating')
   panel.unmount()
 })
 
-await checkAsync('a completed generator run auto-saves into the library with a deduped name', async () => {
+await checkAsync('a completed generation polls getRun and auto-saves into the library with a deduped name', async () => {
   const started = { current: null }
   const saves = []
-  let active = []
+  const getRunCalls = []
   const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active } }),
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [{ name: 'wf-dup', scope: 'global' }] }),
     'workflowAdmin/startRun': (args) => { started.current = args; return { ok: true, value: { id: 'wf_gen_2', status: 'running' } } },
-    'workflowAdmin/getRun': (a) => ({ ok: true, value: { id: a.runId, status: 'completed', result: { name: 'wf-dup', script: 'return 1' } } }),
+    'workflowAdmin/getRun': (a) => { getRunCalls.push(a.runId); return { ok: true, value: { id: a.runId, status: 'completed', result: { name: 'wf-dup', script: 'return 1' } } } },
     'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
-  await new Promise((r) => setTimeout(r, 30))
-  fillTextarea(panel, 0, '审查代码')
-  await new Promise((r) => setTimeout(r, 30))
-  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成')).click()
-  // 提交后该 run 直接落 completed（reload 的 listRuns 会读到这一状态并结算）。
-  active = [{ id: 'wf_gen_2', label: '✨ 审查代码', status: 'completed' }]
-  await new Promise((r) => setTimeout(r, 100))
+  await submitGeneration(panel, '审查代码')
+  // 首次轮询在 2s 后；等待 getRun 落 completed → 自动存库 → toast。
+  await new Promise((r) => setTimeout(r, 2400))
+  assert.ok(getRunCalls.includes('wf_gen_2'), 'the panel polled workflowAdmin/getRun for the generator run')
   assert.equal(saves.length, 1, 'saveSaved called exactly once')
   assert.equal(saves[0].spec.name, 'wf-dup-2', 'name deduped against the existing global entry (-2)')
   assert.equal(saves[0].spec.scope, 'global', 'auto-save writes global scope')
   assert.equal(saves[0].spec.script, 'return 1', 'the returned script is saved')
   assert.equal(saves[0].spec.description, '审查代码', 'the one-line description is stored')
   assert.ok(document.body.textContent.includes('已保存到工作库：wf-dup-2'), 'saved toast shown')
+  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+  assert.ok(goBtn && !goBtn.disabled, 'the generator card is idle again after settling')
   panel.unmount()
 })
 
-await checkAsync('an errored generator run toasts failure and never calls saveSaved', async () => {
+await checkAsync('an errored generation toasts failure and never calls saveSaved', async () => {
   const saves = []
-  let active = []
   const rpc = {
-    'workflowAdmin/listRuns': () => ({ ok: true, value: { active } }),
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
     'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
     'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_gen_3', status: 'running' } }),
     'workflowAdmin/getRun': () => ({ ok: true, value: { id: 'wf_gen_3', status: 'errored' } }),
-    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, record: { name: args.spec.name } } },
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
   }
   const panel = renderPanel(makeCall(rpc))
   await new Promise((r) => setTimeout(r, 30))
-  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('一键生成')).click()
-  await new Promise((r) => setTimeout(r, 30))
-  fillTextarea(panel, 0, '审查代码')
-  await new Promise((r) => setTimeout(r, 30))
-  ;[...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成')).click()
-  active = [{ id: 'wf_gen_3', label: '✨ 审查代码', status: 'errored', error: '子代理没有返回脚本内容' }]
-  await new Promise((r) => setTimeout(r, 100))
+  await submitGeneration(panel, '审查代码')
+  await new Promise((r) => setTimeout(r, 2400))
   assert.deepEqual(saves, [], 'saveSaved never called on failure')
   assert.ok(document.body.textContent.includes('工作流生成失败'), 'failure toast shown')
+  const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+  assert.ok(goBtn && !goBtn.disabled, 'the generator card is idle again after settling')
   panel.unmount()
+})
+
+await checkAsync('listSaved failure fails closed: the auto-save name carries a timestamp suffix and cannot overwrite an existing entry', async () => {
+  const saves = []
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: false, error: 'storage unavailable' }),
+    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_gen_4', status: 'running' } }),
+    'workflowAdmin/getRun': () => ({ ok: true, value: { id: 'wf_gen_4', status: 'completed', result: { name: 'my-flow', script: 'return 2' } } }),
+    'workflowAdmin/saveSaved': (args) => { saves.push(args); return { ok: true, value: { ok: true, record: { name: args.spec.name } } } },
+  }
+  const panel = renderPanel(makeCall(rpc))
+  await new Promise((r) => setTimeout(r, 30))
+  await submitGeneration(panel, '审查代码')
+  await new Promise((r) => setTimeout(r, 2400))
+  assert.equal(saves.length, 1, 'saveSaved still called exactly once without the dedup list')
+  assert.notEqual(saves[0].spec.name, 'my-flow', 'the bare name is never saved blind (saveSaved is an overwrite-by-name write)')
+  assert.match(saves[0].spec.name, /^my-flow-[0-9a-z]+$/, 'the saved name carries a base36 timestamp suffix')
+  assert.equal(saves[0].spec.script, 'return 2', 'the returned script is still auto-saved')
+  assert.ok(document.body.textContent.includes('已保存到工作库：my-flow-'), 'saved toast shows the suffixed name')
+  panel.unmount()
+})
+
+// ─── 轮询放弃：退避时间线共 150s 虚拟时间，用假时钟压缩 ─────────────────────
+// ≥1000ms 的 setTimeout 进虚拟时钟（轮询退避 2s..30s 全部落在这半边），更短
+// 的延时照走真实时钟（测试自身的节奏等待、toast 淡出等），restore 恢复原样。
+function makeFakeClock() {
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  let now = 0
+  let seq = 0
+  const virtual = new Map()
+  globalThis.setTimeout = (fn, delay) => {
+    delay = delay || 0
+    if (delay < 1000) return realSetTimeout(fn, delay)
+    const id = ++seq
+    virtual.set(id, { fn, at: now + delay })
+    return id
+  }
+  globalThis.clearTimeout = (id) => {
+    if (virtual.has(id)) { virtual.delete(id); return }
+    return realClearTimeout(id)
+  }
+  async function advance(ms) {
+    const end = now + ms
+    for (;;) {
+      let dueId = null
+      let dueAt = Infinity
+      for (const [id, t] of virtual) {
+        if (t.at <= end && t.at < dueAt) { dueId = id; dueAt = t.at }
+      }
+      if (dueId === null) break
+      const t = virtual.get(dueId)
+      virtual.delete(dueId)
+      now = dueAt
+      t.fn()
+      // 每个 timer 之间让真实事件循环转一圈：promise 链与 React 更新得以落地
+      await new Promise((resolve) => realSetTimeout(resolve, 0))
+    }
+    now = end
+  }
+  return {
+    advance,
+    restore: () => {
+      globalThis.setTimeout = realSetTimeout
+      globalThis.clearTimeout = realClearTimeout
+    },
+  }
+}
+
+await checkAsync('getRun transport failures give up after 8 attempts: busy resets, an error toast appears and polling stops', async () => {
+  let getRunCalls = 0
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_gen_fail', status: 'running' } }),
+    'workflowAdmin/getRun': () => { getRunCalls += 1; return { ok: false, error: 'gateway down' } },
+  }
+  const clock = makeFakeClock()
+  try {
+    const panel = renderPanel(makeCall(rpc))
+    await new Promise((r) => setTimeout(r, 30))
+    await submitGeneration(panel, '审查代码')
+    // 退避时间线 2s+4s+8s+16s+30s*4 = 150s：恰 8 次失败后放弃。
+    await clock.advance(150000)
+    assert.equal(getRunCalls, 8, 'polling stops after exactly 8 failed attempts')
+    assert.ok(document.body.textContent.includes('生成状态查询失败，已停止跟踪：wf_gen_fail'), 'give-up error toast shown with the runId')
+    const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+    assert.ok(goBtn && !goBtn.disabled, 'the generator card is usable again after giving up')
+    assert.ok(!panel.text().includes('生成中…'), 'no generating state remains on the card')
+    assert.ok(!panel.text().includes('已开始生成，完成后自动存入工作库'), 'the run left the generating ledger')
+    await clock.advance(60000)
+    assert.equal(getRunCalls, 8, 'no further polls after giving up')
+    panel.unmount()
+  } finally {
+    clock.restore()
+  }
+})
+
+await checkAsync('a missing run record counts as a polling failure and gives up the same way', async () => {
+  let getRunCalls = 0
+  const rpc = {
+    'workflowAdmin/listRuns': () => ({ ok: true, value: { active: [] } }),
+    'workflowAdmin/listSaved': () => ({ ok: true, value: [] }),
+    'workflowAdmin/startRun': () => ({ ok: true, value: { id: 'wf_gen_gone', status: 'running' } }),
+    'workflowAdmin/getRun': () => { getRunCalls += 1; return { ok: true, value: null } },
+  }
+  const clock = makeFakeClock()
+  try {
+    const panel = renderPanel(makeCall(rpc))
+    await new Promise((r) => setTimeout(r, 30))
+    await submitGeneration(panel, '审查代码')
+    await clock.advance(150000)
+    assert.equal(getRunCalls, 8, 'missing records count as failures instead of resetting the count')
+    assert.ok(document.body.textContent.includes('生成状态查询失败，已停止跟踪：wf_gen_gone'), 'give-up error toast shown')
+    const goBtn = [...panel.queryAll('button')].find((b) => b.textContent.includes('✨ 生成'))
+    assert.ok(goBtn && !goBtn.disabled, 'the generator card is usable again after giving up')
+    panel.unmount()
+  } finally {
+    clock.restore()
+  }
 })
 
 // ─── 结果 ─────────────────────────────────────────────────────────────────────

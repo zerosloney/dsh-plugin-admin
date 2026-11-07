@@ -448,8 +448,6 @@ function downloadTextFile(filename, text) {
 // Labels carry no emoji either: the injected svg is the row's only glyph, so an
 // emoji prefix in the text would paint a second, unrelated one beside it.
 //
-// Web 与会话 carries the search-history glyph: a magnifier whose lens is a
-// clock — Web 搜索's circle-plus-handle over 历史会话's clock hands.
 /** Keyed by the zh-CN label (post-i18nSource) — indexed by DOM text, so the
  * Record view is the honest model, like I18N_EN. Only these plugin-owned labels
  * are ever touched: a label outside this table is left exactly as the shell
@@ -459,7 +457,6 @@ var SETTINGS_NAV_ICONS = {
   'MCP服务器': '<rect x="2.25" y="2.25" width="11.5" height="4.75" rx="1.2"/><rect x="2.25" y="9" width="11.5" height="4.75" rx="1.2"/><circle cx="5" cy="4.62" r="0.95" fill="currentColor" stroke="none"/><circle cx="5" cy="11.38" r="0.95" fill="currentColor" stroke="none"/>',
   '用量仪表盘': '<path d="M3.5 13V8.5"/><path d="M8 13V3"/><path d="M12.5 13V6"/>',
   '自动化': '<circle cx="8" cy="8" r="5.6"/><path d="M9.2 4.8L6.7 8.6h2.3l-2 3.3"/>',
-  'Web 与会话': '<circle cx="7" cy="7" r="4.8"/><path d="M7 4.8V7l1.8 1.2"/><path d="M10.6 10.6l2.6 2.6"/>',
   '工作流': '<circle cx="4" cy="4" r="1.8"/><circle cx="4" cy="12" r="1.8"/><circle cx="12" cy="8" r="1.8"/><path d="M5.8 4h2.4a2 2 0 0 1 2 2v.4M5.8 12h2.4a2 2 0 0 0 2-2v-.4"/>',
 }
 
@@ -774,18 +771,10 @@ function notifyPanelsLoaded() {
   panelsWatchers.forEach(function (/** @type {() => void} */ watcher) { watcher() })
 }
 /**
- * Panel-level switch resolver (set by apply() once the policy pipeline exists;
- * null before that and in standalone test mounts). Shared-slot panels (the
- * web 搜索 tab) consult it because slot-level uninstall cannot reach them.
- * @type {((panel: string) => boolean) | null}
- */
-var panelHiddenResolver = null
-
-/**
- * Tab-level switch resolver (set by apply() beside the panel one). A coverage
- * row whose `scope` is 'tabs' retires only the named tabs, so the panel stays
- * registered and its own tab strip asks this instead. Null before apply() and
- * in standalone mounts, where nothing is hidden.
+ * Tab-level switch resolver (set by apply()). A coverage row whose `scope` is
+ * 'tabs' retires only the named tabs, so the panel stays registered and its
+ * own tab strip asks this instead. Null before apply() and in standalone
+ * mounts, where nothing is hidden.
  * @type {((panel: string, tab: string) => boolean) | null}
  */
 var tabHiddenResolver = null
@@ -816,11 +805,6 @@ function loadPanels() {
           copyTextToClipboard: copyTextToClipboard,
           copyTextSilently: copyTextSilently,
           downloadTextFile: downloadTextFile,
-          // Shared-slot panels resolve the three-state switch through this
-          // (apply() installs the real resolver; standalone mounts stay open).
-          panelHidden: function (/** @type {string} */ panel) {
-            return typeof panelHiddenResolver === 'function' ? panelHiddenResolver(panel) === true : false
-          },
           // Tab-level twin: a 'tabs'-scoped coverage hit retires one tab of a
           // panel that still registers (自动化's cron tab when ui-schedule is
           // mounted). Read at render time, so a late host answer re-renders.
@@ -1027,50 +1011,6 @@ function apply(ctx) {
     return ctx.connection.rpc.call('/api', method, { args: args })
   }
 
-  // Host pin bridge (SOFT dependency).
-  //
-  // Session pins are durable registry state, not a UI preference:
-  // `WorkspaceRegistry.pinSession` front-inserts into `pinnedSessionIds`
-  // (packages/workspace/workspace/src/index.ts:442), the official sidebar
-  // renders that set, and it is persisted with the workspace registry. The
-  // panel used to keep its own id list in localStorage, which meant two pin
-  // sets that could disagree: pinning in the sidebar never showed in the
-  // panel and vice versa, and deleting a session left a ghost entry in
-  // whichever set the sidebar reads.
-  //
-  // `workspaces` is the browser-side Workspace Controller service
-  // (`packages/api/workspace-controller/src/client/service.ts:47-102` —
-  // `list` + `pinSession` + `unpinSession`). It is absent on a shell that
-  // mounts no workspace surface, so this stays optional: without it the panel
-  // keeps its localStorage list (and every verify script's pseudo context,
-  // which has no such service, keeps exercising that path).
-  /** @type {{ read: () => string[], subscribe: (fn: () => void) => () => void, pin: (id: string) => Promise<void>, unpin: (id: string) => Promise<void> }|null} */
-  var pinBridge = null
-  try {
-    var workspacesSvc = ctx.get && ctx.get('workspaces')
-    if (workspacesSvc !== null && workspacesSvc !== undefined
-      && workspacesSvc.list !== null && workspacesSvc.list !== undefined
-      && typeof workspacesSvc.list.getSnapshot === 'function'
-      && typeof workspacesSvc.list.subscribe === 'function'
-      && typeof workspacesSvc.pinSession === 'function'
-      && typeof workspacesSvc.unpinSession === 'function') {
-      pinBridge = {
-        read: function () {
-          try {
-            var snapshot = workspacesSvc.list.getSnapshot()
-            var ids = snapshot === null || snapshot === undefined ? null : snapshot.pinnedSessionIds
-            return Array.isArray(ids) ? ids.slice() : []
-          } catch (error) { return [] }
-        },
-        subscribe: function (listener) {
-          try { return workspacesSvc.list.subscribe(listener) } catch (error) { return function () {} }
-        },
-        pin: function (sessionId) { return Promise.resolve(workspacesSvc.pinSession(sessionId)) },
-        unpin: function (sessionId) { return Promise.resolve(workspacesSvc.unpinSession(sessionId)) },
-      }
-    }
-  } catch (e) { pinBridge = null }
-
   // Sidebar session "..." menu: the delete row, registered on the shell's own
   // slot so it lands in the menu ui-workspace owns (no DOM scraping). Mounted
   // once for the page lifetime; dispose when the plugin unmounts.
@@ -1164,9 +1104,6 @@ function apply(ctx) {
     if (state === 'on') return false
     return coverage.active[panel] === false
   }
-  // 共享 slot 的面板（Web 搜索页签）拿不到独立 slot 的卸载语义，经这个解析器
-  // 读取同一份三态决策；闭包读 panelStates，迟到的宿主答案自动生效。
-  panelHiddenResolver = yielded
   /**
    * Tab-level twin of `yielded`: a panel that stays registered may still lose
    * individual tabs to an official surface. `off` on the panel hides every tab
@@ -1185,7 +1122,7 @@ function apply(ctx) {
   }
   tabHiddenResolver = tabYielded
 
-  // The ten surfaces as data, so a late config answer can install what it enables
+  // The seven surfaces as data, so a late config answer can install what it enables
   // and uninstall what it disables. Slot names and ids are the wire the shell sees.
   var SLOT_SPECS = [
   {
@@ -1211,18 +1148,6 @@ function apply(ctx) {
               inject: function () { return { call: call } },
           },
     component: withLocale(lazyPanel('McpSection')),
-  },
-  {
-    panel: 'sessions',
-    slot: 'settings.section',
-    options:       {
-              name: 'settings.section',
-              id: 'web-sessions',
-              order: 27,
-              label: function () { return dshT('Web 与会话') },
-              inject: function () { return { call: call, refreshSessions: reconcileSessionList, forgetSession: reconcileSessionList, pinBridge: pinBridge } },
-          },
-    component: withLocale(lazyPanel('WebSessionsSection')),
   },
   {
     panel: 'commands',
@@ -1549,7 +1474,6 @@ function apply(ctx) {
     ask.then(function (result) {
       var panels = result && result.ok !== false && result.value ? result.value.panels : null
       if (panels === null || panels === undefined || typeof panels !== 'object') return
-      var webSearchWasHidden = yielded('webSearch')
       // Snapshot every tab decision BEFORE adopting the answer, so the block at
       // the end of this handler can remount only the owners whose strip really
       // flipped (not every owner on every mount).
@@ -1561,30 +1485,10 @@ function apply(ctx) {
       panelStates = panels
       writePolicyCache(panels)
       reconcileSlots()
-      // The Web 搜索 tab lives INSIDE the shared sessions slot and reads its
-      // visibility at render time; a slot-level reconcile neither re-renders
-      // nor notifies an already-mounted section, so a flipped decision left a
-      // stale tab (or hid a wanted one) until an unrelated repaint. Remount
-      // that one slot when the answer flipped it — this runs once, at mount
-      // plus one RPC round trip, before the user has scrolled anywhere.
-      //
-      // Still needed after v1.30.1, but for ONE reason only: an explicit
-      // `config.panels.webSearch: 'off'` arriving in this answer. The auto-yield
-      // path can no longer flip it (that row is scope 'none'), so the guard
-      // fires on the config answer and never on coverage.
-      if (yielded('webSearch') !== webSearchWasHidden) {
-        for (var i = 0; i < SLOT_SPECS.length; i += 1) {
-          if (SLOT_SPECS[i].panel === 'sessions') {
-            uninstallOne('sessions')
-            installOne(SLOT_SPECS[i])
-            break
-          }
-        }
-      }
-      // Same reasoning for the tab-level switch: 自动化 stays mounted while the
-      // answer can hide or restore its cron tab, and the tab strip reads the
-      // resolver at render time only. Remount when a tab decision flipped, so
-      // the strip is not left showing a tab the profile just yielded.
+      // The tab-level switch: 自动化 stays mounted while the answer can hide or
+      // restore its cron tab, and the tab strip reads the resolver at render
+      // time only. Remount when a tab decision flipped, so the strip is not
+      // left showing a tab the profile just yielded.
       for (var t = 0; t < tabOwners.length; t += 1) {
         var ownerPanel = tabOwners[t]
         var now = tabYielded(ownerPanel, coverage.hiddenTabs[ownerPanel][0]) === true
@@ -1600,8 +1504,8 @@ function apply(ctx) {
   }
 }
 
-// `loadPanels` rides the exports for the harnesses: SessionsSection /
-// WorkspacesSection / WorkflowSection now live in the chunk, so a test that
+// `loadPanels` rides the exports for the harnesses: WorkspacesSection /
+// WorkflowSection and friends live in the chunk, so a test that
 // mounts one directly asks for the module first. The dsh module loader reads
 // only `apply` / `inject`; the extra key is inert at runtime.
 

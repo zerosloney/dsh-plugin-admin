@@ -1,11 +1,11 @@
 # DSH 兼容矩阵
 
-> **验证基线：dsh 0.2.1-rc.4**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.4`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.37.0。
+> **验证基线：dsh 0.2.1-rc.4**（CI pin `deepseek-ai/deepseek-harness@dsh-v0.2.1-rc.4`）；**支持下限：dsh ≥ 0.1.7-rc.2**（CI 的 `seam-matrix` 保留该档作回归哨兵）；**声明上界：< 0.3.0**（`engines.dsh` 的右半，见「版本策略」）· 插件 v1.38.0。
 > 复现：`npm test`（含 `host-check` 与 `integration-check`）；探针指向的 checkout 可用环境变量 `DSH_CHECKOUT` 覆盖（见 `scripts/integration-check.mjs`）。
 >
-> 参数校验现状（Phase D2 已落地）：77 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
-> 校验器为零依赖手写（`lib/rpc-schema.js`，6 个 schema：text/scalar/boolean/textList/entry/json），
-> 刻意不比服务更严（不枚举 entry 字段），必填/可选为 72/6（`RPC_OPTIONAL_WIRES` + `verify-rpc-schema.mjs` 独立字面量契约）。
+> 参数校验现状（Phase D2 已落地）：69 个 wire 挂 `mode: 'strict'`，网关按 `codec.create().parse(value)` 在边界校验；
+> 校验器为零依赖手写（`lib/rpc-schema.js`，4 个 schema：text/boolean/entry/json），
+> 刻意不比服务更严（不枚举 entry 字段），必填/可选为 64/5（`RPC_OPTIONAL_WIRES` + `verify-rpc-schema.mjs` 独立字面量契约）。
 > 包级 `schemas: []` 为空是历史形态，不等于“无校验”。
 
 ## 怎么读这张表
@@ -25,8 +25,6 @@
 | 定时任务 | `ui-schedule` + `packages/schedule`（**宿主级任务页**：`schedule/catalog` 读全量、`storageDomain` 持久、带 cron 编辑 UI） | 增量（**唯一真实差异**：官方 `create(sessionId, …)` 必须绑定会话，无会话绑定的任务无官方路径；另加每任务进程内 timer 与「错过不补投」语义） | `~/.dsh/cron-tasks.json` + 每任务 timer | verify-cron-admin / verify-cron-panel |
 | Webhook 入站规则 | `packages/webhook`、`webhook-github`（无规则管理 UI） | **独占** | prefix route + `x-webhook-secret` + 去重历史；**默认仅本机**（非 loopback 与"报不出对端地址"的传输层都 403，远程需 `webhookAllowRemote`） | verify-webhook-triggers / verify-webhook-hardening |
 | 工作流（journal / 续跑 / 工作库） | `workflow` + `tool-workflow` + `ui-workflow-run` | 增量 | `node:vm` realm + JSON 桥 + 同步前缀 vm timeout + `$DSH_HOME/workflows`（同进程，非硬隔离） | verify-workflow-* |
-| 历史会话（归档清单 + 逐条删除） | `ui-workspace`（会话管理）、`session-query` | 增量（官方页浏览/归档/重命名/分叉，没有「只看归档 + 物理删除」这一口） | `sessionPersistence` + ⚠ `workspaceRegistry` 归档集 | host-check / self-check |
-| Web 搜索（provider 切换） | `ui-settings-web-search`（DeepSeek provider 配置） | 增量（exa / perplexity 装卸） | profile patch row + `settings.mutate`（有 settings 命名空间时） | verify-web-search-admin |
 | 用量仪表盘 | 无 | **独占** | `session/event` 事件流 + `$DSH_HOME/usage-ledger.json` | verify-usage-ledger |
 | 待办 dock | `ui-conversation` 的 `TodoPanel`（`conversation.input.dock` order 0） | **让位**（官方 todo 条已挂载即不注册；`dsh-admin-panels` / `config.panels.todo: 'on'` 可强制） | `conversation.input.dock` slot | verify-todo-panel |
 | 工作区管理 | `ui-workspace` + `ui-sidebar-browser` | **已退役** | —（宿主侧 `workspaceAdmin` 命名空间保留为兼容 RPC 面；服务可经 `config.workspaceAdmin: 'off'` 停挂——描述符保留、调用在网关处失败） | integration-check |
@@ -36,7 +34,7 @@
 | 接缝 | 用途 | 风险 | 现网兜底 |
 |---|---|---|---|
 | ⚠ `fiber.update(config, true)`（Cordis/loader 内部） | MCP 已挂载条目 / hooks 桥热应用 | 非公开 API，宿主重构即失效 | 两条热应用路径**收敛到 `lib/patch-utils.js:hotApplyFiberConfig()`**（能力探测 + 失败回落"需重启"提示，**永不抛**）；`integration-check` 三条探针钉住 `Fiber.update(config, noSave)` 签名、其文档语义、以及 loader 消费 `noSave` 的 `internal/update` 钩子 |
-| ⚠ `ctx.typert.register` 描述符 | 12 个命名空间的 RPC 面 | 包级 `schemas:[]` 为空，但 77 个 wire 已挂 `mode:strict` 边界校验（见下） | `lib/rpc-manifest.js` + `lib/rpc-schema.js` + `verify-rpc-schema` |
+| ⚠ `ctx.typert.register` 描述符 | 11 个命名空间的 RPC 面 | 包级 `schemas:[]` 为空，但 69 个 wire 已挂 `mode:strict` 边界校验（见下） | `lib/rpc-manifest.js` + `lib/rpc-schema.js` + `verify-rpc-schema` |
 | ⚠ `workspaceRegistry.unarchiveSession` 等动词 | 归档集清理 / 取消归档 | 版本间增删 | 挂载期能力探测 + 显式降级警告 |
 | ⚠ `agentPresets.acquireScope` 租约 | 读取预设 skill 作用域 | 与宿主 `dsh-webhook` 同款用法，属半公开 | 读毕即 dispose；失败逐作用域降级 |
 | 客户端 `slots.entries` 装配时点 | native-coverage 官方覆盖探测（自动让位） | 探测读的是 slot 列表，官方面板可能晚于本插件 `apply()` 才声明 | **v1.32.0 起已收敛**：结论不再冻结于开机快照，`impl.js` 订阅 `COVERAGE_SLOT_KEYS`（由表内 `signals` 派生）并在任一键变动时重算+对账，所以晚到的官方声明会在同一次会话内生效；`localStorage dsh-admin-panels` 仍可强制开关（native-coverage.js 的 TIMING ASSUMPTION 注释已同步改写） |
@@ -96,17 +94,15 @@ DSH_CHECKOUTS="D:/dsh/0.2.1-rc.4, D:/dsh/next" npm run test:matrix
 | MCP 服务器 | 无（仅宿主 `mcp-client`） | — | `none` | 保留（上游无 client 半） |
 | 命令 | `ui-commands`（客户端命令 API） | — | `none` | 保留（文件化管理无官方页） |
 | 钩子 | 无 UI | — | `none` | 保留 |
-| Web 与会话 | `ui-workspace`（浏览/归档/重命名/分叉） | — | `none` | 保留（「只看归档 + 物理删除」无官方页） |
-| Web 搜索 | `ui-settings-web-search`（官方 provider 配置页） | `plugins.item` 有 id `web-search` | `none` | **保留**（官方页只配官方 provider；provider 装卸切换无官方页） |
 | 用量仪表盘 | 无 | — | `none` | 保留 |
 | 自动化 | `ui-schedule`（宿主级任务页 + cron 编辑） | `sidebar.panellist` 有 id `schedules` | `tabs`（`cron`） | **仅让出「定时任务」页签**；Webhook 与工作流保留 |
 | 待办清单 | `ui-conversation` TodoPanel（`conversation.input.dock` id `todo`） | `conversation.input.dock` 有 id `todo` | `panel` | **让位**（同一 dock 位放两份待办就是重复） |
 
-**已实现的探测（4 行）**：扩展插件、Web 搜索、自动化、待办清单——每一条都读**上游源码里真实注册的 slot id**（`ui-plugin-manager` 的 `sidebar.panellist`/`plugins`、`ui-settings-plugin-inventory` 的 `settings.plugins.tab`/`all`、`ui-settings-web-search` 的 `plugins.item`、`ui-schedule` 的 `sidebar.panellist`/`schedules`、`ui-conversation` 的 `conversation.input.dock`/`todo`），并都有注释标明 file:line，便于上游重构时按图索骥。**探测为真不等于让位**——上表最后两列分开，正是因为四个真探测里只有**两个**会真正退场：`extensions`（`panel`）与 `todo`（`panel`）；`automation` 只让出一个页签（`tabs`），`webSearch` 一行都不让（`none`）。
+**已实现的探测（3 行）**：扩展插件、自动化、待办清单——每一条都读**上游源码里真实注册的 slot id**（`ui-plugin-manager` 的 `sidebar.panellist`/`plugins`、`ui-settings-plugin-inventory` 的 `settings.plugins.tab`/`all`、`ui-schedule` 的 `sidebar.panellist`/`schedules`、`ui-conversation` 的 `conversation.input.dock`/`todo`），并都有注释标明 file:line，便于上游重构时按图索骥。**探测为真不等于让位**——上表最后两列分开，正是因为三个真探测里只有**两个**会真正退场：`extensions`（`panel`）与 `todo`（`panel`）；`automation` 只让出一个页签（`tabs`）。（历史上的 `webSearch` 探测行随 Web 搜索面板的移除一并删除。）
 
 **探测何时生效（v1.32.0）**：探测读的是 shell 的 slot 列表，而官方面板可能在**本插件 `apply()` 之后**才声明（见上文「客户端 `slots.entries` 装配时点」那行风险）。因此结论不是开机快照：`impl.js` 订阅 `native-coverage.js` 导出的 `COVERAGE_SLOT_KEYS`（由表内每行的 `signals` 派生，导入期校验 `signals` 必须被 `detect()` 真的读到），任一键有声明变动就重算并按需对账。**没有 `signals` 的行会在导入期直接报错**——那正是「结论被冻结」这个 bug 的成因，不允许静默复发。
 
-**未实现的探测（5 行，仍恒为 false → 面板保留）**：MCP 服务器、命令、钩子、Web 与会话、用量仪表盘。这是刻意的：**探测不到就不让位**——把看不见的东西当作"已覆盖"会让功能凭空消失；这五项要么上游没有对应 UI（`mcp-client` 只有宿主半、hooks 只有文件），要么上游只有调用侧/浏览侧而非等价管理页（`ui-skill` 的触发卡片、`ui-commands` 的客户端命令 API、`ui-workspace` 的浏览/归档），要么根本没有第一方实现（用量台账）。后续上游补齐（例如官方 MCP 管理页）时，只需给对应行加一条 `hasSlotEntry(...)` 探测，并同步本表。
+**未实现的探测（4 行，仍恒为 false → 面板保留）**：MCP 服务器、命令、钩子、用量仪表盘。这是刻意的：**探测不到就不让位**——把看不见的东西当作"已覆盖"会让功能凭空消失；这四项要么上游没有对应 UI（`mcp-client` 只有宿主半、hooks 只有文件），要么上游只有调用侧而非等价管理页（`ui-commands` 的客户端命令 API），要么根本没有第一方实现（用量台账）。后续上游补齐（例如官方 MCP 管理页）时，只需给对应行加一条 `hasSlotEntry(...)` 探测，并同步本表。
 
 ## 会话行菜单与界面语言（客户端契约）
 
@@ -138,7 +134,7 @@ npm run smoke:real-host          # 需要 PATH 上有 dsh 与 pnpm（dsh 用它�
 | 3 浏览器半 | shell 的模块表里有 `plugins/??dsh-plugin-admin/client.js`，且取回的是**我们的字节**（`PluginsSection` 等标记） | `dsh.client` 清单被发现、产物被真实 web 服务端出来 |
 | 4 RPC | `POST /api/pluginAdmin/list` 返回 `ok:true` 且列表里是本插件；另用畸形信封确认网关回 `gateway/bad-request` | 服务真的挂上了、typert 描述符真的注册了（网关只受理已声明端点）、strict codec 真的校验了参数 |
 
-实测：当时基线 dsh `0.2.0-rc.1` 上 **28/28 通过，约 11–30 秒**（该数字尚未在新基线上复测；接缝契约探针则在 `0.2.1-rc.2`、`0.2.1-rc.3` 两个 tag 与上游 HEAD——rc.3 之后 1533 个提交——上都是 148/148 通过）；其中第 5 步用 **21 次只读调用覆盖 14 个命名空间里的 13 个**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh + pnpm → `npm run smoke:real-host`，`SMOKE_REQUIRE_DSH=1`、`SMOKE_REQUIRE_BROWSER=1`）。
+实测：当时基线 dsh `0.2.0-rc.1` 上 **28/28 通过，约 11–30 秒**（本轮在 `0.2.2-rc.1` 上复测仍为 28/28；接缝契约探针则在 `0.2.1-rc.2`、`0.2.1-rc.3` 两个 tag 与上游 HEAD——rc.3 之后 1533 个提交——上通过，当前快照为 133/133）；其中第 5 步用 **15 次只读调用扫过 10/11 个命名空间**（`fsAdmin` 唯一豁免：它只有 `reveal`，会在宿主上打开文件管理器），并显式断言**没有任何端点撞上 Cordis 的 scope guard**。CI 里 `host-smoke` 作业跑同一套（装 pin 住的 dsh + pnpm → `npm run smoke:real-host`，`SMOKE_REQUIRE_DSH=1`、`SMOKE_REQUIRE_BROWSER=1`）。
 
 v1.25.4 起还有两步：
 
@@ -147,7 +143,7 @@ v1.25.4 起还有两步：
 
 **它第一次跑就抓到一个生产 bug**（v1.25.3 修）：`projectAdmin/list` 直接读 `ctx.workspaceRegistry`，而该服务不在插件的 `inject` 声明里 —— 真实 Cordis 抛 `cannot get property "workspaceRegistry" without inject`，面板拿到 `gateway/internal`。**所有替身 ctx 的检查都看不见它**（假 ctx 没有 scope guard，host-check/self-check/30 个 verify 全绿）。同一类问题在 `lib/subagent-admin.js` 还有 4 处（`ctx.get(…) ?? ctx.<service>` 形式的回退），由随后的静态闸门抓出。因此这一层与 `scripts/verify-service-injects.mjs`（扫描 `lib/**` 里未声明的直接服务读取，进 `npm test`）是配套的：**冒烟覆盖它调用的路径，静态规则覆盖写入路径与冷分支**。
 
-这条不放进 `npm test`：它需要真实 `dsh` 且要起进程，属于"重量级但承重"的独立闸门，而不是每个开发者每次都要跑的 37 个脚本之一（`npm test` 共 42 步 = 5 道静态闸门 + 这 37 个脚本）。
+这条不放进 `npm test`：它需要真实 `dsh` 且要起进程，属于"重量级但承重"的独立闸门，而不是每个开发者每次都要跑的 36 个脚本之一（`npm test` 共 41 步 = 5 道静态闸门 + 这 36 个脚本）。
 
 ## profile 包管理器 pin（C-2）
 
@@ -197,7 +193,7 @@ v1.25.4 起还有两步：
 
 v1.29.0 的修复轮跳过了「160 处裸色值换 token」，理由是「状态色换成 token 会改浅色色相，而本轮没有截图回归能力」。本轮补上了截图能力（`npm run screenshots`），并把那条判断**量化验证**了——结论是原判断正确，但理由需要写准，否则下一个人会再来一遍。
 
-**普查口径**（数字与修复轮一致，但含义更精确）：`src/client` 下 322 处十六进制字面量里，168 处位于 `var(--token, <fallback>)` 的兜底位——那是**正确**写法，不是债；真正「没有任何 token 兜底」的裸值 **161 处**（styles.js 111 / workflow 25 / automation 13 / sessions 8 / 其余 4）。
+**普查口径**（数字与修复轮一致，但含义更精确；会话面板移除后其 8 处裸值随之消失）：`src/client` 下 322 处十六进制字面量里，168 处位于 `var(--token, <fallback>)` 的兜底位——那是**正确**写法，不是债；真正「没有任何 token 兜底」的裸值原为 **161 处**（styles.js 111 / workflow 25 / automation 13 / 其余 4 + 已移除的 sessions 8），现余 **153 处**。
 
 **为什么这 161 处不能批量换 token**——三个各自独立的理由，任何一个都足以否掉批量替换：
 

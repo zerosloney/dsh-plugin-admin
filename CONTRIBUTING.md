@@ -5,11 +5,11 @@
 | 路径 | 命令 | 适用 |
 |---|---|---|
 | 最快（秒级～分钟级） | `node scripts/verify-<模块>.mjs` | 只改了一个模块，直接跑对应脚本；无静态闸门 |
-| 定向 | `npm test -- --filter <子串>` | 静态三闸门 + 名字含子串的全部步骤（例：`--filter cron` → `verify-cron-admin` + `verify-cron-panel`；`--filter workflow` → 工作流 6 步） |
+| 定向 | `npm test -- --filter <子串>` | 静态五闸门 + 名字含子串的全部步骤（例：`--filter cron` → `verify-cron-admin` + `verify-cron-panel`；`--filter workflow` → 工作流 6 步） |
 | 全量 | `npm test` | 提交前兜底；本地与 CI 是同一条命令 |
 
 - 步骤清单与每步职责：`node scripts/run-gate.mjs --list`（步骤表在 `scripts/run-gate.mjs` 顶部，新脚本加进表里即入链）。
-- 静态三闸门（`check:types` / `check:lint` / `build:client --check`）在任何 `--filter` 下都会先跑——合计约 2 秒，抓的是单个 verify 脚本看不见的全局性破坏（类型漂移、产物忘重建）。
+- 静态五闸门（`check:types` / `check:lint` / `build:client --check` / `verify-doc-claims` / `verify-line-anchors`）在任何 `--filter` 下都会先跑——合计约 2 秒，抓的是单个 verify 脚本看不见的全局性破坏（类型漂移、产物忘重建、文档数字漂移）。
 
 ## 改了什么 → 最小验证集
 
@@ -25,12 +25,9 @@
 | `lib/cron-admin.js` | `verify-cron-admin` + `verify-store-version` | `verify-cron-panel`（面板联动时） |
 | `lib/webhook-triggers.js` | `verify-webhook-triggers` + `verify-webhook-hardening` + `verify-store-version` | — |
 | `lib/usage-ledger.js` | `verify-usage-ledger` + `verify-store-version` | — |
-| `lib/subagent-admin.js` / `lib/tool-seed.js` | `verify-subagents-host` | `verify-subagents-client`（面板联动时） |
 | `lib/command-hook-admin.js` | `verify-command-hooks` + `verify-hooks-codex-bridge` | — |
 | `lib/project-hooks.js` / `lib/shell-policy.js` | `verify-project-hooks` | — |
 | `lib/project-agents.js` | `verify-project-commands` | — |
-| `lib/skills-admin.js` | `verify-skills-admin` | — |
-| `lib/web-search-admin.js` | `verify-web-search-admin` | — |
 | `lib/workspace-admin.js` | `verify-workspace-admin` | — |
 | `lib/overlay-admin.js` | `verify-overlays` | — |
 | `lib/peer-compat.js` | `verify-peer-compat` | — |
@@ -54,7 +51,6 @@
 |---|---|
 | 自动化面板（cron / webhook 页签） | `verify-cron-panel` / `verify-webhook-triggers` |
 | 待办浮层 | `verify-todo-panel` |
-| 子智能体面板 | `verify-subagents-client` |
 | 工作流面板 | `verify-workflow-client` |
 | MCP 连通缓存 / 更新提醒 | `verify-mcp-cache` / `verify-update-reminders` |
 | `impl.js` / `native-coverage.js`（slot 装配 / 让位策略） | `self-check` + `integration-check` |
@@ -97,9 +93,9 @@
 ## 什么时候跑全量 / 冒烟 / 矩阵
 
 - **提交前兜底**：`npm test`（CI 跑的就是这条，本地绿了 CI 才有意义）。
-- **宿主半行为改动**：`npm run smoke:real-host` —— 启动真实 dsh、装插件、21 次只读 RPC + 写路径落盘 + 真实 Chromium 渲染（约 11–30 秒；需要 dsh CLI 与 pnpm，CI 的 `host-smoke` 作业是强制版）。
+- **宿主半行为改动**：`npm run smoke:real-host` —— 启动真实 dsh、装插件、15 次只读 RPC + 写路径落盘 + 真实 Chromium 渲染（约 11–30 秒；需要 dsh CLI 与 pnpm，CI 的 `host-smoke` 作业是强制版）。
 - **接缝相关改动**（宿主服务用法 / RPC 形状）：`integration-check` 只有在能读到 dsh 源码 checkout 时才是强制的——设 `DSH_CHECKOUT=<dsh 源码目录>`，或把 checkout 放在仓库旁的 `../deepseek-harness`（会被自动发现）；多版本用 `npm run test:matrix`。
-- **性能相关改动 / 判断某项优化值不值得做**：`node scripts/bench-journal.mjs` 与 `node scripts/bench-client-render.mjs`。这两个**测量而非断言**，因此不进 `npm test`（数字依赖机器）；结论与实测数据记在 [docs/BENCHMARKS.md](docs/BENCHMARKS.md)。写这类脚本时当心"假成功"：两者各自都被量到过"什么都没做"的漂亮数字（mock 缺 `dispose()` 使每步抛错、`dispatchEvent` 打不到 React 的 `onChange`），所以现在都带哨兵——基准必须能证明它测的东西真的发生了。
+- **性能相关改动 / 判断某项优化值不值得做**：`node scripts/bench-journal.mjs`。它**测量而非断言**，因此不进 `npm test`（数字依赖机器）；结论与实测数据记在 [docs/BENCHMARKS.md](docs/BENCHMARKS.md)。写这类脚本时当心"假成功"：它曾被量到过"什么都没做"的漂亮数字（mock 缺 `dispose()` 使每步抛错），所以现在带哨兵——基准必须能证明它测的东西真的发生了。（历史上的客户端渲染基准 `bench-client-render.mjs` 与真实浏览器 render-cost 探针随会话面板的移除一并删除，见 docs/BENCHMARKS.md 的 tombstone。）
 
 ## 测试是怎么写的
 

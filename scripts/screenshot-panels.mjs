@@ -44,7 +44,6 @@ const OUT_DIR = argOf('--out', join(PLUGIN_DIR, '.screenshots'))
 const PANELS = [
   { id: 'usage', label: '用量仪表盘' },
   { id: 'automation', label: '自动化' },
-  { id: 'sessions', label: 'Web 与会话' },
 ]
 
 let checks = 0

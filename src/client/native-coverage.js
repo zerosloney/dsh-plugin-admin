@@ -20,8 +20,6 @@
  *   - `ui-schedule` is a task page; our 自动化 entry is three tabs (定时任务 /
  *     Webhook / 工作流). Yielding the entry took Webhook and 工作流 away — two
  *     surfaces upstream has NO page for at all.
- *   - `ui-settings-web-search` configures the official provider; our Web 搜索
- *     tab installs and switches providers (exa / perplexity).
  *
  * A hit on those therefore must not retire the panel. `scope` makes the
  * consequence explicit and reviewable, and docs/COMPAT.md renders the same
@@ -52,8 +50,8 @@
  * see must never be treated as covered.
  *
  * Probes are slot-entry lookups against ids read from the upstream source in
- * the 0.2.1-rc.3 tree, never guessed. Four rows are probed today (extensions,
- * webSearch, automation, todo); the six remaining `return false`
+ * the 0.2.1-rc.3 tree, never guessed. Three rows are probed today (extensions,
+ * automation, todo); the four remaining `return false`
  * rows have no client-side surface of their own to look for, and
  * docs/COMPAT.md explains why at each row.
  */
@@ -109,35 +107,6 @@ export const NATIVE_COVERAGE = Object.freeze([
     // Host protocol + bridge packages only, no browser UI (packages/hooks ships
     // lib/ only, no src/client). Stays false.
     detect: function () { return false },
-  }),
-  Object.freeze({
-    panel: 'sessions',
-    label: 'Web 与会话',
-    scope: 'none',
-    official: 'ui-workspace（浏览/归档/重命名/分叉）；批删/导出/体检仍无官方页',
-    since: null,
-    // ui-workspace's session actions are the row menu we now add entries to
-    // (sidebar.workspaces.session.menu.item), not a competing list page — so
-    // "covered" would be a false claim about bulk delete/export/inspection,
-    // which have no official page. Stays false.
-    detect: function () { return false },
-  }),
-  Object.freeze({
-    panel: 'webSearch',
-    label: 'Web 搜索',
-    scope: 'none',
-    official: 'ui-settings-web-search（官方 provider 的配置页）；provider 切换仍无官方页',
-    since: null,
-    // Slot entry: ui-settings-web-search/src/client/index.ts:64-65 registers
-    // 'plugins.item' with id 'web-search' (same whileServed caveat).
-    //
-    // 'none', NOT 'panel': the official card edits the official provider's API
-    // key / endpoint / per-search budget. This tab installs and switches between
-    // exa / perplexity — no official page does that, so the tab stays.
-    signals: Object.freeze([['plugins.item', 'web-search']]),
-    detect: function (/** @type {any} */ ctx) {
-      return hasSlotEntry(ctx, 'plugins.item', 'web-search')
-    },
   }),
   Object.freeze({
     panel: 'usage',

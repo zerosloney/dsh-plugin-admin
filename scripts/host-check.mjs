@@ -268,8 +268,8 @@ assert.equal(typertRegistrations.length, 1, 'exactly one typert registration')
 assert.equal(typertRegistrations[0].package, 'dsh-plugin-admin')
 assert.deepEqual(
   [...new Set(typertRegistrations[0].invocations.map((i) => i.namespace))].sort(),
-  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'webSearchAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
-  'unified descriptor carries all twelve namespaces',
+  ['commandHookAdmin', 'cronAdmin', 'fsAdmin', 'mcpAdmin', 'overlayAdmin', 'pluginAdmin', 'projectAdmin', 'sessionAdmin', 'webhookAdmin', 'workflowAdmin', 'workspaceAdmin'],
+  'unified descriptor carries all eleven namespaces',
 )
 /* ------------ one RPC table, both halves checked against it -------------
  * lib/rpc-manifest.js owns the wire surface. The host side is the mounted
@@ -1948,8 +1948,8 @@ assert.deepEqual(afterUpsert[0].config, {
   transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'],
   // SECRET FENCE: env/header VALUES never cross the RPC boundary (an MCP entry's
   // env is where a third-party API key lives) — list() returns the key set with
-  // empty values, exactly like the webhook rule's secret and web-search's
-  // `kind: 'secret'` fields. No `raw` YAML either: it carried the same values.
+  // empty values, exactly like the webhook rule's secret field.
+  // No `raw` YAML either: it carried the same values.
   env: { GITHUB_TOKEN: '' },
   cwd: 'E:/Demo', toolCallTimeoutMs: 45_000, failOnStartupError: true,
   reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
@@ -3674,7 +3674,7 @@ try {
 {
   const { resolvePluginConfig } = await import(new URL('../lib/index.js', import.meta.url).href)
   const { PANEL_IDS, PANEL_STATES } = await import(new URL('../lib/panel-ids.js', import.meta.url).href)
-  assert.equal(PANEL_IDS.length, 9, 'nine switchable panels')
+  assert.equal(PANEL_IDS.length, 7, 'seven switchable panels')
   assert.deepEqual([...PANEL_STATES], ['auto', 'on', 'off'], 'three states, auto first')
   assert.deepEqual(resolvePluginConfig({}).panels, {}, 'absent means every panel is auto')
   assert.deepEqual(

@@ -1,12 +1,17 @@
 # 基准（O-1 / O-2 决策依据）
 
-这两个脚本**不在 `npm test` 内**：它们测量而非断言，数字依赖机器。存在目的是让
+> **Tombstone（会话面板移除后）**：O-1 的两个测量工具——jsdom 渲染基准
+> `bench-client-render.mjs` 与真实浏览器的 render-cost 探针（`smoke:real-host`
+> 步骤 8）——都随被测的会话面板在整体切除中一并删除（见 CHANGELOG
+> [Unreleased]）。下文 O-1 的数字是当时的冻结快照，结论（无需 memo 化/虚拟化）
+> 仍然成立但已无对象可复测；O-2 的 `bench-journal.mjs` 仍在，工作流引擎未动。
+
+这个脚本**不在 `npm test` 内**：它测量而非断言，数字依赖机器。存在目的是让
 O-1（客户端零 memo 化 + 400 卡片截断）与 O-2（journal 体积 / `list()` 成本）的
 取舍**由实测决定**，而不是读代码猜。
 
 ```sh
 node scripts/bench-journal.mjs --steps 500 --runs 20 --payload-kb 8
-node scripts/bench-client-render.mjs --sessions 500 --keystrokes 6
 ```
 
 ## 实测结果（Windows / Node 24.12 / jsdom）

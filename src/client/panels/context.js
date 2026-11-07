@@ -69,21 +69,12 @@ export var copyTextSilently = function () {}
 export var downloadTextFile = function () {}
 
 /**
- * Panel-level switch resolution (config.panels 三态 + 自动让位 + localStorage 强制)，
- * for panels that share another panel's slot and cannot be uninstalled at slot
- * granularity — the web 搜索 tab inside the Web 与会话 entry. `true` = the panel
- * must not render. The main bundle injects the real resolver; standalone
- * (unconfigured) mounts default to "not hidden" so tests keep working.
- * @type {(panel: string) => boolean}
- */
-export var panelHidden = function () { return false }
-
-/**
- * Tab-level twin of `panelHidden`, for a panel that stays registered while an
- * official surface retires ONE of its tabs (自动化's cron tab once ui-schedule
- * is mounted — Webhook and 工作流 have no official page, so the panel cannot
- * yield wholesale). `true` = that tab must not render. Read at render time, so
- * a late host answer re-renders; unconfigured mounts show every tab.
+ * Tab-level twin of the panel switch, for a panel that stays registered while
+ * an official surface retires ONE of its tabs (自动化's cron tab once
+ * ui-schedule is mounted — Webhook and 工作流 have no official page, so the
+ * panel cannot yield wholesale). `true` = that tab must not render. Read at
+ * render time, so a late host answer re-renders; unconfigured mounts show
+ * every tab.
  * @type {(panel: string, tab: string) => boolean}
  */
 export var tabHidden = function () { return false }
@@ -113,6 +104,5 @@ export function configure(env) {
   if (typeof env.copyTextToClipboard === 'function') copyTextToClipboard = env.copyTextToClipboard
   if (typeof env.copyTextSilently === 'function') copyTextSilently = env.copyTextSilently
   if (typeof env.downloadTextFile === 'function') downloadTextFile = env.downloadTextFile
-  if (typeof env.panelHidden === 'function') panelHidden = env.panelHidden
   if (typeof env.tabHidden === 'function') tabHidden = env.tabHidden
 }

@@ -389,7 +389,7 @@ await check('each write uses its own temp path and leaves none behind', async ()
 
 await check('the patch and its rolling backup are created owner-only', async () => {
   // The profile patch carries whatever an operator wrote into a plugin row
-  // (web-search API keys, MCP env/headers, hook commands) and the `.bak` holds
+  // (MCP env/headers, hook commands) and the `.bak` holds
   // the revision it replaced — the same rows. `mode` only applies at CREATION
   // and a rename carries the TEMP's mode onto the destination, so asserting the
   // end state covers both halves of the recipe.

@@ -1,6 +1,31 @@
 /** usage — split from the old single-file panels.js (mechanical, behaviour unchanged). */
 import { UiButton, UiPill, createElement, dshT, messageOf, sectionState } from './context.js'
-import { formatTokenCount, usageDayKey } from './sessions.js'
+
+/**
+ * Compact token count: 999 → "999", 1234 → "1.2k", 1234567 → "1.2M".
+ * @param {number} n - the token count.
+ * @returns {string} the compact text, or '' for a non-count.
+ */
+export function formatTokenCount(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return ''
+  if (n === 0) return '0'
+  if (n < 1000) return String(n)
+  // 999_999 must not wear a 'k': rounding to one decimal crosses the unit.
+  if (n < 999_950) return (Math.round(n / 100) / 10) + 'k'
+  return (Math.round(n / 100000) / 10) + 'M'
+}
+
+/**
+ * Local YYYY-MM-DD key for a timestamp (viewer's calendar).
+ * @param {number} ms - the epoch milliseconds.
+ * @returns {string} the local calendar day.
+ */
+export function usageDayKey(ms) {
+  var d = new Date(ms)
+  var m = String(d.getMonth() + 1); if (m.length < 2) m = '0' + m
+  var dd = String(d.getDate()); if (dd.length < 2) dd = '0' + dd
+  return d.getFullYear() + '-' + m + '-' + dd
+}
 
 /**
  * The renderer-bound props the usage dashboard receives. `call` is the

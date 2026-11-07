@@ -288,24 +288,37 @@ const PROBES = [
     ],
   },
   {
-    // P1-C: the ONE remaining reason this plugin still ships its own cron
-    // instead of delegating to ctx.schedule. The official service is HOST-level
-    // (catalog reads every reminder, storage is durable) and ships a cron
-    // selector — so "it is session-scoped" is no longer a valid argument, and
-    // docs/COMPAT.md used to say exactly that. What still holds is that
-    // `create()` takes a sessionId: a task with no session binding has no
-    // official path. If this signature ever gains an optional sessionId, the
-    // cron panel's justification collapses and it should be reconsidered (not
-    // silently kept).
-    id: 'schedule create() is bound to a Session',
+    // P1-C follow-up: the premise this probe used to pin has COLLAPSED. dsh
+    // 0.2.2 made the session binding optional — create(request,
+    // actorSessionId?, signal?) — and gave session-less tasks an official
+    // path: the Remote form (remoteCreate) passes undefined as the actor
+    // session. This probe's own trigger clause said that collapse means the
+    // cron panel's justification "should be reconsidered (not silently
+    // kept)"; the plugin still ships its own cron (lib/cron-admin.js) and
+    // never calls ctx.schedule, so that reconsideration is now DUE on the
+    // roadmap. The probe pins the CURRENT semantics so any further shift
+    // (session binding re-tightened, the Remote create path dropped) still
+    // trips.
+    id: 'schedule create() session semantics',
     file: 'packages/schedule/schedule/src/index.ts',
     checks: [
-      ['create(sessionId, request) — a session-less task has no official path',
-        t => /async\s+create\(\s*sessionId\s*:\s*SessionId/.test(t)],
+      ['create(request, actorSessionId?, signal?) — the session binding is optional since 0.2.2',
+        t => /async\s+create\(\s*request:\s*ScheduleCreateRequest,\s*actorSessionId\?:\s*SessionId/.test(t)],
+      ["@Remote('create') remoteCreate is the official session-less path (actor session = undefined)",
+        t => /@Remote\('create'\)\s+async remoteCreate\(request: ScheduleCreateRequest, signal\?: AbortSignal\)/.test(t)
+          && t.includes('this.create(request, undefined, signal)')],
       ['catalog() reads the whole Host catalogue, not one session',
         t => /@Remote\('catalog'\)/.test(t)],
-      ['create() accepts a cron selector',
-        t => /request\.cron\s*!==\s*undefined/.test(t)],
+      ['create() accepts a cron selector through request.timing (ScheduleTiming keeps a kind:\'cron\' member)',
+        t => t.includes('createScheduleRecord(id, request.title, request.prompt, request.timing, now)')
+          && (() => {
+            const types = readSource('packages/schedule/schedule/src/types.ts')
+            return types !== null && /\{ readonly kind: 'cron'; readonly cron: CronInput \}/.test(types)
+          })()
+          && (() => {
+            const update = readSource('packages/schedule/schedule/src/update.ts')
+            return update !== null && update.includes("case 'cron': return createCronScheduleRecord(id, prompt, timing.cron, now, title)")
+          })()],
     ],
   },
   {
@@ -435,10 +448,6 @@ const PROBES = [
       // SettingsApplies union) — the plugin treats anything !== 'restart'
       // as live, so the narrowing is behavior-compatible.
       ['descriptor carries value/revision/user/applies/secrets (config read + write-only secrets)', t => has('value: unknown', 'revision: number', 'user?: unknown', "applies: 'live'", 'secrets?: RedactedSecret[]')(blockOf(t, 'export interface SettingsDescriptor'))],
-      // webSearchAdmin.saveConfig rides mutate() with PATH ops so a redacted
-      // view can be written without restating (or deleting) other fields.
-      // dsh 0.1.7 dropped the <const Namespace> generic (plain ns: string).
-      ['mutate(ns, ops, expectedRevision?) exists for path-addressed writes', t => /mutate\(ns: string, ops: readonly SettingsPathOp\[\], expectedRevision\?: number\)/.test(t) || /mutate<const Namespace extends string>\(/.test(t) && has('ops: readonly SettingsPathOp[]', 'expectedRevision?: number')(t)],
       ['SettingsPathOp keeps set/unset', t => has("op: 'set'", "op: 'unset'")(t)],
     ],
   },
@@ -569,53 +578,28 @@ const PROBES = [
   {
     id: 'loader fiber.update seam (MCP + hooks hot-apply)',
     // lib/patch-utils.js:hotApplyFiberConfig centralizes BOTH hot-apply paths
-    // (MCP entry edits + hooks-bridge reloads) on fiber.update(config, noSave).
-    // The seam is Cordis' own (vendor/cordis), and the loader's `internal/update`
-    // waterfall is what makes noSave mean "do not write the config back" — see
-    // vendor/loader/src/index.ts. Until dsh publishes a first-class config-patch
-    // hot-apply API (G1), the seam's removal must fail loud here instead of
-    // silently turning every hot-apply into a "需重启" fallback.
+    // (MCP entry edits + hooks-bridge reloads) on fiber.update(config, noSave=true).
+    // 0.2.2 moved WHERE noSave is consumed: Cordis update() itself now gates the
+    // persistence notification (`if (!noSave) … emit('internal/commit', …)`), and
+    // the loader persists programmatic updates through its `internal/commit` hook
+    // (vendor/loader/src/index.ts) — the `internal/update` waterfall no longer
+    // carries noSave. What the plugin rides is UNCHANGED: the two-positional call
+    // form and the "noSave ⇒ don't write the config back" semantic. Until dsh
+    // publishes a first-class config-patch hot-apply API (G1), the seam's removal
+    // must fail loud here instead of silently turning every hot-apply into a
+    // "需重启" fallback.
     file: 'vendor/cordis/src/fiber.ts',
     checks: [
-      ['Fiber.update(config, noSave) still declared', t => t.includes('update(config: any, noSave = false) {')],
-      ['the doc pin still describes validate→restart', t => has('Validate and apply new config, then restart the plugin.', '@param noSave — hint for persistence hooks not to write the change back.')(t)],
-      // The loader side of the seam: without this waterfall, noSave would be
-      // ignored and a hot-apply would rewrite the profile patch file under us.
-      ['the loader still consumes noSave in its internal/update hook', () => {
+      ['Fiber.update(config, noSave) still declared (return annotation may vary)', t => /update\(config: any, noSave = false\)/.test(t)],
+      ['update() itself gates the persistence notification on noSave', t => t.includes("if (!noSave) fiber.context.emit('internal/commit', fiber, config)")],
+      ['the update() doc still spells noSave as persistence suppression', t => t.includes('@param noSave Suppress the persistence notification when true.')],
+      // The loader side of the seam: this hook is what would rewrite the entry
+      // config (and commit the tree) if noSave stopped suppressing the commit.
+      ['the loader still persists programmatic updates through its internal/commit hook', () => {
         const loader = readSource('vendor/loader/src/index.ts')
-        return loader !== null && loader.includes("ctx.on('internal/update', function (config, noSave, next) {")
+        return loader !== null && loader.includes("ctx.on('internal/commit', (fiber, config) => {")
+          && loader.includes('entry.options.config =') && loader.includes('.tree.commit(')
       }],
-    ],
-  },
-  {
-    id: 'web-search provider Config keys (webSearchAdmin field table mirror)',
-    file: 'packages/web/web-search-deepseek/src/index.ts',
-    checks: [
-      // webSearchAdmin's per-provider field descriptors are a HAND-MAINTAINED
-      // mirror of each provider package's Config: the DeepSeek package's
-      // schema is reachable at runtime (it registers a settings section) but
-      // Exa / Perplexity register none, so no single mechanism can derive all
-      // three. These probes are the drift alarm — a renamed/added Config key
-      // here means the panel's editor must be updated with it.
-      ['deepseek Config keeps apiKey/apiKeyEnv/baseURL/model/apiVersion/maxTokens/maxUses', t => has('apiKey: z.string().role(\'secret\')', 'apiKeyEnv: z.string().role(\'credential-ref\')', 'baseURL: z.string()', 'model: z.string()', 'apiVersion: z.string()', 'maxTokens: z.number()', 'maxUses: z.number()')(t)],
-    ],
-  },
-  {
-    id: 'web-search exa Config keys',
-    file: 'packages/web/web-search-exa/src/index.ts',
-    checks: [
-      ['exa Config keeps apiKey/baseURL/searchType/numResults/highlightsPerResult', t => has('apiKey: z.string()', 'baseURL: z.string()', "searchType: z.union(['auto', 'keyword', 'neural']", 'numResults: z.number()', 'highlightsPerResult: z.number()')(t)],
-      // Exa / Perplexity deliberately register NO settings section — that is
-      // exactly why the panel's own row editor exists for them.
-      ['exa does not install a settings section (row editor is the only surface)', t => !t.includes('installSection(')],
-    ],
-  },
-  {
-    id: 'web-search perplexity Config keys',
-    file: 'packages/web/web-search-perplexity/src/index.ts',
-    checks: [
-      ['perplexity Config keeps apiKey/baseURL/model/maxTokens/searchRecency', t => has('apiKey: z.string()', 'baseURL: z.string()', 'model: z.string()', 'maxTokens: z.number()', "searchRecency: z.union(['day', 'week', 'month', 'year']")(t)],
-      ['perplexity does not install a settings section (row editor is the only surface)', t => !t.includes('installSection(')],
     ],
   },
   {

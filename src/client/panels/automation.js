@@ -926,11 +926,14 @@ export function renderWebhookEditor(view, actions) {
       }),
     ),
     // 密钥 + 事件过滤 — two labeled halves on one wrapping row; the secret
-    // keeps its 显示 / 换一个 buttons beside the input.
+    // keeps its 显示 / 换一个 buttons beside the input. CJK 文本的 min-content
+    // 是单字宽，行窄时按钮会被压成一列竖字（v1.37 实测），所以按钮不可压缩
+    // （flexShrink:0 + nowrap），宽度压力由输入框让渡（flex:1 且下限 120px），
+    // 半区 minWidth 300 保证不换行也放得下，真放不下时整半区折行。
     createElement('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' }, key: 'f-secret-event' },
-      createElement('div', { style: { flex: 1, minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '5px' } },
+      createElement('div', { style: { flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column', gap: '5px' } },
         createElement('label', { style: labelStyle }, dshT('共享密钥')),
-        createElement('div', { style: { display: 'flex', gap: '6px' } },
+        createElement('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
           createElement(UiInput, {
             type: view.showSecret ? 'text' : 'password',
             autoComplete: 'new-password',
@@ -938,13 +941,15 @@ export function renderWebhookEditor(view, actions) {
             value: d.secret,
             onChange: function (/** @type {InputChangeEvent} */ e) { actions.patchDraft({ secret: e.target.value }) },
             placeholder: dshT('共享密钥（必填；编辑时留空表示保持不变）'),
+            style: { flex: '1 1 140px', minWidth: '120px' },
           }),
-          createElement(UiButton, { variant: 'outline', size: 'sm', onClick: function () { actions.toggleSecret() } }, view.showSecret ? dshT('隐藏') : dshT('显示')),
+          createElement(UiButton, { variant: 'outline', size: 'sm', 'aria-pressed': view.showSecret, onClick: function () { actions.toggleSecret() }, style: { flexShrink: '0', whiteSpace: 'nowrap' } }, view.showSecret ? dshT('隐藏') : dshT('显示')),
           createElement(UiButton, {
             variant: 'outline',
             size: 'sm', key: 'regen',
             title: dshT('换一个 16 位随机密钥'),
             onClick: function () { actions.patchDraft({ secret: generateWebhookSecret() }) },
+            style: { flexShrink: '0', whiteSpace: 'nowrap' },
           }, dshT('🎲 换一个')),
         ),
       ),

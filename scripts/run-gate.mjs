@@ -59,7 +59,6 @@ const STEPS = [
   { name: 'verify-peer-compat', desc: 'install peer-compatibility preflight: semver parse + dsh range', cmd: [node, 'scripts/verify-peer-compat.mjs'] },
   { name: 'verify-workspace-admin', desc: 'workspaceAdmin RPC: no-registry hint + CRUD round-trips', cmd: [node, 'scripts/verify-workspace-admin.mjs'] },
   { name: 'verify-usage-ledger', desc: 'usage ledger: live observer, snapshot sweep, delete-before-snapshot', cmd: [node, 'scripts/verify-usage-ledger.mjs'] },
-  { name: 'verify-web-search-admin', desc: 'web-search provider switch + settings.mutate path (keys never echoed)', cmd: [node, 'scripts/verify-web-search-admin.mjs'] },
   { name: 'verify-i18n', desc: 'dshT call sites ↔ dictionaries, both ways; en values hold no CJK', cmd: [node, 'scripts/verify-i18n.mjs'] },
   { name: 'verify-audit-log', desc: 'audit log: key-name + shape redaction, cap compaction, method pins', cmd: [node, 'scripts/verify-audit-log.mjs'] },
   { name: 'verify-file-lock', desc: 'cross-process file lock: stale recovery, fail-closed default + opt-in proceed, 0600, Windows EPERM races + owner probe, reentrancy', cmd: [node, 'scripts/verify-file-lock.mjs'] },
@@ -73,7 +72,7 @@ const STEPS = [
   { name: 'verify-workflow-admin', desc: 'workflow_admin RPC + library scopes + trusted workspace paths', cmd: [node, 'scripts/verify-workflow-admin.mjs'] },
   { name: 'verify-workflow-tools', desc: 'the model-facing workflow_admin tool: action enum, eval, save', cmd: [node, 'scripts/verify-workflow-tools.mjs'] },
   { name: 'verify-workflow-command', desc: '/workflow slash command: create → eval → background run', cmd: [node, 'scripts/verify-workflow-command.mjs'] },
-  { name: 'verify-workflow-client', desc: 'workflow panel in jsdom: create, stop, saved library, polling', cmd: [node, 'scripts/verify-workflow-client.mjs'] },
+  { name: 'verify-workflow-client', desc: 'workflow panel in jsdom: one-click generation, template drafts, saved-library CRUD, degrade hint', cmd: [node, 'scripts/verify-workflow-client.mjs'] },
   { name: 'verify-automation-client', desc: 'automation tab in jsdom: cron/webhook editor layout contract (header, field-group labels, schedule inset, action modes)', cmd: [node, 'scripts/verify-automation-client.mjs'] },
   { name: 'verify-menu-injection', desc: 'sidebar menu injection: host-locale title shapes (zh quoted / en quoted / en unquoted) + archived-row classifier', cmd: [node, 'scripts/verify-menu-injection.mjs'] },
   { name: 'verify-workspace-menu', desc: '「打开工作目录」 lands only in the menu its own click opens (jsdom: the 选模型 menu is never claimed)', cmd: [node, 'scripts/verify-workspace-menu.mjs'] },
@@ -105,7 +104,7 @@ function runStep(step) {
   // `npm` needs a shell wrapper on Windows (npm.cmd), and spawning with an
   // args ARRAY + shell is deprecated (DEP0190) — so the npm steps pass one
   // command string. Static literals from the table: nothing to escape.
-  // Plain node scripts are spawned directly, so 40 of 43 steps pay no extra
+  // Plain node scripts are spawned directly, so 39 of 42 steps pay no extra
   // process hop.
   const options = { cwd: root, stdio: 'inherit', env: process.env }
   if (step.cmd[0] === 'npm') return spawnSync(step.cmd.join(' '), { ...options, shell: true })

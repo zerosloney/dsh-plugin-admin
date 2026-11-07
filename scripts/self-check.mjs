@@ -1,12 +1,12 @@
 /**
- * Self-check for the administration surfaces (扩展插件 / MCP服务器 / 历史会话):
+ * Self-check for the administration surfaces (扩展插件 / MCP服务器 / 用量仪表盘):
  * - Loads the bundle the way the dsh module loader would (factory + platform require table)
  * - Drives apply() against a mock slots/connection context
- * - Asserts the three slot registrations (plugins-tab contribution + two settings sections)
+ * - Asserts the slot registrations (four plugins-tab contributions + two settings sections + the dock + the session-row menu item)
  * - Asserts stylesheet injection
  * - Renders each registered section with real React 18 from harness
  * - Tests Plugin Management render & inline remove confirmation
- * - Tests Session Management & inline delete confirmation
+ * - Tests the session-row menu delete flow (the excised session panels' one surviving delete surface)
  * - Tests MCP server editor save flow
  *
  * Run: node scripts/self-check.mjs
@@ -75,46 +75,6 @@ const mockPlugins = [
 const mockWorkspaces = [
   { workspaceId: 'w-alpha', title: 'alpha-project', path: 'E:\\Demo\\alpha-project' },
   { workspaceId: 'w-beta', title: 'beta-project', path: 'E:\\Demo\\beta-project' },
-]
-const mockSessions = [
-  {
-    id: 's1',
-    cwd: 'E:\\Demo\\alpha-project',
-    createdAt: 1_740_000_000_000,
-    archived: true,
-    live: false,
-    title: '分析与重构插件系统架构',
-    summary: '请帮我将 dsh-session-admin 和 dsh-plugin-admin 合并为一个统一部署的插件管理中心。',
-    messageCount: 5,
-    tokens: { input: 12300, output: 3400, cacheRead: 8900, cacheWrite: 0 },
-    workspaceId: 'w-alpha',
-    workspaceTitle: 'alpha-project',
-  },
-  {
-    id: 's2',
-    cwd: 'E:\\Demo\\beta-project',
-    createdAt: 1_750_000_000_000,
-    archived: false,
-    live: true,
-    title: 'beta-project',
-    summary: '探索Cordis依赖注入与Typert RPC网关通信协议',
-    messageCount: 2,
-    workspaceId: 'w-beta',
-    workspaceTitle: 'beta-project',
-  },
-  {
-    id: 's3',
-    cwd: 'E:\\Demo\\loose-project',
-    createdAt: 1_760_000_000_000,
-    archived: false,
-    live: false,
-    title: '独立会话',
-    summary: '',
-    summaryError: 'event log unreadable',
-    messageCount: 1,
-    workspaceId: null,
-    workspaceTitle: null,
-  },
 ]
 const mockMcpEntries = [{
   id: 'mcp-existing',
@@ -209,15 +169,6 @@ const ctx = {
           if (ctx.removeResult !== undefined) return ctx.removeResult
           return { ok: true, value: { output: 'Done', profileDir: 'E:/dsh-profiles/web', plugins: mockPlugins } }
         }
-        if (method === 'sessionAdmin/list') {
-          if (ctx.sessionListFail) return { ok: false, error: { message: ctx.sessionListFail } }
-          return { ok: true, value: { sessions: ctx.sessionListOverride ?? mockSessions, workspaces: mockWorkspaces } }
-        }
-        if (method === 'sessionAdmin/deleteSession') {
-          ctx.deletes = ctx.deletes ?? []
-          ctx.deletes.push(payload.args.sessionId)
-          return { ok: true, value: { deleted: payload.args.sessionId } }
-        }
         // The workspace panel (merged into dsh's 已归档会话 page) reloads
         // through workspaceAdmin/list on mount.
         if (method === 'workspaceAdmin/list') {
@@ -226,50 +177,6 @@ const ctx = {
             workspaces: mockWorkspaces.map((w) => ({ workspaceId: w.workspaceId, title: w.title, path: w.path, sessionIds: [], createdAt: '2026-01-02T03:04:05.000Z', updatedAt: '2026-01-02T03:04:05.000Z' })),
             archivedSessionIds: ['s1'],
           } }
-        }
-        // The Web 搜索 provider config editor: one read, then one save.
-        if (method === 'webSearchAdmin/config') {
-          ctx.webSearchConfigReads = ctx.webSearchConfigReads ?? []
-          ctx.webSearchConfigReads.push(payload.args.providerId)
-          return { ok: true, value: {
-            providerId: 'deepseek-official',
-            label: 'DeepSeek 官方搜索',
-            namespace: 'web-search-deepseek',
-            source: 'settings',
-            revision: 7,
-            applies: 'live',
-            restartRequired: false,
-            fields: [
-              { key: 'apiKey', label: 'API Key（字面值）', kind: 'secret', choices: [], min: null, default: null, hint: '', value: '', set: true },
-              { key: 'apiKeyEnv', label: 'API Key 凭据名', kind: 'string', choices: [], min: null, default: 'DEEPSEEK_API_KEY', hint: '', value: 'DEEPSEEK_API_KEY', set: false },
-              { key: 'baseURL', label: 'Endpoint', kind: 'string', choices: [], min: null, default: 'https://api.deepseek.com/anthropic/v1', hint: '', value: 'https://search.proxy/v1', set: true },
-              { key: 'model', label: '模型', kind: 'string', choices: [], min: null, default: 'deepseek-v4-flash', hint: '', value: 'deepseek-v4-flash', set: false },
-            ],
-            note: '读取和保存走 dsh settings 命名空间。',
-          } }
-        }
-        if (method === 'webSearchAdmin/saveConfig') {
-          ctx.webSearchSaves = ctx.webSearchSaves ?? []
-          ctx.webSearchSaves.push({
-            providerId: payload.args.providerId,
-            values: payload.args.values,
-            unset: payload.args.unset,
-            expectedRevision: payload.args.expectedRevision,
-          })
-          return { ok: true, value: { ok: true, source: 'settings', changed: ['baseURL'], restartRequired: false } }
-        }
-        if (method === 'sessionAdmin/healthReport') {
-          return { ok: true, value: { report: {
-            turns: 2, completedTurns: 1, abortedTurns: 1, errorTurns: 0, maxTokenTurns: 0,
-            tools: [{ name: 'read', calls: 3, errors: 1, errorCodes: [{ code: 'FsError:FS_NOT_FOUND', count: 1 }] }],
-            topErrors: [{ name: 'FsError', code: 'FS_NOT_FOUND', count: 1 }],
-            retryCount: 1, compactions: 0,
-          }, summary: '2 个 turn · 1 完成 · 1 中断' } }
-        }
-        if (method === 'sessionAdmin/searchSessions') {
-          return { ok: true, value: { hits: [
-            { sessionId: 's1', title: '分析与重构插件系统架构', cwd: 'E:/Demo/alpha', snippet: '… 请帮我将 dsh-session-admin 合并 …', createdAt: 1 },
-          ] } }
         }
         if (method === 'webhookAdmin/list') {
           return { ok: true, value: {
@@ -328,19 +235,6 @@ const ctx = {
             },
           }
         }
-        if (method === 'sessionAdmin/exportSession') {
-          ctx.exportCalls = ctx.exportCalls ?? []
-          ctx.exportCalls.push(payload.args.sessionId)
-          return {
-            ok: true,
-            value: {
-              markdown: '# 测试会话\n\n- Session: `' + payload.args.sessionId + '`\n\n---\n\n## 👤 用户\n\n你好\n',
-              filename: 'dsh-session-测试会话-export.md',
-              messages: 1,
-              toolCalls: 0,
-            },
-          }
-        }
         if (method === 'mcpAdmin/list') {
           return { ok: true, value: { entries: ctx.mcpEntries ?? mockMcpEntries } }
         }
@@ -349,21 +243,6 @@ const ctx = {
           ctx.mcpRemoves.push(payload.args.id)
           ctx.mcpEntries = (ctx.mcpEntries ?? mockMcpEntries).filter((entry) => entry.id !== payload.args.id)
           return { ok: true, value: { ok: true, id: payload.args.id, entries: ctx.mcpEntries } }
-        }
-        if (method === 'webSearchAdmin/list') {
-          return { ok: true, value: {
-            active: { searchProvider: 'deepseek-official', fetchProvider: 'http' },
-            providers: [
-              { id: 'deepseek-official', packageName: '@deepseek-ai/dsh-web-search-deepseek', label: 'DeepSeek 官方搜索', homepage: '', envVar: 'DEEPSEEK_API_KEY', bundled: true, installed: true, active: true },
-              { id: 'exa', packageName: '@deepseek-ai/dsh-web-search-exa', label: 'Exa', homepage: '', envVar: 'EXA_API_KEY', bundled: false, installed: false, active: false },
-              { id: 'perplexity', packageName: '@deepseek-ai/dsh-web-search-perplexity', label: 'Perplexity', homepage: '', envVar: 'PERPLEXITY_API_KEY', bundled: false, installed: false, active: false },
-            ],
-          } }
-        }
-        if (method === 'webSearchAdmin/install') {
-          ctx.webSearchInstalls = ctx.webSearchInstalls ?? []
-          ctx.webSearchInstalls.push(payload.args.providerId)
-          return { ok: true, value: { installed: true, state: 'installed', output: '' } }
         }
         if (method === 'commandHookAdmin/listCommands') {
           return { ok: true, value: { commandsDir: 'C:/Users/demo/.dsh/commands', commands: ctx.commandList ?? mockCommands } }
@@ -433,28 +312,28 @@ const ctx = {
 }
 
 exports.apply(ctx)
-// Nine slot contributions: the FOUR plugins-page tabs inside the shell-owned
+// Eight slot contributions: the FOUR plugins-page tabs inside the shell-owned
 // 插件 section (扩展插件 20, MCP服务器 40, 命令 60, 钩子 70), the standalone
-// Web 搜索 / 用量仪表盘 / 定时任务 / Webhook 触发 / 工作流 settings sections,
-// the 待办清单 dock above the composer, and the session-row delete item in the
-// sidebar list slot. Neither the Codex bridge (a banner inside the 钩子 tab) nor
-// the Agent preset editor (the shell's own ui-agent-preset section owns that
-// roster) gets a section of its own — and 历史会话 + Web 搜索 share ONE
-// standalone nav entry, Web 与会话 (工作区 has no plugin surface anywhere any
-// more: dsh covers it natively).
-assert.equal(injectedSections.length, 9, 'nine slot contributions injected')
+// 用量仪表盘 / 自动化 settings sections, the 待办清单 dock above the composer,
+// and the session-row delete item in the sidebar list slot. Neither the Codex
+// bridge (a banner inside the 钩子 tab) nor the Agent preset editor (the
+// shell's own ui-agent-preset section owns that roster) gets a section of its
+// own (工作区 has no plugin surface anywhere: dsh covers it natively; the
+// former Web 与会话 entry — 历史会话 + Web 搜索 — was removed outright).
+assert.equal(injectedSections.length, 8, 'eight slot contributions injected')
 assert.deepEqual(
   injectedSections.map((i) => i.key).sort(),
-  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
-  'injections wait on settings.section (×3), settings.plugins.tab (×4), conversation.input.dock, and the session-row menu list',
+  ['conversation.input.dock', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.plugins.tab', 'settings.section', 'settings.section', 'sidebar.workspaces.session.menu.item'],
+  'injections wait on settings.section (×2), settings.plugins.tab (×4), conversation.input.dock, and the session-row menu list',
 )
 injectedSections.forEach((i) => i.callback())
-assert.equal(registeredSections.length, 9, 'nine registrations: extensions + MCP + commands + hooks + automation tabs + web search + usage dashboard + todo dock + session-row delete item')
+assert.equal(registeredSections.length, 8, 'eight registrations: extensions + MCP + commands + hooks + usage dashboard + automation + todo dock + session-row delete item')
 const byId = {}
 for (const entry of registeredSections) byId[entry.options.id] = entry
-assert.ok(byId.extensions && byId['mcp-servers'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['web-sessions'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化, 历史会话 + Web 搜索 inside Web 与会话)')
-assert.equal(byId['session-history'], undefined, '历史会话 rides the Web 与会话 tab — no section of its own')
-assert.equal(byId['web-search-admin'], undefined, 'the standalone Web 搜索 section merged into Web 与会话')
+assert.ok(byId.extensions && byId['mcp-servers'] && byId['ch-commands'] && byId['ch-hooks'] && byId['todo-admin'] && byId['automation'] && byId['workflow-engine'] === undefined, 'expected registration ids present (工作流 lives inside 自动化)')
+assert.equal(byId['session-history'], undefined, '历史会话 registers no section (the panel was removed)')
+assert.equal(byId['web-sessions'], undefined, 'the Web 与会话 entry is gone (both panels removed)')
+assert.equal(byId['web-search-admin'], undefined, 'Web 搜索 registers no section (the panel was removed)')
 assert.equal(byId.workspaces, undefined, '工作区 no longer registers a settings section of its own')
 assert.equal(byId['command-hook-admin'], undefined, 'the standalone 命令与钩子 settings section is split into 命令/钩子 tabs')
 
@@ -483,44 +362,24 @@ assert.equal(slotLabel(chHooksTab), '钩子', 'hooks tab label')
 assert.equal(typeof chHooksTab.options.inject().call, 'function', 'hooks tab inject face carries the RPC call')
 assert.equal(byId['command-hook-admin'], undefined, 'the merged 命令与钩子 section is gone')
 
-// 历史会话 registers no section of its own any more — it is the default tab
-// of the Web 与会话 entry (below); 工作区 registers NOWHERE — retired, because
-// dsh covers workspaces natively. The panel implementations live in the
-// lazily loaded chunk (Phase B2), so the harness asks the entry for it the way
-// a slot does and mounts the chunk's components directly, keeping their
-// contracts under test.
+// 工作区 registers NOWHERE — retired, because dsh covers workspaces natively
+// (and the former 历史会话 / Web 搜索 panels were removed outright). The panel
+// implementations live in the lazily loaded chunk (Phase B2), so the harness
+// asks the chunk for its exports directly, keeping the remaining contracts
+// under test.
 const panels = await exports.loadPanels()
-const rpcCall = (method, args) => ctx.connection.rpc.call('/api', method, { args: args })
-const sessionsSection = {
-  options: { id: 'session-history', inject: () => ({ call: rpcCall, refreshSessions: null }) },
-  component: panels.SessionsSection,
-}
-const workspacesSection = {
-  options: { id: 'workspaces', inject: () => ({ call: rpcCall }) },
-  component: panels.WorkspacesSection,
-}
-assert.equal(typeof panels.SessionsSection, 'function', 'the chunk exports the session-history panel for direct mounting')
 assert.equal(typeof panels.WorkspacesSection, 'function', 'the chunk exports the workspace panel for direct mounting')
-const historyFace = sessionsSection.options.inject()
-assert.equal(typeof historyFace.call, 'function', 'session history inject face carries the RPC call')
-assert.ok('refreshSessions' in historyFace, 'session history inject face carries the sidebar refresh hook')
+assert.equal(panels.SessionsSection, undefined, 'the chunk no longer exports a session-history panel')
+assert.equal(panels.WebSearchSection, undefined, 'the chunk no longer exports a web-search panel')
 
 const todoDock = byId['todo-admin']
 assert.equal(todoDock.options.name, 'conversation.input.dock', 'todo dock mounts above the composer')
 assert.equal(todoDock.options.order, 5, 'todo dock sorts just after the shell todo strip (order 0)')
 assert.equal(typeof todoDock.options.inject().call, 'function', 'todo dock inject face carries the RPC call')
 
-const webSessionsSection = byId['web-sessions']
-assert.equal(webSessionsSection.options.name, 'settings.section', 'Web 与会话 is one standalone settings page')
-assert.equal(webSessionsSection.options.order, 27, 'Web 与会话 sorts BEFORE 用量仪表盘 (order 28)')
-assert.equal(slotLabel(webSessionsSection), 'Web 与会话', 'web-sessions section label')
-const webSessionsFace = webSessionsSection.options.inject()
-assert.equal(typeof webSessionsFace.call, 'function', 'web-sessions inject face carries the RPC call')
-assert.ok('refreshSessions' in webSessionsFace, 'web-sessions inject face carries the sidebar refresh hook for the history tab')
-
 const usageSection = byId['usage-dashboard']
 assert.equal(usageSection.options.name, 'settings.section', 'usage dashboard is a standalone settings page')
-assert.equal(usageSection.options.order, 28, 'usage dashboard sorts right after Web 与会话 (order 27)')
+assert.equal(usageSection.options.order, 28, 'usage dashboard is the lower settings.page (order 28)')
 assert.equal(slotLabel(usageSection), '用量仪表盘', 'usage dashboard label')
 assert.equal(typeof usageSection.options.inject().call, 'function', 'usage dashboard inject face carries the RPC call')
 
@@ -784,83 +643,10 @@ assert.equal(allErrorToasts.length, 1, 'consecutive failures keep exactly one fl
 assert.ok(allErrorToasts[0].textContent.includes('卸载失败：'), 'the single surviving toast carries the latest failure')
 ctx.removeResult = undefined
 
-// 7. 历史会话 lists ARCHIVED sessions only, one hairline section per workspace.
+// 7. The 历史会话 / Web 搜索 panels are excised — there is no session list page
+// to mount. The one delete surface that remains is the session-row menu,
+// exercised below in section 10. Move on to the MCP服务器 section.
 await act(async () => { pluginsRoot.unmount() })
-host.remove()
-ctx.deletes = []
-ctx.closeDeletes = []
-ctx.sessionListOverride = undefined
-const sessionsRoot = await mountSection(sessionsSection)
-text = document.body.textContent
-assert.ok(text.includes('分析与重构插件系统架构'), 'the archived session is listed')
-assert.ok(text.includes('alpha-project'), 'its workspace names the group header')
-assert.ok(!text.includes('探索Cordis依赖注入与Typert RPC网关通信协议'), 'a session that is not archived is NOT listed')
-assert.ok(!text.includes('请帮我将 dsh-session-admin'), 'the row is title + id + time — no summary line')
-assert.ok(!text.includes('导出') && !text.includes('置顶') && !text.includes('全文搜索'), 'the panel carries no export / pin / full-text surface any more')
-
-// 7b. Delete is two-step IN PLACE (删除 -> 确认删除), then the RPC runs and the
-// list is re-read. A live archived session would go through closeSession
-// instead, asserted below.
-const baseCall = ctx.connection.rpc.call
-let listReads = 0
-ctx.connection.rpc.call = async (route, method, payload) => {
-  if (method === 'sessionAdmin/list') listReads += 1
-  if (method === 'sessionAdmin/closeSession') {
-    ctx.closeDeletes.push(payload.args.sessionId)
-    return { ok: true, value: { closed: payload.args.sessionId } }
-  }
-  return baseCall(route, method, payload)
-}
-await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-assert.ok(document.body.textContent.includes('确认删除'), 'delete asks for confirmation in place')
-assert.ok(document.body.textContent.includes('取消'), 'the confirmation can be cancelled')
-await act(async () => { button('取消').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-assert.ok(!document.body.textContent.includes('确认删除'), 'cancel drops the confirmation')
-assert.deepEqual(ctx.deletes, [], 'cancel never reaches the host')
-await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-ctx.sessionListOverride = mockSessions.filter((row) => row.id !== 's1')
-await act(async () => { button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-assert.deepEqual(ctx.deletes, ['s1'], 'the delete RPC carries the archived session id')
-assert.ok(listReads >= 1, 'the panel re-reads the archived list after the delete')
-assert.ok(!document.body.textContent.includes('分析与重构插件系统架构'), 'the deleted row leaves the list')
-
-// 7c. A still-live archived session is torn down through closeSession.
-await act(async () => { sessionsRoot.unmount() })
-host.remove()
-ctx.sessionListOverride = [{
-  id: 's4',
-  cwd: 'E:\\Demo\\alpha-project',
-  createdAt: 1_760_000_000_000,
-  archived: true,
-  live: true,
-  title: '归档但仍在线',
-  workspaceId: 'w-alpha',
-  workspaceTitle: 'alpha-project',
-}, {
-  id: 's5',
-  cwd: 'E:\\Demo\\loose-project',
-  createdAt: 1_760_000_000_000,
-  archived: true,
-  live: false,
-  title: '无工作区归档',
-  workspaceId: null,
-  workspaceTitle: null,
-}]
-const liveRoot = await mountSection(sessionsSection)
-assert.ok(document.body.textContent.includes('未分组'), 'a row with no registry workspace lands in the ungrouped bucket')
-assert.ok(document.body.textContent.includes('无工作区归档'), 'the ungrouped archived row renders')
-await act(async () => { button('删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { button('确认删除').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-assert.deepEqual(ctx.closeDeletes, ['s4'], 'a live archived session is closed through closeSession, not deleted blindly')
-await act(async () => { liveRoot.unmount() })
-host.remove()
-ctx.sessionListOverride = undefined
-ctx.connection.rpc.call = baseCall
-
-// 9. Unmount the sessions panel and mount the MCP服务器 section instead.
-await act(async () => { sessionsRoot.unmount() })
 host.remove()
 const mcpRoot = await mountSection(mcpSection)
 assert.ok(document.body.textContent.includes('MCP 配置'), 'MCP section renders')
@@ -1110,7 +896,7 @@ await new Promise((resolve) => setTimeout(resolve, 60))
 
 const repainted = settingsDialog.querySelectorAll('svg[data-dsh-admin-nav-icon]')
 assert.equal(repainted.length, pluginSectionLabels.length, 'every plugin settings section got its nav icon repainted')
-assert.ok(pluginSectionLabels.length === 3, `three settings.section pages carry an icon (got ${pluginSectionLabels.length}); 扩展插件 / MCP服务器 / 命令 / 钩子 / 工作流 are plugins-page tabs, 历史会话 + Web 搜索 share the Web 与会话 row`)
+assert.ok(pluginSectionLabels.length === 2, `two settings.section pages carry an icon (got ${pluginSectionLabels.length}); 扩展插件 / MCP服务器 / 命令 / 钩子 / 工作流 are plugins-page tabs`)
 for (const row of officialRows) {
  assert.equal(row.querySelector('svg[data-dsh-admin-nav-icon]'), null, 'official nav rows (incl. dsh\'s own 已归档会话 page) keep their own icon')
 }
@@ -1382,27 +1168,6 @@ assert.deepEqual(ctx.mcpUpserts[0].config.env, { PATH: 'C:\\a;C:\\b' }, 'env val
 // assertion, which is exactly how a duplicated usage block hid in this file.
 await act(async () => { mcpRoot.unmount() })
 host.remove()
-// 11.6 Web 与会话: ONE nav entry with two internal tabs — 历史会话 (default,
-// the panel that used to be DOM-merged into dsh's official 已归档会话 page)
-// and Web 搜索 (the former standalone section). Tab switches swap the panels;
-// each keeps its own [data-dsh-admin-section] CSS scope.
-const webSessionsRoot = await mountSection(webSessionsSection)
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = document.body.textContent
-assert.ok(text.includes('分析与重构插件系统架构'), '历史会话 tab renders the session panel by default')
-assert.ok(text.includes('alpha-project'), 'the history panel is fully live inside the merged entry')
-const wsTabs = [...host.querySelectorAll('[role="tab"]')].map((b) => b.textContent)
-assert.deepEqual(wsTabs, ['历史会话', 'Web 搜索'], 'exactly two internal tabs: 历史会话 then Web 搜索')
-await act(async () => {
-  const wsTab = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent === 'Web 搜索')
-  wsTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-text = document.body.textContent
-assert.ok(text.includes('DeepSeek 官方搜索'), 'Web 搜索 tab renders the provider list')
-assert.ok(!text.includes('分析与重构插件系统架构'), 'switching tabs unmounts the history panel')
-await act(async () => { webSessionsRoot.unmount() })
-host.remove()
 
 
 // 15p. The standalone 用量仪表盘 page: mounts, auto-loads rows, renders the
@@ -1560,9 +1325,10 @@ await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)) 
 text = document.body.textContent
 assert.ok(text.includes('工作流 = 把多步任务写成小脚本'), 'the one-line guide explains what a workflow is')
 assert.ok(text.includes('从模板开始'), 'the template row header shows the one-click entry')
-assert.ok(text.includes('总结一个主题') && text.includes('并行双角度分析') && text.includes('分步润色流水线'), 'all three template cards render')
-assert.ok(text.includes('三步上手'), 'the empty-runs hint walks through the three steps')
-// Clicking a template card prefills the editor with its script, label and args.
+assert.ok(text.includes('总结一个主题') && text.includes('并行双角度分析'), 'both template cards render')
+assert.ok(!text.includes('分步润色流水线'), 'the third template is gone (the panel ships exactly two)')
+assert.ok(text.includes('工作库为空') && text.includes('✨ 生成'), 'the empty-library hint points at the generator and the templates')
+// Clicking a template card opens the saved-entry editor draft with its script prefilled.
 await act(async () => {
   const tplCard = [...host.querySelectorAll('div')].find((el) => el.textContent?.includes('总结一个主题') && !el.textContent.includes('并行双角度分析'))
   assert.ok(tplCard, 'the first template card is in the document')
@@ -1574,66 +1340,6 @@ assert.ok(wfEditor !== null, 'the script editor textarea opened with the templat
 assert.ok(wfEditor.value.includes('args.topic'), 'the template script body lands in the editor')
 assert.ok(wfEditor.value.includes('var summary = await agent('), 'the template script is the one-step summarize workflow')
 await act(async () => { automationRoot2.unmount() })
-host.remove()
-
-// 15z-websearch-loop. Same closure hazard in the provider list: click the FIRST
-// opt-in provider's install button and assert ITS id travels over the RPC.
-const webSearchRoot = await mountSection(byId['web-sessions'])
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-await act(async () => {
-  const wsTab2 = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent === 'Web 搜索')
-  assert.ok(wsTab2, 'the merged entry exposes the Web 搜索 tab')
-  wsTab2.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-})
-await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-const wsInstallBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('📥 安装'))
-assert.ok(wsInstallBtn !== undefined, 'an opt-in provider install button renders')
-await act(async () => {
-  propsOf(wsInstallBtn).onClick()
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-assert.deepEqual(ctx.webSearchInstalls ?? [], ['exa'], 'the FIRST install button installs the provider it belongs to')
-
-// 15z-websearch-config. The ⚙ 配置 editor is what makes an installed provider
-// usable at all (Exa / Perplexity register no dsh settings card), so the panel
-// must read the provider's field descriptors and write back only what the user
-// staged. Inherited defaults stay in the placeholder; a save carries the value
-// plus the revision the panel read.
-const wsConfigBtn = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('⚙ 配置'))
-assert.ok(wsConfigBtn !== undefined, 'a provider config button renders')
-await act(async () => {
-  propsOf(wsConfigBtn).onClick()
-  await new Promise((resolve) => setTimeout(resolve, 40))
-})
-assert.deepEqual(ctx.webSearchConfigReads ?? [], ['deepseek-official'], 'the FIRST config button reads the provider it belongs to')
-assert.ok(host.textContent.includes('dsh settings 命名空间'), 'a settings-backed provider renders its live-storage note')
-const wsInput = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === 'Endpoint')
-assert.ok(wsInput !== undefined, 'the Endpoint field renders from the host descriptors')
-assert.equal(wsInput.value, 'https://search.proxy/v1', 'an explicitly set field is staged into its input')
-const wsModel = [...host.querySelectorAll('input')].find((i) => i.getAttribute('aria-label') === '模型')
-assert.equal(wsModel.value, '', 'a field still at the provider default stages EMPTY')
-assert.ok(wsModel.placeholder.includes('deepseek-v4-flash'), 'the inherited default rides the placeholder')
-const wsSecret = [...host.querySelectorAll('input')].find((i) => i.type === 'password')
-assert.equal(wsSecret.value, '', 'a secret field never carries a value')
-assert.ok(wsSecret.placeholder.includes('已配置'), 'a set secret is reported as configured')
-await act(async () => {
-  propsOf(wsInput).onChange({ target: { value: 'https://other.proxy/v1' } })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-})
-const wsSave = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('💾 保存配置'))
-assert.ok(wsSave !== undefined, 'save button renders')
-await act(async () => {
-  propsOf(wsSave).onClick()
-  await new Promise((resolve) => setTimeout(resolve, 40))
-})
-assert.deepEqual(ctx.webSearchSaves, [{
-  providerId: 'deepseek-official',
-  values: { baseURL: 'https://other.proxy/v1' },
-  unset: [],
-  expectedRevision: 7,
-}], 'save sends only the staged field plus the revision the panel read')
-assert.ok(host.textContent.includes('已保存'), 'a successful save reports back inside the editor')
-await act(async () => { webSearchRoot.unmount() })
 host.remove()
 
 // 15. The 命令 and 钩子 tabs, mounted here so their assertions below run against
@@ -1765,7 +1471,7 @@ exportsEn.apply({
   },
 })
 injectedEn.forEach((i) => i.callback())
-assert.equal(registeredEn.length, 9, 'en mode also registers nine sections')
+assert.equal(registeredEn.length, 8, 'en mode also registers eight sections')
 const byIdEn = {}
 for (const entry of registeredEn) byIdEn[entry.options.id] = entry
 assert.equal(slotLabel(byIdEn.extensions), 'Extensions', 'en nav label for the extensions tab')
@@ -1907,9 +1613,10 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
       },
       get: () => undefined,
       slots: {
-        // Only the panel list carries the official entries the probes look for.
-        // `plugins.item` is where ui-settings-subagent / ui-settings-web-search
-        // register their cards — the two 'none'-scoped probes.
+        // Only the panel list carries the official entries the probes look for
+        // (`sidebar.panellist`). `plugins.item` stays in the table because the
+        // COVERAGE_SLOT_KEYS subscription set derives from the coverage table,
+        // and a future row may probe it again.
         entries: (name) => (slotTable[name] || []).map((id) => ({ options: { id } })),
         // Records every subscription so a declaration can notify it. Returning a
         // disposer keeps the teardown path exercised too.
@@ -1973,13 +1680,10 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   assert.ok(forced.includes('extensions'), 'dsh-admin-panels forces a yielded panel back on')
 
   /* Granularity (v1.30, N-1/N-2). A coverage hit is NOT a verdict on the whole
-   * panel unless the official surface is an equivalent management page. Two
-   * rows prove the distinction, and each one failed before this round:
-   *
-   *  - automation: ui-schedule covers the cron tab only. Yielding the panel took
-   *    Webhook and 工作流 with it — two surfaces upstream has no page for.
-   *  - webSearch: the official card configures the official provider keys. It
-   *    does not switch providers, which is the whole tab.
+   * panel unless the official surface is an equivalent management page. The
+   * automation row proves the distinction, and it failed before this round:
+   * ui-schedule covers the cron tab only, and yielding the panel took Webhook
+   * and 工作流 with it — two surfaces upstream has no page for.
    */
   const automationOfficial = await mountPanels(['schedules'])
   assert.ok(automationOfficial.includes('automation'),
@@ -1989,13 +1693,6 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   const automationPlusPlugins = await mountPanels(['schedules', 'plugins'])
   assert.ok(automationPlusPlugins.includes('automation') && !automationPlusPlugins.includes('extensions'),
     'per-row scope: schedules keeps automation, plugins still retires extensions')
-
-  const webSearchOfficial = await mountPanels([], {}, { officialItems: ['web-search'] })
-  assert.ok(webSearchOfficial.includes('web-sessions'),
-    'official web-search provider card does not switch providers → the Web 搜索 tab stays inside its panel')
-  const bothItems = await mountPanels([], {}, { officialItems: ['subagent', 'web-search'] })
-  assert.equal(bothItems.length, withNone.length,
-    'plugins.item hits retire nothing at all — same registration count as no official surface')
 
   /* Late declaration (v1.30.1, the bug the scope work exposed). The verdict used
    * to be a snapshot taken at apply(): an official panel that declared AFTER us
@@ -2021,14 +1718,10 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
 
   /* The kept-but-overlapping panels must be REPORTED, not just computed.
    * `resolveNativeCoverage` has returned a `notes` list since v1.30 with a
-   * comment saying it was for the mount log, but nothing read it — an operator
-   * seeing both our 子智能体 page and the official card had no way to learn the
-   * duplication was deliberate. v1.30.1 logs it; this asserts the log line
-   * exists and names the panel. */
-  loggedLines.length = 0
-  await mountPanels([], {}, { officialItems: ['web-search'] })
-  assert.ok(loggedLines.some((line) => line.includes('相近界面但不等价') && line.includes('webSearch')),
-    'a panel kept despite an overlapping official surface is reported in the mount log (notes)')
+   * comment saying it was for the mount log. v1.30.1 logs it; this asserts the
+   * log line exists and names the panel (the webSearch 'none' row that first
+   * exercised this path was removed with that panel; automation's tabs row
+   * and extensions' panel row keep the log path under test). */
   loggedLines.length = 0
   await mountPanels(['schedules'])
   assert.ok(loggedLines.some((line) => line.includes('部分页签') && line.includes('automation(cron)')),
@@ -2145,4 +1838,4 @@ dom.window.localStorage.setItem('dsh-admin-lang', 'zh')
   }
 }
 
-console.log('self-check OK: bundle load, slot registration, unified css injection, tab switching, data render, plugin remove confirm, archived-only session list grouped by workspace (two-step delete, closeSession for a live one, sidebar reconcile), session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), workspace-row menu (row-id keyed DOM hook, host-resolved path, session rows never arm it), Web 与会话 tabs (历史会话 default + Web 搜索 swap), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, web-search provider config editor, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
+console.log('self-check OK: bundle load, slot registration, unified css injection, data render, plugin remove confirm, session-row menu slot (owner-supplied sessionId, modal delete confirm naming the session, cancel path, menu dismissal through the bound hook, no menu-text scraping in the shipped bundle), workspace-row menu (row-id keyed DOM hook, host-resolved path, session rows never arm it), MCP editor save flow, headers editing, reconnect toggle, env semicolon round-trip, one-definition-per-component CSS scopes, i18n en-mode smoke (nav labels, toolbar chrome, language switch), ctx.locale binding (register + live repaint, no reload), official-first auto-yield (covered panel yields, forced panel returns)')
